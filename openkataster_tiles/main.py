@@ -4161,6 +4161,68 @@ def requested_state_context(value: str, allowed_states: set[str]) -> str | None:
     return None
 
 
+def exact_place_key_variants(value: str | None) -> set[str]:
+    text = str(value or "").strip()
+    if not text:
+        return set()
+    return {
+        normalize_place_search_text(text),
+        compact_place_search_text(text),
+        plain_place_search_text(text),
+        compact_plain_place_search_text(text),
+    }
+
+
+def exact_place_context(value: str, allowed_states: set[str]) -> dict | None:
+    cached = _exact_place_context_cached(
+        value,
+        tuple(sorted(allowed_states)),
+        gn250_places_signature(),
+    )
+    return dict(cached) if cached else None
+
+
+@lru_cache(maxsize=8)
+def exact_place_context_index(signature: tuple[int, int]) -> dict[str, tuple[dict, ...]]:
+    index: dict[str, list[dict]] = {}
+    for entry in gn250_place_entries(signature):
+        state = normalize_state_key(str(entry.get("state") or ""))
+        name = str(entry.get("name") or "").strip()
+        municipality = str(entry.get("municipality") or "").strip()
+        values = [name]
+        if municipality and normalize_place_search_text(municipality) != normalize_place_search_text(name):
+            values.append(municipality)
+        for value in values:
+            context = {
+                "state": state,
+                "name": value,
+                "folded": normalize_place_search_text(value),
+                "bbox": entry.get("bbox"),
+                "municipality": municipality,
+            }
+            for key in exact_place_key_variants(value):
+                if key:
+                    index.setdefault(key, []).append(context)
+    return {key: tuple(value) for key, value in index.items()}
+
+
+@lru_cache(maxsize=4096)
+def _exact_place_context_cached(value: str, allowed_states_key: tuple[str, ...], signature: tuple[int, int]) -> dict | None:
+    allowed_states = set(allowed_states_key)
+    index = exact_place_context_index(signature)
+    seen: set[tuple[str, str, str]] = set()
+    for key in exact_place_key_variants(value):
+        for context in index.get(key, tuple()):
+            state = normalize_state_key(str(context.get("state") or ""))
+            if state not in allowed_states:
+                continue
+            dedupe_key = (state, str(context.get("name") or ""), str(context.get("municipality") or ""))
+            if dedupe_key in seen:
+                continue
+            return dict(context)
+    return None
+
+
 def states_for_place_context(value: str, allowed_states: set[str]) -> tuple[str, ...]:
     cached = _states_for_place_context_cached(
         value,
@@ -4172,38 +4234,17 @@ def states_for_place_context(value: str, allowed_states: set[str]) -> tuple[str,
 
 @lru_cache(maxsize=4096)
 def _states_for_place_context_cached(value: str, allowed_states_key: tuple[str, ...], signature: tuple[int, int]) -> tuple[str, ...]:
-    del signature
     place = str(value or "").strip()
     if len(place) < 2:
         return tuple()
     allowed_states = set(allowed_states_key)
-    wanted = {
-        normalize_place_search_text(place),
-        compact_place_search_text(place),
-        plain_place_search_text(place),
-        compact_plain_place_search_text(place),
-    }
+    index = exact_place_context_index(signature)
     matches: set[str] = set()
-    for entry in gn250_place_entries(gn250_places_signature()):
-        state = normalize_state_key(str(entry.get("state") or ""))
-        if state not in allowed_states:
-            continue
-        names = [
-            str(entry.get("name") or "").strip(),
-            str(entry.get("municipality") or "").strip(),
-        ]
-        for name in names:
-            if not name:
-                continue
-            variants = {
-                normalize_place_search_text(name),
-                compact_place_search_text(name),
-                plain_place_search_text(name),
-                compact_plain_place_search_text(name),
-            }
-            if wanted & variants:
+    for key in exact_place_key_variants(place):
+        for context in index.get(key, tuple()):
+            state = normalize_state_key(str(context.get("state") or ""))
+            if state in allowed_states:
                 matches.add(state)
-                break
     return tuple(sorted(matches))
 
 
@@ -8109,9 +8150,22 @@ def cached_search_features_for_dataset(
             state_key, _, _ = _mosaic_state_key(DATA_DIR / f"{dataset}.pmtiles")
             allowed_states = {state_key}
         structured_state = requested_state_context(state, allowed_states)
+        candidate_places = [candidate[3] for candidate in direct_candidates if len(candidate) >= 4 and str(candidate[3] or "").strip()]
+        if not structured_state:
+            for candidate_place in candidate_places:
+                inferred_states = states_for_place_context(candidate_place, allowed_states)
+                if len(inferred_states) == 1:
+                    structured_state = inferred_states[0]
+                    break
         search_states = {structured_state} if structured_state else allowed_states
-        if structured_state:
-            place_context = None
+        place_context = None
+        for candidate_place in candidate_places:
+            place_context = exact_place_context(candidate_place, search_states)
+            if place_context:
+                break
+        if place_context:
+            place_query = query_without_place_context(stripped_query, place_context)
+        elif structured_state:
             place_query = stripped_query
         else:
             place_context = requested_place_context(stripped_query, allowed_states)

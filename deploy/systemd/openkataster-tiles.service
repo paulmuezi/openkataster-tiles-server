@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenKataster Tiles API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=OPENKATASTER_TILE_HYBRID_VECTOR_MIN_ZOOM=11.6
+Environment=OPENKATASTER_TILE_HYBRID_RASTER_MAX_ZOOM=11.8
+Environment=OPENKATASTER_TILE_RASTER_CACHE_DIR=/mnt/HC_Volume_105964091/openkataster-active/raster-cache
+Environment=OPENKATASTER_TILE_HYBRID_RASTER_MIN_ZOOM=8
+Environment=OPENKATASTER_TILE_RASTER_TILE_SIZE=512
+Environment=OPENKATASTER_TILE_OVERVIEW_RASTER_SOURCE_ZOOM=8
+User=openkataster-tiles
+Group=openkataster-tiles
+WorkingDirectory=/opt/openkataster-tiles
+EnvironmentFile=/etc/openkataster-tiles.env
+ExecStart=/opt/openkataster-tiles/venv/bin/uvicorn openkataster_tiles.main:app --host 127.0.0.1 --port 8080 --workers 2
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

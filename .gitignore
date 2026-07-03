@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Runtime/cache data
+.cache/
+cache/
+tmp/
+temp/
+*.log
+*.pid
+*.sock
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+
+# Backups and OS metadata
+*.bak
+*.bak.*
+._*
+.DS_Store
+
+# Generated tile/data artifacts
+*.pmtiles
+*.sqlite
+*.sqlite3
+*.mbtiles
+*.gpkg
+*.parquet
+*.geojson
+*.jsonl
+# Deployment/runtime paths
+/srv/
+/backups/
+cleanup-*.txt
+# Runtime tile caches and generated local data
+luftbild_cache/
+nginx_tile_cache/
+pmtiles_range_cache/
+# Keep viewer source JSON assets tracked; large generated geodata stays ignored by extension above.

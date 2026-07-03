@@ -1,0 +1,40 @@
+name: openkataster_tiles
+
+services:
+  tiles-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openkataster-tiles-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - /srv/openkataster-tiles/data:/srv/openkataster-tiles/data
+      - /srv/openkataster-tiles/active:/srv/openkataster-tiles/active
+      - /srv/openkataster-tiles/cache:/srv/openkataster-tiles/cache
+      - /srv/openkataster-tiles/plz:/srv/openkataster-tiles/plz
+      - /srv/openkataster-tiles/geocoder:/srv/openkataster-tiles/geocoder
+      - /srv/openkataster-tiles/logs:/srv/openkataster-tiles/logs
+      - /srv/openkataster-tiles/live-viewer:/srv/openkataster-tiles/live-viewer:ro
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: openkataster-tiles-caddy
+    restart: unless-stopped
+    depends_on:
+      - tiles-api
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8081:8081"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

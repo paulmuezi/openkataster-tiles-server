@@ -1,0 +1,9 @@
+tiles.openkataster.de {
+	encode gzip zstd
+	reverse_proxy tiles-api:8080
+}
+
+:8081 {
+	encode gzip zstd
+	reverse_proxy tiles-api:8080
+}

@@ -1,0 +1,16 @@
+{
+  "version": 8,
+  "name": "OpenKataster Deutschland Clean Custom Renderer",
+  "sources": {},
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "rgba(0,0,0,0)",
+        "background-opacity": 0
+      }
+    }
+  ],
+  "glyphs": "https://tiles.openkataster.de/fonts/{fontstack}/{range}.pbf"
+}

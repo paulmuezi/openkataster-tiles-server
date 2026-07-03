@@ -6303,7 +6303,10 @@ def fast_address_result_from_row(row: sqlite3.Row, city_fallback: str = "") -> d
         "city": city_label,
         "country": str(row["country"] or "Deutschland"),
     }
-    enrich_address_postcode(address, lon, lat)
+    post_code = str(row["post_code"] or "").strip() if "post_code" in row.keys() else ""
+    if post_code:
+        address["post_code"] = post_code
+        address["postal_code"] = post_code
     return {
         "kind": str(row["feature_kind"] or "address"),
         "result_type": "address",
@@ -6423,14 +6426,15 @@ def fast_clustered_street_results_from_address_rows(
         chosen["max_lat"] = max(chosen["max_lat"], fast_float(row["max_lat"], lat), lat)
     clusters.sort(key=lambda cluster: (-int(cluster["count"]), str(cluster["street"]), str(cluster["city"])))
     results: list[dict] = []
-    signature = postcode_areas_signature()
     for cluster in clusters[:limit]:
         count = max(int(cluster["count"]), 1)
         lon = float(cluster["sum_lon"]) / count
         lat = float(cluster["sum_lat"]) / count
         street_label = str(cluster["street"] or street_fallback or "").strip()
         city_label = str(cluster["city"] or city_fallback or "").strip()
-        post_code = postcode_area_lookup(lon, lat, signature)
+        # Do not run polygon-based postcode enrichment in search suggestions.
+        # It is useful for feature details, but too expensive for autocomplete.
+        post_code = ""
         place_label = " ".join(part for part in (post_code, city_label) if part)
         label = f"{street_label}, {place_label}" if place_label else street_label
         feature = {
@@ -6651,8 +6655,6 @@ def search_address_result_from_row(row: sqlite3.Row, state: str, city_fallback: 
     if post_code:
         address["post_code"] = post_code
         address["postal_code"] = post_code
-    else:
-        enrich_address_postcode(address, lon, lat)
     return {
         "kind": str(row["feature_kind"] or "address"),
         "result_type": "address",
@@ -6760,7 +6762,6 @@ def search_clustered_street_results_from_address_rows(
         chosen["max_lon"] = max(chosen["max_lon"], fast_float(row["max_lon"], lon), lon)
         chosen["max_lat"] = max(chosen["max_lat"], fast_float(row["max_lat"], lat), lat)
     clusters.sort(key=lambda cluster: (-int(cluster["count"]), str(cluster["street"]), str(cluster["post_code"])))
-    signature = postcode_areas_signature()
     results: list[dict] = []
     for cluster in clusters[:limit]:
         count = max(int(cluster["count"]), 1)
@@ -6768,7 +6769,9 @@ def search_clustered_street_results_from_address_rows(
         lat = float(cluster["sum_lat"]) / count
         street_label = str(cluster["street"] or street_fallback or "").strip()
         city_label = str(cluster["city"] or city_fallback or "").strip()
-        post_code = str(cluster["post_code"] or "").strip() or postcode_area_lookup(lon, lat, signature)
+        # Do not run polygon-based postcode enrichment in search suggestions.
+        # Keep only postcodes that were precomputed into search.sqlite.
+        post_code = str(cluster["post_code"] or "").strip()
         place_label = " ".join(part for part in (post_code, city_label) if part)
         label = f"{street_label}, {place_label}" if place_label else street_label
         feature = {
@@ -7643,7 +7646,10 @@ def geocoder_direct_lookup(
                         "city": str(row["city"] or city or ""),
                         "country": "Deutschland",
                     }
-                    enrich_address_postcode(address, float(row["lon"]), float(row["lat"]))
+                    post_code = str(row["post_code"] or "").strip() if "post_code" in row.keys() else ""
+                    if post_code:
+                        address["post_code"] = post_code
+                        address["postal_code"] = post_code
                     results.append({
                         "kind": str(row["feature_kind"] or "address"),
                         "result_type": "address",

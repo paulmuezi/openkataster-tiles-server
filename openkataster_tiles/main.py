@@ -12488,7 +12488,6 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
       map.on("movestart", () => showFrameFallback());
       map.on("zoomstart", () => showFrameFallback());
       map.on("dragstart", () => showFrameFallback());
-      map.on("sourcedataloading", () => showFrameFallback());
       map.on("idle", () => {
         captureStableFrame();
         hideFrameFallbackSoon();

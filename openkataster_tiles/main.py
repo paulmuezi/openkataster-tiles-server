@@ -4052,6 +4052,18 @@ def place_entries(signature: tuple[tuple[str, int, int], ...]) -> tuple[dict, ..
 
 
 def requested_municipality(query: str, allowed_states: set[str]) -> dict | None:
+    cached = _requested_municipality_cached(
+        query,
+        tuple(sorted(allowed_states)),
+        gn250_places_signature(),
+    )
+    return dict(cached) if cached else None
+
+
+@lru_cache(maxsize=4096)
+def _requested_municipality_cached(query: str, allowed_states_key: tuple[str, ...], signature: tuple[int, int]) -> dict | None:
+    del signature
+    allowed_states = set(allowed_states_key)
     normalized_query = normalize_place_search_text(query)
     compact_query = compact_place_search_text(query)
     plain_query = plain_place_search_text(query)
@@ -4092,6 +4104,18 @@ def requested_municipality(query: str, allowed_states: set[str]) -> dict | None:
 
 
 def requested_place_context(query: str, allowed_states: set[str]) -> dict | None:
+    cached = _requested_place_context_cached(
+        query,
+        tuple(sorted(allowed_states)),
+        gn250_places_signature(),
+    )
+    return dict(cached) if cached else None
+
+
+@lru_cache(maxsize=4096)
+def _requested_place_context_cached(query: str, allowed_states_key: tuple[str, ...], signature: tuple[int, int]) -> dict | None:
+    del signature
+    allowed_states = set(allowed_states_key)
     folded_query = query.casefold()
     normalized_query = normalize_place_search_text(query)
     compact_query = compact_place_search_text(query)

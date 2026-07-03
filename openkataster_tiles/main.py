@@ -4161,6 +4161,52 @@ def requested_state_context(value: str, allowed_states: set[str]) -> str | None:
     return None
 
 
+def states_for_place_context(value: str, allowed_states: set[str]) -> tuple[str, ...]:
+    cached = _states_for_place_context_cached(
+        value,
+        tuple(sorted(allowed_states)),
+        gn250_places_signature(),
+    )
+    return tuple(cached)
+
+
+@lru_cache(maxsize=4096)
+def _states_for_place_context_cached(value: str, allowed_states_key: tuple[str, ...], signature: tuple[int, int]) -> tuple[str, ...]:
+    del signature
+    place = str(value or "").strip()
+    if len(place) < 2:
+        return tuple()
+    allowed_states = set(allowed_states_key)
+    wanted = {
+        normalize_place_search_text(place),
+        compact_place_search_text(place),
+        plain_place_search_text(place),
+        compact_plain_place_search_text(place),
+    }
+    matches: set[str] = set()
+    for entry in gn250_place_entries(gn250_places_signature()):
+        state = normalize_state_key(str(entry.get("state") or ""))
+        if state not in allowed_states:
+            continue
+        names = [
+            str(entry.get("name") or "").strip(),
+            str(entry.get("municipality") or "").strip(),
+        ]
+        for name in names:
+            if not name:
+                continue
+            variants = {
+                normalize_place_search_text(name),
+                compact_place_search_text(name),
+                plain_place_search_text(name),
+                compact_plain_place_search_text(name),
+            }
+            if wanted & variants:
+                matches.add(state)
+                break
+    return tuple(sorted(matches))
+
+
 def query_without_municipality(query: str, municipality: dict | None) -> str:
     if not municipality:
         return query
@@ -7833,9 +7879,6 @@ def search_features_for_dataset(
     cadastre_mode = search_mode in {"cadastre", "kataster", "parcel", "parcels", "flurstueck", "flurstück"}
     if len(query) < 2:
         return {"query": query, "count": 0, "results": []}
-    entries = feature_db_entries_for_dataset(dataset)
-    if not entries:
-        raise HTTPException(status_code=404, detail="feature index not found")
 
     per_index_limit = max(8, min(limit * 2, 30))
     results: list[dict] = []
@@ -7931,6 +7974,11 @@ def search_features_for_dataset(
         return {"query": query, "count": len(combined_place_results[:limit]), "results": combined_place_results[:limit]}
     results.extend(state_results)
     results.extend(place_results)
+
+    entries = feature_db_entries_for_dataset(dataset)
+    if not entries:
+        raise HTTPException(status_code=404, detail="feature index not found")
+
     for entry in entries:
         if entry.name not in search_states:
             continue
@@ -8060,8 +8108,12 @@ def cached_search_features_for_dataset(
             allowed_states = {state_key}
         structured_state = requested_state_context(state, allowed_states)
         search_states = {structured_state} if structured_state else allowed_states
-        place_context = requested_place_context(stripped_query, allowed_states)
-        place_query = query_without_place_context(stripped_query, place_context)
+        if structured_state:
+            place_context = None
+            place_query = stripped_query
+        else:
+            place_context = requested_place_context(stripped_query, allowed_states)
+            place_query = query_without_place_context(stripped_query, place_context)
         key = (
             "direct-geocoder-v5",
             dataset,
@@ -13432,12 +13484,17 @@ def api_v1_search_address(
     query = q.strip() or _api_v1_search_query_from_parts(street, house_number, place)
     if len(query) < 2:
         return {"query": query, "results": []}
+    state_key = state
+    if not state_key.strip() and place.strip():
+        inferred_states = states_for_place_context(place, set(active_bucket_state_keys()))
+        if len(inferred_states) == 1:
+            state_key = inferred_states[0]
     return cached_search_features_for_dataset(
         VIRTUAL_GERMANY_DATASET,
         query,
         limit,
         "address",
-        state=state,
+        state=state_key,
     )
 
 

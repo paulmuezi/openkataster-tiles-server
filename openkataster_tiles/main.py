@@ -13107,6 +13107,15 @@ def health() -> dict:
 def warm_search_indexes() -> None:
     try:
         states = set(active_bucket_state_keys())
+        exact_place_context_index(gn250_places_signature())
+        for entry in search_db_entries_for_states(tuple(sorted(states))):
+            try:
+                con = search_db_connection(entry.path)
+                con.execute("SELECT 1 FROM address_lookup LIMIT 1").fetchone()
+                con.execute("SELECT 1 FROM street_lookup LIMIT 1").fetchone()
+                con.execute("SELECT 1 FROM parcel_lookup LIMIT 1").fetchone()
+            except sqlite3.Error:
+                continue
         feature_db_entries_for_dataset("deutschland")
         search_places_for_dataset(VIRTUAL_GERMANY_DATASET, "Freden", 5)
         search_places_for_dataset(VIRTUAL_GERMANY_DATASET, "Hamburg", 5)

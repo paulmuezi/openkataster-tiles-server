@@ -7894,6 +7894,8 @@ def search_features_for_dataset(
         fast_parcel_results = search_fast_cadastre_parcels_for_dataset(gemarkung, flur, flurstueck, limit, preliminary_search_states)
         if fast_parcel_results:
             return {"query": query, "count": len(fast_parcel_results[:limit]), "results": fast_parcel_results[:limit]}
+        if gemarkung.strip() and flur.strip() and flurstueck.strip():
+            return {"query": query, "count": 0, "results": []}
     place_context = requested_place_context(query, allowed_states)
     query_without_place = query_without_place_context(query, place_context)
     if not cadastre_mode and place_context and normalize_place_search_text(query_without_place) != normalize_place_search_text(query):
@@ -13489,11 +13491,12 @@ def api_v1_search_address(
         inferred_states = states_for_place_context(place, set(active_bucket_state_keys()))
         if len(inferred_states) == 1:
             state_key = inferred_states[0]
+    mode = "street" if street.strip() and not house_number.strip() else "address"
     return cached_search_features_for_dataset(
         VIRTUAL_GERMANY_DATASET,
         query,
         limit,
-        "address",
+        mode,
         state=state_key,
     )
 

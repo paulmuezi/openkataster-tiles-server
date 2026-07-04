@@ -2766,6 +2766,48 @@ def runtime_fallback_layers(source_id: str = "alkis") -> list[dict]:
     ]
 
 
+def runtime_boundary_point_layers(source_id: str = "alkis") -> list[dict]:
+    return [
+        {
+            "id": f"runtime-{source_id}-boundary-point-fill",
+            "type": "fill",
+            "source": source_id,
+            "source-layer": "boundary_point_geometries",
+            "minzoom": 17,
+            "paint": {
+                "fill-color": ["coalesce", ["get", "fill_color"], "#ffffff"],
+                "fill-opacity": ["interpolate", ["linear"], ["zoom"], 17, 0.0, 17.4, 0.92],
+            },
+        },
+        {
+            "id": f"runtime-{source_id}-boundary-point-line",
+            "type": "line",
+            "source": source_id,
+            "source-layer": "boundary_point_geometries",
+            "minzoom": 17,
+            "layout": {"line-cap": "round", "line-join": "round"},
+            "paint": {
+                "line-color": ["coalesce", ["get", "stroke_color"], "#222222"],
+                "line-opacity": ["interpolate", ["linear"], ["zoom"], 17, 0.0, 17.4, 0.9],
+                "line-width": [
+                    "*",
+                    ["coalesce", ["to-number", ["get", "stroke_width_m"]], 0.75],
+                    ["interpolate", ["linear"], ["zoom"], 17, 0.7, 19, 1.0, 20, 1.15],
+                ],
+            },
+        },
+    ]
+
+
+def _style_has_source_layer(layers: list[dict], source_id: str, source_layer: str) -> bool:
+    return any(
+        isinstance(layer, dict)
+        and layer.get("source") == source_id
+        and layer.get("source-layer") == source_layer
+        for layer in layers
+    )
+
+
 def overview_geojson_sources(base: str, key: str) -> tuple[dict[str, dict], list[tuple[str, str, str]]]:
     sources: dict[str, dict] = {}
     available: list[tuple[str, str, str]] = []
@@ -3180,6 +3222,13 @@ def style_for(request: Request, dataset_name: str, ds: Dataset, key: str) -> dic
         for layer in style.get("layers", [])
         if layer.get("type") == "background" or layer.get("source") == "alkis"
     ]
+    available_layers = {
+        layer.get("id")
+        for layer in (ds.metadata or {}).get("vector_layers", [])
+        if isinstance(layer, dict) and layer.get("id")
+    }
+    if "boundary_point_geometries" in available_layers and not _style_has_source_layer(style["layers"], "alkis", "boundary_point_geometries"):
+        style["layers"].extend(web_layer(layer) for layer in runtime_boundary_point_layers("alkis"))
     if GLYPHS_URL:
         style["glyphs"] = style_glyphs_url()
     style.pop("sprite", None)
@@ -3299,6 +3348,12 @@ def mosaic_style_for(request: Request, key: str) -> dict:
 
     if generic_entries and "alkis" in next_sources and not any(layer.get("source") == "alkis" for layer in next_layers):
         next_layers.extend(web_layer(layer) for layer in runtime_fallback_layers("alkis"))
+    if (
+        "boundary_point_geometries" in available_layers
+        and "alkis" in next_sources
+        and not _style_has_source_layer(next_layers, "alkis", "boundary_point_geometries")
+    ):
+        next_layers.extend(web_layer(layer) for layer in runtime_boundary_point_layers("alkis"))
 
     if not overview_layers_added:
         next_layers = overview_layers + next_layers

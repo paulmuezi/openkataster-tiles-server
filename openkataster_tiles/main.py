@@ -13506,6 +13506,7 @@ def api_v1_datasets() -> dict:
 async def api_v1_tilejson(state: str, request: Request):
     state_key = normalize_state_key(state)
     base_url = str(request.base_url).rstrip("/")
+    maxzoom = style_source_maxzoom(20)
     return {
         "tilejson": "3.0.0",
         "name": f"OpenKataster ALKIS {state_key}",
@@ -13513,7 +13514,7 @@ async def api_v1_tilejson(state: str, request: Request):
         "scheme": "xyz",
         "tiles": [f"{base_url}/api/v1/tiles/{state_key}/{{z}}/{{x}}/{{y}}.mvt?client=viewer"],
         "minzoom": 0,
-        "maxzoom": 20,
+        "maxzoom": maxzoom,
         "bounds": [5.5, 47.0, 15.5, 55.5],
         "vector_layers": [
             {"id": "surfaces", "fields": {}},

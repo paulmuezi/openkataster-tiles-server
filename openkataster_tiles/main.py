@@ -3946,19 +3946,10 @@ def openplz_lookup_postcode(street_norm: str, place_norm: str, state_key: str, s
 
 
 def enrich_address_postcode(address: dict, lon: float, lat: float) -> None:
+    # Do not infer postal codes at request time. Postal codes must come from
+    # the built features/search SQLite data so display and search stay
+    # consistent for states that have not been rebuilt with PLZ data yet.
     address.setdefault("country", "Deutschland")
-    if address.get("post_code") or address.get("postal_code"):
-        return
-    try:
-        lon_value = round(float(lon), 7)
-        lat_value = round(float(lat), 7)
-    except (TypeError, ValueError):
-        return
-    postcode = postcode_area_lookup(lon_value, lat_value, postcode_areas_signature())
-    if not postcode:
-        return
-    address["post_code"] = postcode
-    address["postal_code"] = postcode
 
 
 def allowed_place_states(dataset: str) -> set[str]:

@@ -79,6 +79,31 @@
       overscroll-behavior: contain;
       background: #ffffff;
     }
+
+    html.ok-safari-scroll-zoom,
+    html.ok-safari-scroll-zoom body {
+      height: auto;
+      min-height: 300vh;
+      overflow-x: hidden;
+      overflow-y: scroll;
+      scrollbar-width: none;
+    }
+    html.ok-safari-scroll-zoom::-webkit-scrollbar,
+    html.ok-safari-scroll-zoom body::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+      display: none;
+    }
+    #safariScrollRail {
+      display: none;
+    }
+    html.ok-safari-scroll-zoom #safariScrollRail {
+      display: block;
+      width: 1px;
+      height: 300vh;
+      pointer-events: none;
+      opacity: 0;
+    }
     #measureOverlay {
       position: absolute;
       inset: 0;
@@ -2216,10 +2241,11 @@
     <div id="selectionBody" class="selection-body"></div>
   </section>
   <div id="status" class="floating" data-ready="false">Karte wird geladen …</div>
+  <div id="safariScrollRail" aria-hidden="true"></div>
   <script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260704-maplibre5-gesture1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260704-safari-scrollrail1"></script>
     <script>
       (function(){
         function setupLayerDisclosureClicks(){

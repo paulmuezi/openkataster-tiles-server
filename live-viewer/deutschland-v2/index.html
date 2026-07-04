@@ -417,25 +417,6 @@
       background: #9d9d9d;
       border-color: #111;
     }
-    .legend-swatch.boundary-point {
-      width: 14px;
-      height: 14px;
-      margin-left: 2px;
-      border-radius: 999px;
-      background: #fff;
-      border: 2px solid #111;
-    }
-    .legend-swatch.boundary-point::after {
-      content: "";
-      position: absolute;
-      width: 4px;
-      height: 4px;
-      border-radius: 999px;
-      background: #111;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-    }
     .legend-swatch.parcel-line,
     .legend-swatch.outline,
     .legend-swatch.legal {
@@ -515,6 +496,25 @@
       border-radius: 999px;
       background: #fff;
       border: 2px solid #111;
+    }
+    .legend-swatch.parking-symbol {
+      width: 14px;
+      height: 14px;
+      margin-left: 2px;
+      border-radius: 3px;
+      background: #fff;
+      border: 1.5px solid #475569;
+      color: #475569;
+      font-size: 10px;
+      font-weight: 600;
+      line-height: 12px;
+      text-align: center;
+    }
+    .legend-swatch.parking-symbol::after {
+      content: "P";
+      position: absolute;
+      inset: 0;
+      line-height: 12px;
     }
     .tool {
       border-radius: 999px;
@@ -2123,11 +2123,11 @@
             <summary><label class="layer-group-check"><input type="checkbox" data-layer-setting="alkisExtended"><span class="legend-swatch fill"></span><span>Erweitert</span></label></summary>
             <div class="layer-subtree layer-subtree-nested">
               <label class="layer-check"><input type="checkbox" data-layer-setting="parcelLabels"><span class="legend-swatch parcel-number"></span><span>Flurstücksnummern</span></label>
-          <label class="layer-check"><input type="checkbox" data-layer-setting="boundaryPoints"><span class="legend-swatch boundary-point"></span><span>Grenzpunkte</span></label>
               <label class="layer-check"><input type="checkbox" data-layer-setting="surfaceFills"><span class="legend-swatch fill"></span><span>Flächennutzung</span></label>
               <label class="layer-check"><input type="checkbox" data-layer-setting="buildingUsage"><span class="legend-swatch building-use"></span><span>Gebäudenutzung</span></label>
               <label class="layer-check"><input type="checkbox" data-layer-setting="buildingLabels"><span class="legend-swatch text-muted"></span><span>Gebäudedetails</span></label>
-              <label class="layer-check"><input type="checkbox" data-layer-setting="symbols"><span class="legend-swatch symbol"></span><span>Symbole</span></label>
+              <label class="layer-check"><input type="checkbox" data-layer-setting="boundaryPoints"><span class="legend-swatch symbol"></span><span>Grenzpunkte</span></label>
+              <label class="layer-check"><input type="checkbox" data-layer-setting="symbols"><span class="legend-swatch parking-symbol"></span><span>Symbole</span></label>
             </div>
           </details>
         </div>

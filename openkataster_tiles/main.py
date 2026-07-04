@@ -8619,6 +8619,13 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
       background: #fff;
       border: 2px solid #111;
     }
+    .legend-swatch.monument-symbol {
+      width: 15px;
+      height: 18px;
+      margin-left: 1px;
+      border: 0;
+      background: transparent url("/viewer-assets/deutschland-v2/alkis-symbol-denkmal.svg?v=20260704-denkmal-local1") center / contain no-repeat;
+    }
     #toolDockToggle {
       width: 100%;
       min-height: 34px;
@@ -9481,7 +9488,7 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
         <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"buildingLabels\"><span class=\"legend-swatch text-muted\"></span><span>Gebäudebeschriftungen</span></label>
         <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"streetNames\"><span class=\"legend-swatch street-label\"></span><span>Straßennamen</span></label>
         <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"surfaceLabels\"><span class=\"legend-swatch area-label\"></span><span>Flächenlabels</span></label>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"symbols\"><span class=\"legend-swatch symbol\"></span><span>Weitere Signaturen</span></label>
+        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"symbols\"><span class=\"legend-swatch monument-symbol\"></span><span>Weitere Signaturen</span></label>
       </details>
     </div>
   </section>

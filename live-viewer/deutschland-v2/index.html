@@ -6,6 +6,7 @@
   <title>OpenKataster Karte - deutschland v2</title>
   <script>
     (function(){
+      if (new URLSearchParams(window.location.search).get(debugInput) !== 1) return;
       var counts = {
         wheel: 0,
         mousewheel: 0,
@@ -2269,7 +2270,7 @@
   <script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260704-safari-map-wrapper1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260705-safari-fade-throttle1"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

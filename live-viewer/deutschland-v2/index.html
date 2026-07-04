@@ -502,7 +502,7 @@
       height: 18px;
       margin-left: 1px;
       border: 0;
-      background: transparent url("/viewer-assets/deutschland-v2/alkis-symbol-denkmal.svg?v=20260704-denkmal-local1") center / contain no-repeat;
+      background: transparent url("/viewer-assets/deutschland-v2/alkis-symbol-denkmal.svg?v=20260704") center / contain no-repeat;
     }
     .tool {
       border-radius: 999px;
@@ -718,6 +718,65 @@
       padding: 8px 9px;
       font-size: 12px;
       font-weight: 500;
+    }
+
+    .export-center-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items: center;
+      margin: 10px 0 0;
+    }
+    .export-center-summary {
+      min-width: 0;
+      color: var(--ok-ui-muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .export-center-button {
+      border: 1px solid var(--ok-ui-border);
+      background: #fff;
+      color: var(--ok-ui-text);
+      border-radius: 6px;
+      height: 30px;
+      padding: 0 10px;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .export-center-button[data-active="true"] {
+      border-color: #f86d14;
+      color: #c2410c;
+      box-shadow: 0 0 0 2px rgba(248, 109, 20, 0.14);
+    }
+    .export-center-marker {
+      position: absolute;
+      z-index: 9;
+      width: 22px;
+      height: 22px;
+      margin-left: -11px;
+      margin-top: -11px;
+      pointer-events: none;
+    }
+    .export-center-marker::before,
+    .export-center-marker::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      background: #f86d14;
+      box-shadow: 0 0 0 2px rgba(255,255,255,.9);
+      transform: translate(-50%, -50%);
+    }
+    .export-center-marker::before {
+      width: 18px;
+      height: 2px;
+    }
+    .export-center-marker::after {
+      width: 2px;
+      height: 18px;
     }
     .export-actions {
       display: grid;
@@ -1919,6 +1978,13 @@
       letter-spacing: 0;
       white-space: nowrap;
     }
+    body:not(.ok-access-ready) .pro-badge {
+      display: none !important;
+    }
+    body:not(.ok-access-ready) #toolDock {
+      opacity: 0;
+      pointer-events: none;
+    }
     .tool .pro-badge {
       display: inline-flex;
       position: absolute;
@@ -1995,6 +2061,9 @@
     <button id="toolMeasureArea" class="tool" data-kind="mode" data-state="off" type="button" title="Messen">
       <svg class="measure-ruler-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M4 6.9H18.4"/><path d="M4 17.1H18.4"/><path d="M4 6.9V17.1"/><path d="M6.4 6.9V9.65"/><path d="M8.8 6.9V10.95"/><path d="M11.2 6.9V9.65"/><path d="M13.6 6.9V10.95"/><path d="M16 6.9V9.65"/><text x="8.8" y="15.95" text-anchor="middle" fill="currentColor" stroke="none" font-size="5.7" font-family="IBM Plex Sans, system-ui, sans-serif" font-weight="500">1</text><text x="13.6" y="15.95" text-anchor="middle" fill="currentColor" stroke="none" font-size="5.7" font-family="IBM Plex Sans, system-ui, sans-serif" font-weight="500">2</text></svg><span>Messen</span>
     </button>
+    <button id="toolMapExport" class="tool" data-kind="mode" data-state="off" type="button" title="Karte exportieren" aria-label="Karte exportieren">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v10"/><path d="m8 9 4 4 4-4"/><path d="M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/></svg><span>Export</span>
+    </button>
   </aside>
   <section id="measureTracker" class="floating" hidden aria-live="polite"></section>
   <section id="exportPanel" class="floating" hidden>
@@ -2034,6 +2103,11 @@
           <option value="pdf">PDF</option>
         </select>
       </label>
+    </div>
+    <div class="export-center-row">
+      <div id="exportCenterSummary" class="export-center-summary">Mitte: aktuelle Kartenmitte</div>
+      <button id="exportSetCenter" class="export-center-button" type="button">Mittelpunkt setzen</button>
+      <button id="exportUseMapCenter" class="export-center-button" type="button">Kartenmitte</button>
     </div>
     <div class="export-actions">
       <button id="exportDownloadPng" type="button" data-primary="true">Export herunterladen</button>
@@ -2146,7 +2220,7 @@
   <script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-2.4.0.js?v=20260624-ios1"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260704-denkmal-local1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260704-sources-api3"></script>
     <script>
       (function(){
         function setupLayerDisclosureClicks(){

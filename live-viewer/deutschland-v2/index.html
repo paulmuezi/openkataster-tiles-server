@@ -57,8 +57,8 @@
       -webkit-text-size-adjust: 100%;
     }
     body {
-      position: fixed;
-      inset: 0;
+      position: relative;
+      min-height: 100%;
       font-family: var(--ok-font-ui);
       font-size: 13px;
       line-height: 1.35;
@@ -73,11 +73,10 @@
       letter-spacing: 0;
     }
     #map {
-      position: absolute;
+      position: fixed;
       inset: 0;
       z-index: 2;
-      touch-action: none;
-      overscroll-behavior: none;
+      overscroll-behavior: contain;
       background: #ffffff;
     }
     #measureOverlay {
@@ -90,7 +89,7 @@
     }
     #map .maplibregl-canvas,
     #map .maplibregl-canvas-container {
-      touch-action: none;
+      overscroll-behavior: contain;
     }
     #alkisCustomFrame {
       position: absolute;
@@ -2220,7 +2219,7 @@
   <script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-2.4.0.js?v=20260624-ios1"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260704-maplibre-native-wheel2"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260704-safari-css-native1"></script>
     <script>
       (function(){
         function setupLayerDisclosureClicks(){

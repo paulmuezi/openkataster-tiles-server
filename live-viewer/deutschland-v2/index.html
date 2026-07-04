@@ -4,6 +4,44 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>OpenKataster Karte - deutschland v2</title>
+  <script>
+    (function(){
+      var counts = {
+        wheel: 0,
+        mousewheel: 0,
+        scroll: 0,
+        gesturestart: 0,
+        gesturechange: 0,
+        pointermove: 0
+      };
+      var last = "";
+      function targetLabel(target) {
+        if (!target) return "";
+        var id = target.id ? "#" + target.id : "";
+        var cls = target.className && typeof target.className === "string" ? "." + target.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
+        return String(target.tagName || target.nodeName || "") + id + cls;
+      }
+      function remember(type, event) {
+        counts[type] += 1;
+        if (event) {
+          last = type + " dy=" + Math.round(event.deltaY || event.wheelDelta || 0) +
+            " mode=" + (event.deltaMode == null ? "-" : event.deltaMode) +
+            " ctrl=" + (event.ctrlKey ? "1" : "0") +
+            " cancelable=" + (event.cancelable ? "1" : "0") +
+            " target=" + targetLabel(event.target);
+        } else {
+          last = type;
+        }
+      }
+      window.__okEarlyInputDebug = { counts: counts, getLast: function(){ return last; } };
+      window.addEventListener("wheel", function(event){ remember("wheel", event); }, { capture: true, passive: true });
+      window.addEventListener("mousewheel", function(event){ remember("mousewheel", event); }, { capture: true, passive: true });
+      window.addEventListener("scroll", function(event){ remember("scroll", event); }, { capture: true, passive: true });
+      window.addEventListener("gesturestart", function(event){ remember("gesturestart", event); }, { capture: true, passive: true });
+      window.addEventListener("gesturechange", function(event){ remember("gesturechange", event); }, { capture: true, passive: true });
+      window.addEventListener("pointermove", function(){ counts.pointermove += 1; }, { capture: true, passive: true });
+    })();
+  </script>
   <link rel="stylesheet" href="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.css?v=20260704-maplibre5">
   <style>
     :root {
@@ -2250,7 +2288,7 @@
           "white-space:pre"
         ].join(";");
         document.body.appendChild(panel);
-        var counts = { wheel: 0, scroll: 0, gesturestart: 0, gesturechange: 0 };
+        var counts = { wheel: 0, mousewheel: 0, scroll: 0, gesturestart: 0, gesturechange: 0 };
         var lastWheel = "";
         function targetLabel(target) {
           if (!target) return "";
@@ -2262,6 +2300,10 @@
           counts.wheel += 1;
           lastWheel = "dy=" + Math.round(event.deltaY) + " mode=" + event.deltaMode + " ctrl=" + (event.ctrlKey ? "1" : "0") + " target=" + targetLabel(event.target);
         }, { capture: true, passive: true });
+        window.addEventListener("mousewheel", function(event) {
+          counts.mousewheel += 1;
+          lastWheel = "mousewheel dy=" + Math.round(event.deltaY || event.wheelDelta || 0) + " target=" + targetLabel(event.target);
+        }, { capture: true, passive: true });
         window.addEventListener("scroll", function() {
           counts.scroll += 1;
         }, { passive: true });
@@ -2269,14 +2311,19 @@
         window.addEventListener("gesturechange", function() { counts.gesturechange += 1; }, { capture: true, passive: true });
         window.setInterval(function() {
           var zoom = document.getElementById("zoomReadout")?.textContent || "";
+          var early = window.__okEarlyInputDebug;
+          var earlyCounts = early?.counts || {};
           panel.textContent = [
             "input debug",
-            "wheel " + counts.wheel,
-            "scroll " + counts.scroll,
-            "gesturestart " + counts.gesturestart,
-            "gesturechange " + counts.gesturechange,
+            "late wheel " + counts.wheel + " / early " + (earlyCounts.wheel || 0),
+            "late mousewheel " + counts.mousewheel + " / early " + (earlyCounts.mousewheel || 0),
+            "late scroll " + counts.scroll + " / early " + (earlyCounts.scroll || 0),
+            "late gesturestart " + counts.gesturestart + " / early " + (earlyCounts.gesturestart || 0),
+            "late gesturechange " + counts.gesturechange + " / early " + (earlyCounts.gesturechange || 0),
+            "early pointermove " + (earlyCounts.pointermove || 0),
             zoom,
-            lastWheel
+            "late " + lastWheel,
+            "early " + (early?.getLast?.() || "")
           ].join("\n");
         }, 120);
       })();

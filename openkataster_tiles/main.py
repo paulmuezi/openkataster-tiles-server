@@ -2767,33 +2767,49 @@ def runtime_fallback_layers(source_id: str = "alkis") -> list[dict]:
 
 
 def runtime_boundary_point_layers(source_id: str = "alkis") -> list[dict]:
+    outer_filter = [
+        "any",
+        ["==", ["get", "boundary_point_part"], "outer"],
+        ["!", ["has", "boundary_point_part"]],
+    ]
+    inner_filter = ["==", ["get", "boundary_point_part"], "inner"]
     return [
         {
-            "id": f"runtime-{source_id}-boundary-point-fill",
+            "id": f"runtime-{source_id}-boundary-point-outer-fill",
             "type": "fill",
             "source": source_id,
             "source-layer": "boundary_point_geometries",
             "minzoom": 17,
+            "filter": outer_filter,
             "paint": {
                 "fill-color": ["coalesce", ["get", "fill_color"], "#ffffff"],
-                "fill-opacity": ["interpolate", ["linear"], ["zoom"], 17, 0.0, 17.4, 0.92],
+                "fill-opacity": 1,
             },
         },
         {
-            "id": f"runtime-{source_id}-boundary-point-line",
+            "id": f"runtime-{source_id}-boundary-point-outer-line",
             "type": "line",
             "source": source_id,
             "source-layer": "boundary_point_geometries",
             "minzoom": 17,
+            "filter": outer_filter,
             "layout": {"line-cap": "round", "line-join": "round"},
             "paint": {
                 "line-color": ["coalesce", ["get", "stroke_color"], "#222222"],
-                "line-opacity": ["interpolate", ["linear"], ["zoom"], 17, 0.0, 17.4, 0.9],
-                "line-width": [
-                    "*",
-                    ["coalesce", ["to-number", ["get", "stroke_width_m"]], 0.75],
-                    ["interpolate", ["linear"], ["zoom"], 17, 0.7, 19, 1.0, 20, 1.15],
-                ],
+                "line-opacity": 1,
+                "line-width": ["interpolate", ["linear"], ["zoom"], 17, 0.8, 19, 1.05, 20, 1.25],
+            },
+        },
+        {
+            "id": f"runtime-{source_id}-boundary-point-inner-fill",
+            "type": "fill",
+            "source": source_id,
+            "source-layer": "boundary_point_geometries",
+            "minzoom": 17,
+            "filter": inner_filter,
+            "paint": {
+                "fill-color": ["coalesce", ["get", "fill_color"], "#000000"],
+                "fill-opacity": 1,
             },
         },
     ]
@@ -8527,6 +8543,25 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
     .legend-swatch.building {
       background: #9d9d9d;
       border-color: #111;
+    }
+    .legend-swatch.boundary-point {
+      width: 14px;
+      height: 14px;
+      margin-left: 2px;
+      border-radius: 999px;
+      background: #fff;
+      border: 2px solid #111;
+    }
+    .legend-swatch.boundary-point::after {
+      content: "";
+      position: absolute;
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: #111;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
     }
     .legend-swatch.parcel-line,
     .legend-swatch.outline,

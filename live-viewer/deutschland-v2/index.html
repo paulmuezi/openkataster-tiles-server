@@ -417,6 +417,25 @@
       background: #9d9d9d;
       border-color: #111;
     }
+    .legend-swatch.boundary-point {
+      width: 14px;
+      height: 14px;
+      margin-left: 2px;
+      border-radius: 999px;
+      background: #fff;
+      border: 2px solid #111;
+    }
+    .legend-swatch.boundary-point::after {
+      content: "";
+      position: absolute;
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: #111;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+    }
     .legend-swatch.parcel-line,
     .legend-swatch.outline,
     .legend-swatch.legal {
@@ -2104,6 +2123,7 @@
             <summary><label class="layer-group-check"><input type="checkbox" data-layer-setting="alkisExtended"><span class="legend-swatch fill"></span><span>Erweitert</span></label></summary>
             <div class="layer-subtree layer-subtree-nested">
               <label class="layer-check"><input type="checkbox" data-layer-setting="parcelLabels"><span class="legend-swatch parcel-number"></span><span>Flurstücksnummern</span></label>
+          <label class="layer-check"><input type="checkbox" data-layer-setting="boundaryPoints"><span class="legend-swatch boundary-point"></span><span>Grenzpunkte</span></label>
               <label class="layer-check"><input type="checkbox" data-layer-setting="surfaceFills"><span class="legend-swatch fill"></span><span>Flächennutzung</span></label>
               <label class="layer-check"><input type="checkbox" data-layer-setting="buildingUsage"><span class="legend-swatch building-use"></span><span>Gebäudenutzung</span></label>
               <label class="layer-check"><input type="checkbox" data-layer-setting="buildingLabels"><span class="legend-swatch text-muted"></span><span>Gebäudedetails</span></label>
@@ -2138,7 +2158,7 @@
   <script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-2.4.0.js?v=20260624-ios1"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260704-boundary-points1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260704-boundary-points2"></script>
     <script>
       (function(){
         function setupLayerDisclosureClicks(){

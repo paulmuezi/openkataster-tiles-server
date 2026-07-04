@@ -2215,6 +2215,57 @@
     <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260704-native-no-frame-fallback1"></script>
     <script>
       (function(){
+        var params = new URLSearchParams(window.location.search);
+        if (params.get("debugInput") !== "1") return;
+        var panel = document.createElement("div");
+        panel.style.cssText = [
+          "position:fixed",
+          "right:10px",
+          "bottom:34px",
+          "z-index:99999",
+          "padding:8px 10px",
+          "border:1px solid #ddd",
+          "border-radius:6px",
+          "background:rgba(255,255,255,.94)",
+          "font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace",
+          "color:#111",
+          "pointer-events:none",
+          "white-space:pre"
+        ].join(";");
+        document.body.appendChild(panel);
+        var counts = { wheel: 0, scroll: 0, gesturestart: 0, gesturechange: 0 };
+        var lastWheel = "";
+        function targetLabel(target) {
+          if (!target) return "";
+          var id = target.id ? "#" + target.id : "";
+          var cls = target.className && typeof target.className === "string" ? "." + target.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
+          return String(target.tagName || target.nodeName || "") + id + cls;
+        }
+        window.addEventListener("wheel", function(event) {
+          counts.wheel += 1;
+          lastWheel = "dy=" + Math.round(event.deltaY) + " mode=" + event.deltaMode + " ctrl=" + (event.ctrlKey ? "1" : "0") + " target=" + targetLabel(event.target);
+        }, { capture: true, passive: true });
+        window.addEventListener("scroll", function() {
+          counts.scroll += 1;
+        }, { passive: true });
+        window.addEventListener("gesturestart", function() { counts.gesturestart += 1; }, { capture: true, passive: true });
+        window.addEventListener("gesturechange", function() { counts.gesturechange += 1; }, { capture: true, passive: true });
+        window.setInterval(function() {
+          var zoom = document.getElementById("zoomReadout")?.textContent || "";
+          panel.textContent = [
+            "input debug",
+            "wheel " + counts.wheel,
+            "scroll " + counts.scroll,
+            "gesturestart " + counts.gesturestart,
+            "gesturechange " + counts.gesturechange,
+            zoom,
+            lastWheel
+          ].join("\n");
+        }, 120);
+      })();
+    </script>
+    <script>
+      (function(){
         function setupLayerDisclosureClicks(){
           document.querySelectorAll(".layer-group > summary").forEach(function(summary){
             if (summary.dataset.okDisclosureFixed === "true") return;

@@ -497,24 +497,33 @@
       background: #fff;
       border: 2px solid #111;
     }
-    .legend-swatch.parking-symbol {
+    .legend-swatch.figure-symbol {
       width: 14px;
       height: 14px;
       margin-left: 2px;
-      border-radius: 3px;
-      background: #fff;
-      border: 1.5px solid #475569;
-      color: #475569;
-      font-size: 10px;
-      font-weight: 600;
-      line-height: 12px;
-      text-align: center;
+      border: 0;
+      background: transparent;
     }
-    .legend-swatch.parking-symbol::after {
-      content: "P";
+    .legend-swatch.figure-symbol::before {
+      content: "";
       position: absolute;
-      inset: 0;
-      line-height: 12px;
+      left: 5px;
+      top: 1px;
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: #475569;
+      box-shadow: 0 5px 0 1px #475569;
+    }
+    .legend-swatch.figure-symbol::after {
+      content: "";
+      position: absolute;
+      left: 2px;
+      right: 2px;
+      bottom: 0;
+      height: 3px;
+      border-radius: 999px 999px 2px 2px;
+      background: #475569;
     }
     .tool {
       border-radius: 999px;
@@ -2127,7 +2136,7 @@
               <label class="layer-check"><input type="checkbox" data-layer-setting="buildingUsage"><span class="legend-swatch building-use"></span><span>Gebäudenutzung</span></label>
               <label class="layer-check"><input type="checkbox" data-layer-setting="buildingLabels"><span class="legend-swatch text-muted"></span><span>Gebäudedetails</span></label>
               <label class="layer-check"><input type="checkbox" data-layer-setting="boundaryPoints"><span class="legend-swatch symbol"></span><span>Grenzpunkte</span></label>
-              <label class="layer-check"><input type="checkbox" data-layer-setting="symbols"><span class="legend-swatch parking-symbol"></span><span>Symbole</span></label>
+              <label class="layer-check"><input type="checkbox" data-layer-setting="symbols"><span class="legend-swatch figure-symbol"></span><span>Symbole</span></label>
             </div>
           </details>
         </div>

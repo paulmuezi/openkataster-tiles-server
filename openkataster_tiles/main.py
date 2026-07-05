@@ -26,6 +26,7 @@ import mapbox_vector_tile
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pmtiles.reader import Compression, MmapSource, Reader
 from shapely import wkb
@@ -14346,17 +14347,28 @@ def viewer(
     return HTMLResponse(viewer_html(request, dataset, key_value))
 
 
-@app.api_route("/embed/onoffice", methods=["GET", "HEAD"], response_class=HTMLResponse)
+def _viewer_redirect(request: Request, dataset: str, extra: dict[str, str] | None = None) -> RedirectResponse:
+    params = dict(request.query_params)
+    params.setdefault("iframe", "1")
+    for key, value in (extra or {}).items():
+        params[key] = value
+    query = urllib.parse.urlencode(params, doseq=True)
+    return RedirectResponse(
+        url=f"/viewer/{dataset}" + (f"?{query}" if query else ""),
+        status_code=307,
+    )
+
+
+@app.api_route("/embed/onoffice", methods=["GET", "HEAD"])
 def embed_onoffice_viewer(
     request: Request,
     key: Annotated[str | None, Query()] = None,
     token: Annotated[str | None, Query()] = None,
 ):
-    key_value = viewer_key(key or token)
-    return HTMLResponse(viewer_html(request, VIRTUAL_GERMANY_DATASET, key_value))
+    return _viewer_redirect(request, VIRTUAL_GERMANY_DATASET, {"mode": "onoffice"})
 
 
-@app.api_route("/embed/{dataset}", methods=["GET", "HEAD"], response_class=HTMLResponse)
+@app.api_route("/embed/{dataset}", methods=["GET", "HEAD"])
 def embed_viewer(
     request: Request,
     dataset: str,
@@ -14365,8 +14377,7 @@ def embed_viewer(
 ):
     if not is_virtual_germany_dataset(dataset):
         get_dataset(dataset)
-    key_value = viewer_key(key or token)
-    return HTMLResponse(viewer_html(request, dataset, key_value))
+    return _viewer_redirect(request, dataset)
 
 
 

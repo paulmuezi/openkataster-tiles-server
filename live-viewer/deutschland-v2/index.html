@@ -830,6 +830,16 @@
       display: grid;
       gap: 7px;
     }
+    .onoffice-actions {
+      display: grid;
+      gap: 7px;
+      padding-top: 3px;
+      border-top: 1px solid rgba(43, 48, 54, 0.08);
+    }
+    .onoffice-actions[hidden] {
+      display: none;
+    }
+    .onoffice-actions button,
     .export-actions button {
       border: 1px solid var(--ok-border);
       border-radius: 12px;
@@ -841,11 +851,17 @@
       cursor: pointer;
       text-align: left;
     }
+    .onoffice-actions button[data-primary="true"],
     .export-actions button[data-primary="true"] {
       background: var(--ok-accent);
       border-color: var(--ok-accent);
       color: #fff;
       text-align: center;
+    }
+    .onoffice-actions button:disabled,
+    .export-actions button:disabled {
+      cursor: wait;
+      opacity: 0.72;
     }
     .export-status {
       min-height: 16px;
@@ -1753,6 +1769,7 @@
     .layer-check,
     .layer-group-check,
     .selection-head,
+    .onoffice-actions button,
     .export-actions button,
     .export-field select {
       color: var(--ok-text);
@@ -2091,7 +2108,7 @@
       animation: ok-spin 0.75s linear infinite;
     }
     @keyframes ok-spin { to { transform: rotate(360deg); } }
-    body.ok-free-mode #exportPanel { display: none !important; }
+    body.ok-free-mode:not(.ok-onoffice-mode) #exportPanel { display: none !important; }
 
   </style>
 </head>
@@ -2161,6 +2178,10 @@
     </div>
     <div class="export-actions">
       <button id="exportDownloadPng" type="button" data-primary="true">Export herunterladen</button>
+    </div>
+    <div id="onofficeActions" class="onoffice-actions" hidden>
+      <button id="onofficeExportPdf" type="button" data-primary="true">PDF für onOffice</button>
+      <button id="onofficeTransferSelection" type="button">Informationen übernehmen</button>
     </div>
     <div id="exportStatus" class="export-status"></div>
   </section>
@@ -2270,7 +2291,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260705-smooth-alkis-init1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260705-onoffice-export1"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

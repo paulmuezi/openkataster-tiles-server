@@ -8812,6 +8812,16 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
       display: grid;
       gap: 7px;
     }
+    .onoffice-actions {
+      display: grid;
+      gap: 7px;
+      padding-top: 3px;
+      border-top: 1px solid rgba(43, 48, 54, 0.08);
+    }
+    .onoffice-actions[hidden] {
+      display: none;
+    }
+    .onoffice-actions button,
     .export-actions button {
       border: 1px solid var(--ok-border);
       border-radius: 12px;
@@ -8823,11 +8833,17 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
       cursor: pointer;
       text-align: left;
     }
+    .onoffice-actions button[data-primary="true"],
     .export-actions button[data-primary="true"] {
       background: var(--ok-accent);
       border-color: var(--ok-accent);
       color: #fff;
       text-align: center;
+    }
+    .onoffice-actions button:disabled,
+    .export-actions button:disabled {
+      cursor: wait;
+      opacity: 0.72;
     }
     .export-status {
       min-height: 16px;
@@ -9447,6 +9463,10 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
     <div class=\"export-actions\">
       <button id=\"exportDownloadPng\" type=\"button\" data-primary=\"true\">Export herunterladen</button>
     </div>
+    <div id=\"onofficeActions\" class=\"onoffice-actions\" hidden>
+      <button id=\"onofficeExportPdf\" type=\"button\" data-primary=\"true\">PDF für onOffice</button>
+      <button id=\"onofficeTransferSelection\" type=\"button\">Informationen übernehmen</button>
+    </div>
     <div id=\"exportStatus\" class=\"export-status\"></div>
   </section>
   <section id=\"searchPanel\" class=\"floating\">
@@ -9596,12 +9616,19 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
     const exportSummary = document.getElementById("exportSummary");
     const exportSettingsToggle = document.getElementById("exportSettingsToggle");
     const exportStatus = document.getElementById("exportStatus");
+    const onofficeActions = document.getElementById("onofficeActions");
+    const onofficeExportPdf = document.getElementById("onofficeExportPdf");
+    const onofficeTransferSelection = document.getElementById("onofficeTransferSelection");
     const annotationColorPicker = document.getElementById("annotationColorPicker");
 
     const featureUrl = __FEATURE_URL__;
     const searchUrl = __SEARCH_URL__;
     const datasetsUrl = __DATASETS_URL__;
     const metadataUrl = __METADATA_URL__;
+    const viewerParams = new URLSearchParams(window.location.search);
+    const viewerMode = String(viewerParams.get("mode") || viewerParams.get("okMode") || "").toLowerCase();
+    const isOnOfficeMode = viewerMode === "onoffice" || window.location.pathname.includes("/embed/onoffice");
+    if (isOnOfficeMode && onofficeActions) onofficeActions.hidden = false;
 
     const selectedParcels = new Map();
     const selectedBuildings = new Map();
@@ -10247,6 +10274,95 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
       setExportStatus("PNG wurde erstellt.");
     }
 
+    function onofficeApiUrl(path) {
+      const url = new URL(path, window.location.href);
+      const token = viewerParams.get("token") || viewerParams.get("api_key") || viewerParams.get("key") || "";
+      const key = token || apiKeyFromUrl(featureUrl);
+      if (key) url.searchParams.set(token ? "token" : "api_key", key);
+      return url;
+    }
+
+    async function buildOnOfficeSelectionPayload() {
+      const features = currentSelectionReferences();
+      if (!features.length) {
+        setExportStatus("Bitte zuerst ein Gebäude oder Flurstück auswählen.");
+        return null;
+      }
+      setExportStatus("Informationen werden vorbereitet ...");
+      const response = await fetch(onofficeApiUrl("/api/v1/integrations/onoffice/selection-payload").toString(), {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ features }),
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(detail || `${response.status} ${response.statusText}`);
+      }
+      return response.json();
+    }
+
+    async function transferOnOfficeSelection() {
+      try {
+        if (onofficeTransferSelection) onofficeTransferSelection.disabled = true;
+        const payload = await buildOnOfficeSelectionPayload();
+        if (!payload) return;
+        postOpenKatasterMessage("openkataster:onoffice-payload", {
+          payload,
+          selection: currentSelectionReferences(),
+        });
+        setExportStatus("Informationen wurden an den Host übergeben.");
+      } catch (error) {
+        console.error(error);
+        setExportStatus("Informationen konnten nicht übergeben werden.");
+      } finally {
+        if (onofficeTransferSelection) onofficeTransferSelection.disabled = false;
+      }
+    }
+
+    async function postPdfBlobToParent(blob, filename) {
+      if (!blob || !window.parent || window.parent === window) return false;
+      const buffer = await blob.arrayBuffer();
+      return postOpenKatasterMessage(
+        "openkataster:export-ready",
+        {
+          file: {
+            name: filename,
+            mime_type: "application/pdf",
+            size: blob.size,
+          },
+          export: {
+            format: "pdf",
+            paper: exportPaper?.value || "a4",
+            orientation: exportOrientation?.value || "portrait",
+            scale: exportScale?.value || "1000",
+          },
+          selection: currentSelectionReferences(),
+          buffer,
+        },
+        [buffer],
+      );
+    }
+
+    async function exportPdfForOnOffice() {
+      try {
+        if (onofficeExportPdf) onofficeExportPdf.disabled = true;
+        const blob = await exportVectorPdfBlob();
+        if (!blob) return;
+        const filename = exportFileName("pdf");
+        await postPdfBlobToParent(blob, filename);
+        downloadBlob(blob, filename);
+        setExportStatus("PDF wurde erstellt und an den Host übergeben.");
+      } catch (error) {
+        console.error(error);
+        setExportStatus("PDF konnte nicht für onOffice vorbereitet werden.");
+      } finally {
+        if (onofficeExportPdf) onofficeExportPdf.disabled = false;
+      }
+    }
+
     async function loadJson(url) {
       const response = await fetch(url);
       if (!response.ok) {
@@ -10782,11 +10898,31 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
       if (buildingSource) buildingSource.setData(featureCollection([...selectedBuildings.values()]));
     }
 
+    function parentTargetOrigin() {
+      return viewerParams.get("okParentOrigin") || "*";
+    }
+
+    function postOpenKatasterMessage(type, payload = {}, transfer = []) {
+      if (!window.parent || window.parent === window) return false;
+      window.parent.postMessage(
+        {
+          type,
+          version: 1,
+          dataset: "__DATASET__",
+          ...payload,
+        },
+        parentTargetOrigin(),
+        transfer
+      );
+      return true;
+    }
+
     function compactSelectionFeature(kind, item) {
       const center = Array.isArray(item.center) ? item.center : null;
       const bbox = Array.isArray(item.bbox) ? item.bbox : null;
       const base = {
         kind,
+        state: item.state || item.bundesland || null,
         gml_id: item.gml_id || null,
         source_db: item.source_db || null,
         label: item.label || item.name || null,
@@ -10812,21 +10948,19 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
       };
     }
 
+    function currentSelectionReferences() {
+      return [
+        ...[...selectedParcels.values()].map((item) => compactSelectionFeature("parcel", item)),
+        ...[...selectedBuildings.values()].map((item) => compactSelectionFeature("building", item)),
+      ];
+    }
+
     function notifyParentSelection(parcels, buildings) {
-      if (!window.parent || window.parent === window) return;
-      const params = new URLSearchParams(window.location.search);
-      const targetOrigin = params.get("okParentOrigin") || "*";
-      window.parent.postMessage(
-        {
-          type: "openkataster:selection",
-          version: 1,
-          dataset: "__DATASET__",
-          counts: { parcels: parcels.length, buildings: buildings.length },
-          parcels: parcels.map((item) => compactSelectionFeature("parcel", item)),
-          buildings: buildings.map((item) => compactSelectionFeature("building", item)),
-        },
-        targetOrigin
-      );
+      postOpenKatasterMessage("openkataster:selection", {
+        counts: { parcels: parcels.length, buildings: buildings.length },
+        parcels: parcels.map((item) => compactSelectionFeature("parcel", item)),
+        buildings: buildings.map((item) => compactSelectionFeature("building", item)),
+      });
     }
 
     function firstOverlayLayerId() {
@@ -12849,6 +12983,15 @@ def viewer_html(request: Request, dataset: str, key: str) -> str:
         exportMapFile();
       });
 
+      onofficeTransferSelection?.addEventListener("click", () => {
+        transferOnOfficeSelection();
+      });
+
+      onofficeExportPdf?.addEventListener("click", () => {
+        setExportCropMode(false);
+        exportPdfForOnOffice();
+      });
+
       toolCopyCoords.addEventListener(\"click\", async () => {
         const center = map.getCenter();
         const text = [
@@ -14200,6 +14343,29 @@ def viewer(
             headers={"Cache-Control": "no-cache"},
         )
     key_value = viewer_key(key)
+    return HTMLResponse(viewer_html(request, dataset, key_value))
+
+
+@app.api_route("/embed/onoffice", methods=["GET", "HEAD"], response_class=HTMLResponse)
+def embed_onoffice_viewer(
+    request: Request,
+    key: Annotated[str | None, Query()] = None,
+    token: Annotated[str | None, Query()] = None,
+):
+    key_value = viewer_key(key or token)
+    return HTMLResponse(viewer_html(request, VIRTUAL_GERMANY_DATASET, key_value))
+
+
+@app.api_route("/embed/{dataset}", methods=["GET", "HEAD"], response_class=HTMLResponse)
+def embed_viewer(
+    request: Request,
+    dataset: str,
+    key: Annotated[str | None, Query()] = None,
+    token: Annotated[str | None, Query()] = None,
+):
+    if not is_virtual_germany_dataset(dataset):
+        get_dataset(dataset)
+    key_value = viewer_key(key or token)
     return HTMLResponse(viewer_html(request, dataset, key_value))
 
 

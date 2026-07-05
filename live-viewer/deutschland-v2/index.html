@@ -675,13 +675,24 @@
       text-align: center;
     }
     #exportPanel {
-      left: 78px;
-      top: 348px;
-      width: 238px;
-      padding: 12px;
+      position: fixed;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      left: auto;
+      width: min(372px, calc(100vw - 32px));
+      padding: 18px;
       display: grid;
-      gap: 10px;
-      z-index: 16;
+      align-content: start;
+      gap: 14px;
+      z-index: 28;
+      border-radius: 0;
+      border: 0;
+      border-left: 1px solid rgba(31, 41, 55, 0.10);
+      background: rgba(255, 255, 255, 0.97);
+      box-shadow: -22px 0 48px rgba(15, 23, 42, 0.10);
+      overflow-y: auto;
+      backdrop-filter: blur(16px);
     }
     #exportPanel[hidden] {
       display: none;
@@ -694,6 +705,7 @@
       font-weight: 500;
       font-size: 13px;
       color: var(--ok-ink);
+      padding-bottom: 4px;
     }
     .export-mobile-row {
       display: none;
@@ -747,38 +759,40 @@
     }
     .export-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
+      grid-template-columns: 1fr;
+      gap: 10px;
     }
     .export-field {
       display: grid;
-      gap: 4px;
-      font-size: 11px;
+      gap: 6px;
+      font-size: 12px;
       font-weight: 500;
       color: var(--ok-muted);
     }
     .export-field select {
       width: 100%;
       border: 1px solid var(--ok-border);
-      border-radius: 10px;
+      border-radius: 8px;
       background: #fff;
       color: var(--ok-ink);
-      padding: 8px 9px;
-      font-size: 12px;
+      padding: 9px 10px;
+      font-size: 13px;
       font-weight: 500;
     }
 
     .export-center-row {
       display: grid;
-      grid-template-columns: 1fr auto auto;
+      grid-template-columns: 1fr 1fr;
       gap: 8px;
-      align-items: center;
-      margin: 10px 0 0;
+      align-items: stretch;
+      margin: 0;
     }
     .export-center-summary {
+      grid-column: 1 / -1;
       min-width: 0;
       color: var(--ok-ui-muted);
       font-size: 12px;
+      line-height: 1.35;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -787,11 +801,11 @@
       border: 1px solid var(--ok-ui-border);
       background: #fff;
       color: var(--ok-ui-text);
-      border-radius: 6px;
-      height: 30px;
+      border-radius: 8px;
+      min-height: 36px;
       padding: 0 10px;
       font: inherit;
-      font-size: 12px;
+      font-size: 13px;
       cursor: pointer;
     }
     .export-center-button[data-active="true"] {
@@ -830,10 +844,39 @@
       display: grid;
       gap: 7px;
     }
+    .onoffice-review {
+      display: grid;
+      gap: 9px;
+      padding: 11px;
+      border: 1px solid rgba(31, 41, 55, 0.08);
+      border-radius: 9px;
+      background: rgba(248, 250, 252, 0.72);
+    }
+    .onoffice-review[hidden] {
+      display: none;
+    }
+    .onoffice-review-title {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--ok-ink);
+    }
+    .onoffice-review-list {
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      line-height: 1.35;
+      color: var(--ok-muted);
+    }
+    .onoffice-review-item {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .onoffice-actions {
       display: grid;
       gap: 7px;
-      padding-top: 3px;
+      padding-top: 0;
       border-top: 1px solid rgba(43, 48, 54, 0.08);
     }
     .onoffice-actions[hidden] {
@@ -842,11 +885,12 @@
     .onoffice-actions button,
     .export-actions button {
       border: 1px solid var(--ok-border);
-      border-radius: 12px;
+      border-radius: 8px;
       background: #fff;
       color: var(--ok-ink);
-      padding: 9px 10px;
-      font-size: 12px;
+      min-height: 42px;
+      padding: 10px 12px;
+      font-size: 13px;
       font-weight: 500;
       cursor: pointer;
       text-align: left;
@@ -2135,7 +2179,7 @@
   <section id="measureTracker" class="floating" hidden aria-live="polite"></section>
   <section id="exportPanel" class="floating" hidden>
     <div class="export-title">
-      <span>Karte exportieren</span>
+      <span id="exportPanelTitle">Karte exportieren</span>
       <button id="exportClose" class="export-close" type="button" aria-label="Export schließen">×</button>
     </div>
     <div class="export-mobile-row">
@@ -2178,6 +2222,12 @@
     </div>
     <div class="export-actions">
       <button id="exportDownloadPng" type="button" data-primary="true">Export herunterladen</button>
+    </div>
+    <div id="onofficeReview" class="onoffice-review" hidden>
+      <div class="onoffice-review-title">Ausgewählte Immobilie</div>
+      <div id="onofficeReviewList" class="onoffice-review-list">
+        <div class="onoffice-review-item">Noch kein Gebäude oder Flurstück ausgewählt.</div>
+      </div>
     </div>
     <div id="onofficeActions" class="onoffice-actions" hidden>
       <button id="onofficeExportPdf" type="button" data-primary="true">PDF für onOffice</button>
@@ -2291,7 +2341,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260705-onoffice-export1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260705-onoffice-sidebar1"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

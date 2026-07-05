@@ -684,7 +684,7 @@
       padding: 18px;
       display: grid;
       align-content: start;
-      gap: 14px;
+      gap: 12px;
       z-index: 28;
       border-radius: 0;
       border: 0;
@@ -693,6 +693,7 @@
       box-shadow: -22px 0 48px rgba(15, 23, 42, 0.10);
       overflow-y: auto;
       backdrop-filter: blur(16px);
+      font-family: var(--ok-ui-font);
     }
     #exportPanel[hidden] {
       display: none;
@@ -723,22 +724,22 @@
       letter-spacing: -0.01em;
     }
     .export-settings-toggle {
-      width: 52px;
-      height: 52px;
+      width: 38px;
+      height: 38px;
       border: 0;
-      border-radius: 999px;
-      background: #f8f0e6;
+      border-radius: 9px;
+      background: #fff7ed;
       color: var(--ok-accent);
-      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+      box-shadow: none;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
     }
     .export-settings-toggle svg {
-      width: 25px;
-      height: 25px;
-      stroke-width: 2.5;
+      width: 20px;
+      height: 20px;
+      stroke-width: 2.2;
     }
     .export-close {
       width: 26px;
@@ -760,7 +761,7 @@
     .export-grid {
       display: grid;
       grid-template-columns: 1fr;
-      gap: 10px;
+      gap: 9px;
     }
     .export-field {
       display: grid;
@@ -775,9 +776,9 @@
       border-radius: 8px;
       background: #fff;
       color: var(--ok-ink);
-      padding: 9px 10px;
+      padding: 8px 10px;
       font-size: 13px;
-      font-weight: 500;
+      font-weight: 400;
     }
 
     .export-center-row {
@@ -843,6 +844,7 @@
     .export-actions {
       display: grid;
       gap: 7px;
+      order: 7;
     }
     .onoffice-review {
       display: grid;
@@ -851,6 +853,7 @@
       border: 1px solid rgba(31, 41, 55, 0.08);
       border-radius: 9px;
       background: rgba(248, 250, 252, 0.72);
+      order: 5;
     }
     .onoffice-review[hidden] {
       display: none;
@@ -877,7 +880,8 @@
       display: grid;
       gap: 7px;
       padding-top: 0;
-      border-top: 1px solid rgba(43, 48, 54, 0.08);
+      border-top: 0;
+      order: 6;
     }
     .onoffice-actions[hidden] {
       display: none;
@@ -888,8 +892,8 @@
       border-radius: 8px;
       background: #fff;
       color: var(--ok-ink);
-      min-height: 42px;
-      padding: 10px 12px;
+      min-height: 40px;
+      padding: 9px 12px;
       font-size: 13px;
       font-weight: 500;
       cursor: pointer;
@@ -902,6 +906,19 @@
       color: #fff;
       text-align: center;
     }
+    body.ok-onoffice-mode #exportDownloadPng,
+    body.ok-onoffice-mode #onofficeExportPdf {
+      background: #fff !important;
+      border-color: var(--ok-border) !important;
+      color: var(--ok-ink) !important;
+      text-align: center;
+    }
+    body.ok-onoffice-mode #onofficeTransferSelection {
+      background: var(--ok-accent) !important;
+      border-color: var(--ok-accent) !important;
+      color: #fff !important;
+      text-align: center;
+    }
     .onoffice-actions button:disabled,
     .export-actions button:disabled {
       cursor: wait;
@@ -911,6 +928,7 @@
       min-height: 16px;
       font-size: 11px;
       color: var(--ok-muted);
+      order: 8;
     }
     .export-selection-box {
       position: absolute;
@@ -2001,13 +2019,15 @@
         top: auto;
         bottom: 0;
         width: auto;
-        padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px));
-        border-radius: 22px 22px 0 0;
+        max-height: min(72vh, 560px);
+        padding: 14px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+        gap: 11px;
+        border-radius: 18px 18px 0 0;
         border-left: 0;
         border-right: 0;
         border-bottom: 0;
-        background: rgba(255, 255, 255, 0.96);
-        box-shadow: 0 -18px 42px rgba(15, 23, 42, 0.12);
+        background: rgba(255, 255, 255, 0.98);
+        box-shadow: 0 -14px 34px rgba(15, 23, 42, 0.12);
         z-index: 20;
       }
       #exportPanel .export-title {
@@ -2017,7 +2037,20 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 14px;
+        gap: 10px;
+      }
+      #exportPanel .export-summary {
+        min-height: 34px;
+        border-radius: 8px;
+        padding: 0 11px;
+        font-size: 13px;
+        font-weight: 500;
+      }
+      #exportPanel .export-settings-toggle {
+        flex: 0 0 auto;
+        width: 38px;
+        height: 38px;
+        border: 1px solid rgba(248, 109, 20, 0.16);
       }
       #exportPanel .export-grid {
         display: none;
@@ -2027,11 +2060,36 @@
       #exportPanel[data-settings-open="true"] .export-grid {
         display: grid;
       }
+      #exportPanel .export-center-row {
+        gap: 7px;
+      }
+      #exportPanel .export-center-summary {
+        font-size: 12px;
+      }
+      #exportPanel .export-center-button {
+        min-height: 36px;
+        font-size: 13px;
+      }
       #exportPanel .export-actions button[data-primary="true"] {
-        min-height: 58px;
+        min-height: 42px;
         border-radius: 8px;
-        font-size: 20px;
+        font-size: 13px;
+        font-weight: 600;
         text-align: center;
+      }
+      #exportPanel .onoffice-review {
+        padding: 10px;
+        gap: 7px;
+      }
+      #exportPanel .onoffice-actions,
+      #exportPanel .export-actions {
+        gap: 7px;
+      }
+      #exportPanel .onoffice-actions button,
+      #exportPanel .export-actions button {
+        min-height: 42px;
+        font-size: 13px;
+        border-radius: 8px;
       }
       #exportPanel .export-status {
         display: none;
@@ -2341,7 +2399,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260705-onoffice-sidebar1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260705-onoffice-sidebar2"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

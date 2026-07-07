@@ -782,10 +782,7 @@
     }
 
     .export-center-row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      align-items: stretch;
+      display: block;
       margin: 0;
     }
     .export-center-summary {
@@ -816,32 +813,22 @@
     }
     .export-center-marker {
       position: absolute;
-      z-index: 9;
-      width: 22px;
-      height: 22px;
-      margin-left: -11px;
-      margin-top: -11px;
+      z-index: 14;
+      width: 18px;
+      height: 18px;
+      margin-left: -9px;
+      margin-top: -9px;
+      border: 3px solid #fff;
+      border-radius: 999px;
+      background: #f86d14;
+      box-shadow: 0 2px 10px rgba(17, 24, 39, 0.22);
       pointer-events: auto;
       cursor: grab;
       touch-action: none;
     }
     .export-center-marker::before,
     .export-center-marker::after {
-      content: "";
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      background: #f86d14;
-      box-shadow: 0 0 0 2px rgba(255,255,255,.9);
-      transform: translate(-50%, -50%);
-    }
-    .export-center-marker::before {
-      width: 18px;
-      height: 2px;
-    }
-    .export-center-marker::after {
-      width: 2px;
-      height: 18px;
+      display: none;
     }
     .export-actions {
       display: grid;
@@ -867,7 +854,7 @@
     }
     .onoffice-review-list {
       display: grid;
-      gap: 6px;
+      gap: 8px;
       font-size: 12px;
       line-height: 1.35;
       color: var(--ok-muted);
@@ -877,6 +864,47 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .onoffice-field {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      padding: 8px;
+      border: 1px solid var(--ok-border);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .onoffice-field input[type="checkbox"] {
+      width: 14px;
+      height: 14px;
+      margin: 2px 0 0;
+      accent-color: #f86d14;
+    }
+    .onoffice-field-body {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+    }
+    .onoffice-field-label {
+      color: var(--ok-ink);
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.25;
+    }
+    .onoffice-field textarea {
+      width: 100%;
+      min-height: 34px;
+      max-height: 96px;
+      resize: vertical;
+      border: 1px solid rgba(31, 41, 55, 0.12);
+      border-radius: 7px;
+      padding: 7px 8px;
+      color: var(--ok-ink);
+      background: #fff;
+      font: inherit;
+      font-size: 12px;
+      line-height: 1.35;
     }
     .onoffice-actions {
       display: grid;
@@ -2277,8 +2305,6 @@
     </div>
     <div class="export-center-row">
       <div id="exportCenterSummary" class="export-center-summary">Mitte: aktuelle Kartenmitte</div>
-      <button id="exportSetCenter" class="export-center-button" type="button">Mittelpunkt setzen</button>
-      <button id="exportUseMapCenter" class="export-center-button" type="button">Kartenmitte</button>
     </div>
     <div class="export-actions">
       <button id="exportDownloadPng" type="button" data-primary="true">Export herunterladen</button>
@@ -2401,7 +2427,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260708-export-center-drag2"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260708-onoffice-fields1"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

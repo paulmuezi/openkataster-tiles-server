@@ -7270,6 +7270,11 @@ def _rank_place_suggestion(entry: dict, query_norm: str, query_ascii: str, query
         "state_label": state_label,
         "class": place_class,
         "municipality": municipality,
+        "center": entry.get("center"),
+        "bbox": entry.get("bbox"),
+        "zoom": entry.get("zoom"),
+        "result_type": "place",
+        "kind": "place",
     }
     population_rank = -int(entry.get("population") or 0)
     return (match_rank, population_rank, class_rank, name.casefold()), payload
@@ -7423,6 +7428,11 @@ def search_place_suggestions_for_dataset(dataset: str, q: str, limit: int, state
             "state_label": state_label,
             "class": place_class,
             "municipality": municipality,
+            "center": entry.get("center"),
+            "bbox": entry.get("bbox"),
+            "zoom": entry.get("zoom"),
+            "result_type": "place",
+            "kind": "place",
         }
         population_rank = -int(entry.get("population") or 0)
         candidates.append(((match_rank, population_rank, class_rank, name.casefold()), payload))
@@ -7484,7 +7494,17 @@ def search_street_suggestions_cached(
                 street_clauses = " OR ".join("street_norm LIKE ?" for _ in street_norms)
                 rows.extend(con.execute(
                     f"""
-                    SELECT street_label, city_label, label, SUM(address_count) AS address_count
+                    SELECT
+                      street_label,
+                      city_label,
+                      label,
+                      SUM(address_count) AS address_count,
+                      AVG(lon) AS lon,
+                      AVG(lat) AS lat,
+                      MIN(min_lon) AS min_lon,
+                      MAX(max_lon) AS max_lon,
+                      MIN(min_lat) AS min_lat,
+                      MAX(max_lat) AS max_lat
                     FROM street_lookup
                     WHERE city_norm IN ({','.join('?' for _ in city_norms)})
                       AND ({street_clauses})
@@ -7510,6 +7530,11 @@ def search_street_suggestions_cached(
                 "state": entry.name,
                 "state_label": state_display_name(entry.name),
                 "address_count": int(row["address_count"] or 0),
+                "center": [float(row["lon"]), float(row["lat"])] if row["lon"] is not None and row["lat"] is not None else None,
+                "bbox": [float(row["min_lon"]), float(row["min_lat"]), float(row["max_lon"]), float(row["max_lat"])] if row["min_lon"] is not None and row["min_lat"] is not None and row["max_lon"] is not None and row["max_lat"] is not None else None,
+                "zoom": 17.4,
+                "result_type": "street",
+                "kind": "street",
             })
             if len(results) >= int(limit):
                 return tuple(results)

@@ -665,25 +665,45 @@ def _api_usage_month() -> str:
     return time.strftime("%Y-%m", time.gmtime())
 
 
-def _record_api_key_usage(record: dict) -> None:
+def _api_usage_subject(record: dict) -> str | None:
+    raw = str(record.get("usage_subject") or "").strip()
+    if raw:
+        return raw[:180]
+    project_id = str(record.get("project_id") or "").strip()
+    if project_id:
+        return f"project:{project_id[:120]}"
+    user_id = str(record.get("user_id") or "").strip()
+    if user_id:
+        return f"user:{user_id[:120]}"
     token_hash = str(record.get("token_hash") or "").strip().lower()
-    if not re.fullmatch(r"[a-f0-9]{64}", token_hash):
+    if re.fullmatch(r"[a-f0-9]{64}", token_hash):
+        return f"key:{token_hash}"
+    return None
+
+
+def _ensure_api_usage_schema(con: sqlite3.Connection) -> None:
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS api_usage (
+            token_hash TEXT NOT NULL,
+            month TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (token_hash, month)
+        )
+        """
+    )
+
+
+def _record_api_key_usage(record: dict) -> None:
+    subject = _api_usage_subject(record)
+    if not subject:
         return
     month = _api_usage_month()
     try:
         API_USAGE_DB.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(API_USAGE_DB, timeout=1.5) as con:
-            con.execute(
-                """
-                CREATE TABLE IF NOT EXISTS api_usage (
-                    token_hash TEXT NOT NULL,
-                    month TEXT NOT NULL,
-                    count INTEGER NOT NULL DEFAULT 0,
-                    updated_at INTEGER NOT NULL,
-                    PRIMARY KEY (token_hash, month)
-                )
-                """
-            )
+            _ensure_api_usage_schema(con)
             con.execute(
                 """
                 INSERT INTO api_usage (token_hash, month, count, updated_at)
@@ -691,23 +711,30 @@ def _record_api_key_usage(record: dict) -> None:
                 ON CONFLICT(token_hash, month)
                 DO UPDATE SET count = count + 1, updated_at = excluded.updated_at
                 """,
-                (token_hash, month, int(time.time())),
+                (subject, month, int(time.time())),
             )
     except sqlite3.Error:
         return
 
 
-def _api_key_usage_count(record: dict) -> int:
+def _api_key_usage_count(record: dict, month: str | None = None) -> int:
+    subject = _api_usage_subject(record)
     token_hash = str(record.get("token_hash") or "").strip().lower()
-    if not re.fullmatch(r"[a-f0-9]{64}", token_hash) or not API_USAGE_DB.exists():
+    if not API_USAGE_DB.exists() or not subject:
         return 0
+    identifiers = [subject]
+    if re.fullmatch(r"[a-f0-9]{64}", token_hash):
+        # Backward compatibility for usage counted before project-based usage.
+        identifiers.append(token_hash)
+        identifiers.append(f"key:{token_hash}")
     try:
         with sqlite3.connect(API_USAGE_DB, timeout=1.5) as con:
-            row = con.execute(
-                "SELECT count FROM api_usage WHERE token_hash = ? AND month = ?",
-                (token_hash, _api_usage_month()),
+            _ensure_api_usage_schema(con)
+            rows = con.execute(
+                f"SELECT COALESCE(SUM(count), 0) FROM api_usage WHERE token_hash IN ({','.join(['?'] * len(identifiers))}) AND month = ?",
+                (*identifiers, month or _api_usage_month()),
             ).fetchone()
-            return int(row[0]) if row else 0
+            return int(rows[0]) if rows else 0
     except sqlite3.Error:
         return 0
 
@@ -746,6 +773,8 @@ def _sanitize_api_key_record(record: dict) -> dict | None:
         "status": status,
         "plan": plan,
         "user_id": str(record.get("user_id") or "")[:100],
+        "project_id": str(record.get("project_id") or record.get("user_id") or "")[:100],
+        "usage_subject": str(record.get("usage_subject") or f"project:{record.get('project_id') or record.get('user_id') or token_hash}")[:180],
         "project_name": str(record.get("project_name") or "OpenKataster API")[:255],
         "allowed_origins": [str(origin).strip() for origin in allowed_origins if str(origin).strip()][:50],
         "scopes": [str(scope).strip() for scope in scopes if str(scope).strip()][:50],
@@ -14591,11 +14620,8 @@ def api_v1_admin_api_keys_usage(
                 usages[token_hash] = 0
                 continue
             with sqlite3.connect(API_USAGE_DB, timeout=1.5) as con:
-                row = con.execute(
-                    "SELECT count FROM api_usage WHERE token_hash = ? AND month = ?",
-                    (token_hash, month),
-                ).fetchone()
-                usages[token_hash] = int(row[0]) if row else 0
+                record = _api_key_store_records().get(token_hash) or {"token_hash": token_hash}
+                usages[token_hash] = _api_key_usage_count(record, month)
         except sqlite3.Error:
             usages[token_hash] = 0
     return {"month": month, "usages": usages}

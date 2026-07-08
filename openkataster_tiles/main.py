@@ -2419,7 +2419,13 @@ def style_source_maxzoom(max_zoom: int | float) -> int:
 def public_base_url(request: Request) -> str:
     if PUBLIC_BASE_URL:
         return PUBLIC_BASE_URL
-    return str(request.base_url).rstrip("/")
+    forwarded_host = request.headers.get("x-forwarded-host")
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    host = forwarded_host or request.headers.get("host") or request.url.netloc
+    proto = forwarded_proto or request.url.scheme
+    if host.split(":", 1)[0] == "tiles.openkataster.de":
+        proto = "https"
+    return f"{proto}://{host}".rstrip("/")
 
 
 
@@ -13737,7 +13743,7 @@ def api_v1_datasets() -> dict:
 @app.get("/api/v1/tilejson/{state}.json")
 async def api_v1_tilejson(state: str, request: Request):
     state_key = normalize_state_key(state)
-    base_url = str(request.base_url).rstrip("/")
+    base_url = public_base_url(request)
     maxzoom = style_source_maxzoom(20)
     return {
         "tilejson": "3.0.0",

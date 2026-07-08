@@ -48,6 +48,8 @@ OPENPLZ_DB = Path(os.environ.get("OPENKATASTER_OPENPLZ_DB", "/srv/openkataster-t
 POSTCODE_AREAS_DB = Path(os.environ.get("OPENKATASTER_POSTCODE_AREAS_DB", "/srv/openkataster-tiles/plz/postcode_areas.sqlite"))
 GEOCODER_DB = Path(os.environ.get("OPENKATASTER_GEOCODER_DB", "/srv/openkataster-tiles/geocoder/geocoder.sqlite"))
 FAST_GEOCODER_DB = Path(os.environ.get("OPENKATASTER_FAST_GEOCODER_DB", "/srv/openkataster-tiles/geocoder/geocoder_fast.sqlite"))
+API_KEY_STORE_PATH = Path(os.environ.get("OPENKATASTER_API_KEY_STORE", str(DATA_DIR / "api_keys.json")))
+API_USAGE_DB = Path(os.environ.get("OPENKATASTER_API_USAGE_DB", str(DATA_DIR / "api_usage.sqlite")))
 _GEOCODER_THREAD_LOCAL = threading.local()
 _FAST_GEOCODER_THREAD_LOCAL = threading.local()
 _GEOCODER_GLOBAL_CONNECTION: sqlite3.Connection | None = None
@@ -484,7 +486,7 @@ def _claims_grant_pro_access(claims: dict) -> bool:
     if isinstance(scopes, list) and ("feature:read" in scopes or "measure" in scopes):
         return True
     plan = str(claims.get("plan") or "").lower()
-    return plan in {"pro", "onoffice_pro", "professional", "starter", "beta"}
+    return plan in {"pro", "onoffice_pro", "professional", "starter", "beta", "api_beta", "enterprise", "partner"}
 
 
 def _public_access_claims(access: "ApiAccessContext") -> dict:
@@ -579,13 +581,176 @@ def require_api_key(
     authorization: Annotated[str | None, Header()] = None,
 ) -> str:
     allowed = _configured_keys()
+    provided = key or api_key or x_api_key or _extract_bearer(authorization)
+    api_key_record = _api_key_record_for_token(provided)
+    if api_key_record:
+        _check_and_record_api_key_usage(api_key_record)
+        return provided
     if not allowed:
         raise HTTPException(status_code=503, detail="tile service has no API keys configured")
 
-    provided = key or api_key or x_api_key or _extract_bearer(authorization)
     if not provided or provided not in allowed:
         raise HTTPException(status_code=401, detail="invalid API key")
     return provided
+
+
+_API_KEY_STORE_CACHE: dict[str, object] = {"mtime": None, "records": {}}
+
+
+def _api_key_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _api_key_store_records() -> dict[str, dict]:
+    try:
+        stat = API_KEY_STORE_PATH.stat()
+    except OSError:
+        _API_KEY_STORE_CACHE["mtime"] = None
+        _API_KEY_STORE_CACHE["records"] = {}
+        return {}
+
+    mtime = stat.st_mtime_ns
+    if _API_KEY_STORE_CACHE.get("mtime") == mtime:
+        cached = _API_KEY_STORE_CACHE.get("records")
+        return cached if isinstance(cached, dict) else {}
+
+    try:
+        payload = json.loads(API_KEY_STORE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        _API_KEY_STORE_CACHE["mtime"] = mtime
+        _API_KEY_STORE_CACHE["records"] = {}
+        return {}
+
+    records: dict[str, dict] = {}
+    for record in payload.get("keys", []) if isinstance(payload, dict) else []:
+        if not isinstance(record, dict):
+            continue
+        token_hash = str(record.get("token_hash") or "").strip().lower()
+        if not re.fullmatch(r"[a-f0-9]{64}", token_hash):
+            continue
+        if str(record.get("status") or "active").lower() != "active":
+            continue
+        records[token_hash] = record
+
+    _API_KEY_STORE_CACHE["mtime"] = mtime
+    _API_KEY_STORE_CACHE["records"] = records
+    return records
+
+
+def _api_key_record_for_token(token: str | None) -> dict | None:
+    if not token:
+        return None
+    return _api_key_store_records().get(_api_key_hash(token))
+
+
+def _api_key_claims(record: dict) -> dict:
+    plan = str(record.get("plan") or "free").lower()
+    scopes = record.get("scopes")
+    if not isinstance(scopes, list):
+        scopes = ["map:view", "search:basic", "layers:basic"]
+        if plan in {"beta", "enterprise", "partner"}:
+            scopes += ["feature:read", "measure", "export:map", "export:cadastre"]
+    return {
+        "sub": record.get("user_id"),
+        "name": record.get("project_name"),
+        "plan": "api_beta" if plan == "beta" else plan,
+        "integration": "api_key",
+        "scopes": scopes,
+        "allowed_origins": record.get("allowed_origins") if isinstance(record.get("allowed_origins"), list) else [],
+        "monthly_limit": record.get("monthly_limit"),
+    }
+
+
+def _api_usage_month() -> str:
+    return time.strftime("%Y-%m", time.gmtime())
+
+
+def _record_api_key_usage(record: dict) -> None:
+    token_hash = str(record.get("token_hash") or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{64}", token_hash):
+        return
+    month = _api_usage_month()
+    try:
+        API_USAGE_DB.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(API_USAGE_DB, timeout=1.5) as con:
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS api_usage (
+                    token_hash TEXT NOT NULL,
+                    month TEXT NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY (token_hash, month)
+                )
+                """
+            )
+            con.execute(
+                """
+                INSERT INTO api_usage (token_hash, month, count, updated_at)
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(token_hash, month)
+                DO UPDATE SET count = count + 1, updated_at = excluded.updated_at
+                """,
+                (token_hash, month, int(time.time())),
+            )
+    except sqlite3.Error:
+        return
+
+
+def _api_key_usage_count(record: dict) -> int:
+    token_hash = str(record.get("token_hash") or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{64}", token_hash) or not API_USAGE_DB.exists():
+        return 0
+    try:
+        with sqlite3.connect(API_USAGE_DB, timeout=1.5) as con:
+            row = con.execute(
+                "SELECT count FROM api_usage WHERE token_hash = ? AND month = ?",
+                (token_hash, _api_usage_month()),
+            ).fetchone()
+            return int(row[0]) if row else 0
+    except sqlite3.Error:
+        return 0
+
+
+def _check_and_record_api_key_usage(record: dict) -> None:
+    monthly_limit = int(record.get("monthly_limit") or 0)
+    if monthly_limit > 0 and _api_key_usage_count(record) >= monthly_limit:
+        raise HTTPException(status_code=429, detail="monthly API request limit exceeded")
+    _record_api_key_usage(record)
+
+
+def _sanitize_api_key_record(record: dict) -> dict | None:
+    token_hash = str(record.get("token_hash") or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{64}", token_hash):
+        return None
+    plan = str(record.get("plan") or "free").strip().lower()
+    if plan not in {"free", "beta", "enterprise", "partner"}:
+        plan = "free"
+    status = str(record.get("status") or "active").strip().lower()
+    if status not in {"active", "disabled"}:
+        status = "disabled"
+    scopes = record.get("scopes")
+    if not isinstance(scopes, list):
+        scopes = []
+    allowed_origins = record.get("allowed_origins")
+    if not isinstance(allowed_origins, list):
+        allowed_origins = []
+    monthly_limit = record.get("monthly_limit")
+    try:
+        monthly_limit = int(monthly_limit or (100000 if plan != "free" else 1000))
+    except (TypeError, ValueError):
+        monthly_limit = 100000 if plan != "free" else 1000
+    return {
+        "token_hash": token_hash,
+        "token_preview": str(record.get("token_preview") or "")[:80],
+        "status": status,
+        "plan": plan,
+        "user_id": str(record.get("user_id") or "")[:100],
+        "project_name": str(record.get("project_name") or "OpenKataster API")[:255],
+        "allowed_origins": [str(origin).strip() for origin in allowed_origins if str(origin).strip()][:50],
+        "scopes": [str(scope).strip() for scope in scopes if str(scope).strip()][:50],
+        "monthly_limit": max(0, monthly_limit),
+    }
 
 
 
@@ -616,6 +781,12 @@ def api_access_context(
     provided = token or api_key or x_api_key or _extract_bearer(authorization)
     if provided and provided in _configured_pro_tokens():
         return ApiAccessContext(mode="pro", token=provided)
+    api_key_record = _api_key_record_for_token(provided)
+    if api_key_record:
+        _check_and_record_api_key_usage(api_key_record)
+        claims = _api_key_claims(api_key_record)
+        mode = "partner" if _claims_grant_pro_access(claims) else "free"
+        return ApiAccessContext(mode=mode, token=provided, claims=claims)
     if provided:
         claims = _verify_viewer_token(provided)
         if claims and _claims_grant_pro_access(claims):
@@ -14366,6 +14537,68 @@ def api_v1_session(
     access: Annotated[ApiAccessContext, Depends(api_access_context)],
 ) -> dict:
     return _public_access_claims(access)
+
+
+@app.post("/api/v1/admin/api-keys/sync")
+def api_v1_admin_api_keys_sync(
+    payload: Annotated[dict, Body()],
+    _: Annotated[str, Depends(require_admin_key)],
+) -> dict:
+    raw_keys = payload.get("keys") if isinstance(payload, dict) else []
+    if not isinstance(raw_keys, list):
+        raise HTTPException(status_code=422, detail="keys must be a list")
+    if len(raw_keys) > 10000:
+        raise HTTPException(status_code=422, detail="too many keys")
+
+    keys: list[dict] = []
+    for raw in raw_keys:
+        if not isinstance(raw, dict):
+            continue
+        sanitized = _sanitize_api_key_record(raw)
+        if sanitized:
+            keys.append(sanitized)
+
+    output = {
+        "version": 1,
+        "updated_at": int(time.time()),
+        "keys": keys,
+    }
+    API_KEY_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = API_KEY_STORE_PATH.with_name(f".{API_KEY_STORE_PATH.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(json.dumps(output, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    tmp_path.replace(API_KEY_STORE_PATH)
+    _API_KEY_STORE_CACHE["mtime"] = None
+    _API_KEY_STORE_CACHE["records"] = {}
+    return {"ok": True, "count": len(keys)}
+
+
+@app.post("/api/v1/admin/api-keys/usage")
+def api_v1_admin_api_keys_usage(
+    payload: Annotated[dict, Body()],
+    _: Annotated[str, Depends(require_admin_key)],
+) -> dict:
+    raw_hashes = payload.get("token_hashes") if isinstance(payload, dict) else []
+    if not isinstance(raw_hashes, list):
+        raise HTTPException(status_code=422, detail="token_hashes must be a list")
+    month = str(payload.get("month") or _api_usage_month())
+    usages: dict[str, int] = {}
+    for raw_hash in raw_hashes[:1000]:
+        token_hash = str(raw_hash or "").strip().lower()
+        if not re.fullmatch(r"[a-f0-9]{64}", token_hash):
+            continue
+        try:
+            if not API_USAGE_DB.exists():
+                usages[token_hash] = 0
+                continue
+            with sqlite3.connect(API_USAGE_DB, timeout=1.5) as con:
+                row = con.execute(
+                    "SELECT count FROM api_usage WHERE token_hash = ? AND month = ?",
+                    (token_hash, month),
+                ).fetchone()
+                usages[token_hash] = int(row[0]) if row else 0
+        except sqlite3.Error:
+            usages[token_hash] = 0
+    return {"month": month, "usages": usages}
 
 
 @app.post("/api/v1/integrations/onoffice/selection-payload")

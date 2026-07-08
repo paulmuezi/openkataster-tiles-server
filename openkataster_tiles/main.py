@@ -7118,18 +7118,21 @@ def search_sqlite_direct_lookup(
     for mode, street, house, city in geocoder_direct_candidates(query, allow_plain_street=allow_plain_street):
         street_norm = normalize_geocoder_text(street)
         city_norm = normalize_geocoder_text(city)
-        city_norms = normalize_geocoder_text_variants(city)
+        city_norms = list(normalize_geocoder_text_variants(city))
         if not street_norm:
             continue
         for entry in entries:
             try:
                 con = search_db_connection(entry.path)
+                entry_city_norms = list(city_norms)
+                if _include_empty_city_for_state_place(entry.name, city, None) and "" not in entry_city_norms:
+                    entry_city_norms.append("")
                 if mode == "address":
                     house_norm = normalize_geocoder_house(house)
                     if not house_norm:
                         continue
-                    city_clause = f" AND city_norm IN ({','.join('?' for _ in city_norms)})" if city_norms else ""
-                    city_params = list(city_norms)
+                    city_clause = f" AND city_norm IN ({','.join('?' for _ in entry_city_norms)})" if entry_city_norms else ""
+                    city_params = list(entry_city_norms)
                     rows = con.execute(
                         f"""
                         SELECT *
@@ -7153,18 +7156,18 @@ def search_sqlite_direct_lookup(
                         if len(results) >= int(limit):
                             return results[:int(limit)]
                 elif mode == "street":
-                    if not city_norms:
+                    if not entry_city_norms:
                         continue
                     rows = con.execute(
                         f"""
                         SELECT *
                         FROM street_lookup
                         WHERE street_norm = ?
-                          AND city_norm IN ({','.join('?' for _ in city_norms)})
+                          AND city_norm IN ({','.join('?' for _ in entry_city_norms)})
                         ORDER BY address_count DESC, label
                         LIMIT ?
                         """,
-                        [street_norm, *city_norms, int(limit)],
+                        [street_norm, *entry_city_norms, int(limit)],
                     ).fetchall()
                     for row in rows:
                         result = search_street_result_from_row(row, entry.name, street, city)
@@ -7184,11 +7187,181 @@ def _norm_prefix_bounds(prefix: str) -> tuple[str, str]:
     return prefix, f"{prefix}\uffff"
 
 
+def _place_fts_query(query: str) -> str:
+    tokens = re.findall(r"[0-9A-Za-zÄÖÜäöüß]+", query or "")
+    return " ".join(f"{token}*" for token in tokens[:4] if token)
+
+
+def _place_entry_from_row(row: sqlite3.Row) -> dict:
+    bbox = None
+    if row["min_lon"] is not None and row["min_lat"] is not None and row["max_lon"] is not None and row["max_lat"] is not None:
+        bbox = [float(row["min_lon"]), float(row["min_lat"]), float(row["max_lon"]), float(row["max_lat"])]
+    place_class = row["class"] or "Ort"
+    return {
+        "state": normalize_state_key(row["state_key"]),
+        "state_label": row["state_name"],
+        "name": row["name"],
+        "name_norm": normalize_place_search_text(row["name"]),
+        "name_ascii": compact_place_search_text(row["name"]),
+        "name_plain": plain_place_search_text(row["name"]),
+        "name_plain_ascii": compact_plain_place_search_text(row["name"]),
+        "class": place_class,
+        "municipality": row["municipality"] or "",
+        "municipality_plain": plain_place_search_text(row["municipality"] or ""),
+        "district": row["district"] or "",
+        "ags": row["ags"] or "",
+        "center": [float(row["lon"]), float(row["lat"])],
+        "bbox": bbox,
+        "zoom": 11.0 if place_class == "Gemeinde" else (13.0 if place_class == "Ortsteil" else 12.5),
+        "priority": -10 if place_class == "Gemeinde" else (0 if place_class == "Ort" else 5),
+        "population": int(row["population"] or 0),
+    }
+
+
+def _rank_place_suggestion(entry: dict, query_norm: str, query_ascii: str, query_plain: str, query_plain_ascii: str) -> tuple[tuple[int, int, int, str], dict] | None:
+    entry_state = normalize_state_key(str(entry.get("state") or ""))
+    name = str(entry.get("name") or "").strip()
+    if not name:
+        return None
+    name_norm = str(entry.get("name_norm") or normalize_place_search_text(name))
+    name_ascii = str(entry.get("name_ascii") or compact_place_search_text(name))
+    name_plain = str(entry.get("name_plain") or plain_place_search_text(name))
+    name_plain_ascii = str(entry.get("name_plain_ascii") or compact_plain_place_search_text(name))
+    name_base = re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
+    name_base_norm = normalize_place_search_text(name_base)
+    name_base_plain = plain_place_search_text(name_base)
+    name_base_ascii = compact_place_search_text(name_base)
+    if not (
+        name_norm.startswith(query_norm)
+        or name_ascii.startswith(query_ascii)
+        or name_plain.startswith(query_plain)
+        or name_plain_ascii.startswith(query_plain_ascii)
+        or name_base_norm.startswith(query_norm)
+        or name_base_ascii.startswith(query_ascii)
+    ):
+        municipality_norm = normalize_place_search_text(str(entry.get("municipality") or ""))
+        municipality_ascii = compact_place_search_text(str(entry.get("municipality") or ""))
+        if not (municipality_norm.startswith(query_norm) or municipality_ascii.startswith(query_ascii)):
+            return None
+    municipality = str(entry.get("municipality") or "").strip()
+    state_label = str(entry.get("state_label") or state_display_name(entry_state))
+    subtitle_parts = []
+    if municipality and normalize_place_search_text(municipality) != name_norm:
+        subtitle_parts.append(municipality)
+    if state_label:
+        subtitle_parts.append(state_label)
+    place_class = str(entry.get("class") or "Ort")
+    class_rank = 0 if place_class == "Gemeinde" else (1 if place_class == "Ortsteil" else 2)
+    if query_norm in {name_norm, name_base_norm} or query_plain in {name_plain, name_base_plain}:
+        match_rank = 0
+    elif name_norm.startswith(f"{query_norm} ") or name_plain.startswith(f"{query_plain} "):
+        match_rank = 1
+    elif name_norm.startswith(query_norm) or name_plain.startswith(query_plain):
+        match_rank = 2
+    elif name_ascii.startswith(query_ascii) or name_plain_ascii.startswith(query_plain_ascii):
+        match_rank = 3
+    else:
+        match_rank = 4
+    payload = {
+        "label": name,
+        "value": name,
+        "subtitle": ", ".join(subtitle_parts),
+        "state": entry_state,
+        "state_label": state_label,
+        "class": place_class,
+        "municipality": municipality,
+    }
+    population_rank = -int(entry.get("population") or 0)
+    return (match_rank, population_rank, class_rank, name.casefold()), payload
+
+
+def _search_place_suggestions_from_sqlite(query: str, allowed_states: set[str], limit: int) -> dict | None:
+    fts_query = _place_fts_query(query)
+    if not fts_query or not GN250_PLACES_DB.exists():
+        return None
+    query_norm = normalize_place_search_text(query)
+    query_ascii = compact_place_search_text(query)
+    query_plain = plain_place_search_text(query)
+    query_plain_ascii = compact_plain_place_search_text(query)
+    state_values = sorted(normalize_state_key(state) for state in allowed_states if normalize_state_key(state))
+    state_clause = ""
+    params: list[object] = [fts_query]
+    if state_values:
+        state_clause = f" AND p.state_key IN ({','.join('?' for _ in state_values)})"
+        params.extend(state_values)
+    params.append(max(int(limit) * 80, 400))
+    try:
+        con = sqlite3.connect(f"file:{GN250_PLACES_DB}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            columns = """
+              p.id,
+              p.state_key, p.state_name, p.class, p.name, p.municipality, p.district, p.ags,
+              p.lon, p.lat, p.min_lon, p.min_lat, p.max_lon, p.max_lat, p.population
+            """
+            prefix_params: list[object] = [f"{query}%", f"{query}%"]
+            if state_values:
+                prefix_params.extend(state_values)
+            prefix_params.append(max(int(limit) * 80, 400))
+            rows = list(con.execute(
+                f"""
+                SELECT {columns}
+                FROM places p
+                WHERE (p.name LIKE ? COLLATE NOCASE OR p.municipality LIKE ? COLLATE NOCASE)
+                {state_clause}
+                LIMIT ?
+                """,
+                prefix_params,
+            ).fetchall())
+            seen_row_ids = {int(row["id"]) for row in rows if row["id"] is not None}
+            fts_rows = con.execute(
+                f"""
+                SELECT {columns}
+                FROM place_search ps
+                JOIN places p ON p.id = ps.place_id
+                WHERE place_search MATCH ?
+                {state_clause}
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            rows.extend(row for row in fts_rows if row["id"] is None or int(row["id"]) not in seen_row_ids)
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    if not rows:
+        return {"results": []}
+    seen: set[tuple[str, str, str]] = set()
+    candidates: list[tuple[tuple[int, int, int, str], dict]] = []
+    for row in rows:
+        entry = _place_entry_from_row(row)
+        entry_state = normalize_state_key(str(entry.get("state") or ""))
+        if entry_state not in allowed_states:
+            continue
+        name_norm = str(entry.get("name_norm") or normalize_place_search_text(str(entry.get("name") or "")))
+        municipality = str(entry.get("municipality") or "").strip()
+        key = (entry_state, name_norm, normalize_place_search_text(municipality))
+        if key in seen:
+            continue
+        ranked = _rank_place_suggestion(entry, query_norm, query_ascii, query_plain, query_plain_ascii)
+        if not ranked:
+            continue
+        seen.add(key)
+        candidates.append(ranked)
+    candidates.sort(key=lambda item: item[0])
+    return {"results": [payload for _, payload in candidates[:int(limit)]]}
+
+
+@lru_cache(maxsize=4096)
 def search_place_suggestions_for_dataset(dataset: str, q: str, limit: int, state: str = "") -> dict:
     query = (q or "").strip()
     if len(query) < 2:
         return {"results": []}
     allowed_states = search_suggestion_states_for_dataset(dataset, state)
+    indexed_results = _search_place_suggestions_from_sqlite(query, allowed_states, limit)
+    if indexed_results is not None:
+        return indexed_results
     query_norm = normalize_place_search_text(query)
     query_ascii = compact_place_search_text(query)
     query_plain = plain_place_search_text(query)
@@ -7252,9 +7425,23 @@ def search_place_suggestions_for_dataset(dataset: str, q: str, limit: int, state
             "municipality": municipality,
         }
         population_rank = -int(entry.get("population") or 0)
-        candidates.append(((match_rank, class_rank, population_rank, name.casefold()), payload))
+        candidates.append(((match_rank, population_rank, class_rank, name.casefold()), payload))
     candidates.sort(key=lambda item: item[0])
     return {"results": [payload for _, payload in candidates[:int(limit)]]}
+
+
+def _include_empty_city_for_state_place(entry_state: str, place: str, place_context: dict | None) -> bool:
+    entry_state = normalize_state_key(entry_state)
+    if not entry_state:
+        return False
+    if normalize_state_key(place) == entry_state:
+        return True
+    if place_context and normalize_state_key(str(place_context.get("state") or "")) == entry_state:
+        municipality = normalize_geocoder_text(str(place_context.get("municipality") or ""))
+        name = normalize_geocoder_text(str(place_context.get("name") or ""))
+        if municipality and name and municipality == name:
+            return True
+    return False
 
 
 @lru_cache(maxsize=2048)
@@ -7279,8 +7466,8 @@ def search_street_suggestions_cached(
         value = value.strip()
         if value and normalize_geocoder_text(value) not in {normalize_geocoder_text(item) for item in city_names}:
             city_names.append(value)
-    street_norm = normalize_geocoder_text(query)
-    if not city_names or not street_norm:
+    street_norms = _unique_norm_values(query) if "_unique_norm_values" in globals() else list(normalize_geocoder_text_variants(query))
+    if not city_names or not street_norms:
         return tuple()
     results: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
@@ -7289,20 +7476,23 @@ def search_street_suggestions_cached(
             con = search_db_connection(entry.path)
             rows = []
             for city_name in city_names:
-                city_norms = normalize_geocoder_text_variants(city_name)
+                city_norms = list(normalize_geocoder_text_variants(city_name))
+                if _include_empty_city_for_state_place(entry.name, place, place_context) and "" not in city_norms:
+                    city_norms.append("")
                 if not city_norms:
                     continue
+                street_clauses = " OR ".join("street_norm LIKE ?" for _ in street_norms)
                 rows.extend(con.execute(
                     f"""
                     SELECT street_label, city_label, label, SUM(address_count) AS address_count
                     FROM street_lookup
                     WHERE city_norm IN ({','.join('?' for _ in city_norms)})
-                      AND street_norm LIKE ?
+                      AND ({street_clauses})
                     GROUP BY street_norm, city_norm
                     ORDER BY address_count DESC, street_label
                     LIMIT ?
                     """,
-                    [*city_norms, f"{street_norm}%", int(limit) * 2],
+                    [*city_norms, *(f"{street_norm}%" for street_norm in street_norms), int(limit) * 2],
                 ).fetchall())
         except sqlite3.Error:
             continue
@@ -7738,7 +7928,9 @@ def geocoder_direct_lookup(
         for mode, street, house, city in geocoder_direct_candidates(query):
             street_norm = normalize_geocoder_text(street)
             city_norm = normalize_geocoder_text(city)
-            city_norms = normalize_geocoder_text_variants(city)
+            city_norms = list(normalize_geocoder_text_variants(city))
+            if any(_include_empty_city_for_state_place(state, city, None) for state in states) and "" not in city_norms:
+                city_norms.append("")
             if not street_norm:
                 continue
             if mode == "address":

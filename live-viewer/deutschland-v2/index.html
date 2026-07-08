@@ -1004,6 +1004,23 @@
       pointer-events: none;
       cursor: default;
     }
+    @media (pointer: coarse) {
+      .export-selection-box {
+        pointer-events: none;
+        touch-action: pan-x pan-y pinch-zoom;
+      }
+      .export-selection-box:hover,
+      .export-selection-box.is-hover,
+      .export-selection-box.is-dragging {
+        border-color: var(--ok-accent);
+        background: rgba(248, 109, 20, 0.10);
+        box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.08);
+      }
+      .export-center-marker {
+        pointer-events: none;
+        touch-action: pan-x pan-y pinch-zoom;
+      }
+    }
     .maplibregl-canvas-container[data-export-crop="true"] canvas {
       cursor: crosshair !important;
     }

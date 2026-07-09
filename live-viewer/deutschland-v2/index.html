@@ -723,6 +723,11 @@
     }
     body.ok-planer-mode {
       --ok-planer-sidebar-width: 320px;
+      --ok-selection-dock-normal-height: min(30vh, 260px);
+      --ok-selection-dock-expanded-height: min(54vh, 500px);
+      --ok-selection-dock-compact-height: 44px;
+      flex-direction: column;
+      overflow-x: hidden;
     }
     body.ok-planer-mode #exportPanel {
       position: fixed;
@@ -746,13 +751,16 @@
       transform: translateX(100%);
       opacity: 0;
       pointer-events: none;
-      transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease;
+      visibility: hidden;
+      transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, visibility 0s linear 320ms;
       will-change: transform, opacity;
     }
     body.ok-planer-mode.ok-export-sidebar-open #exportPanel {
       transform: translateX(0);
       opacity: 1;
       pointer-events: auto;
+      visibility: visible;
+      transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, visibility 0s linear 0s;
     }
     body.ok-planer-mode #exportPanel[hidden] {
       display: flex;
@@ -2582,37 +2590,41 @@
     }
 
     body.ok-planer-mode #selectionPanel {
-      position: fixed;
-      top: auto;
-      left: 72px;
-      right: 56px;
-      bottom: 42px;
+      position: relative;
+      inset: auto;
+      flex: 0 0 var(--ok-selection-dock-normal-height);
       width: auto;
-      max-height: min(34vh, 286px);
+      height: var(--ok-selection-dock-normal-height);
+      max-height: var(--ok-selection-dock-normal-height);
       min-height: 44px;
+      margin: 0 12px 12px;
       overflow: hidden;
       border: 1px solid rgba(17, 23, 19, 0.10);
-      border-radius: 10px;
-      background: rgba(255, 255, 255, 0.96);
-      box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
-      backdrop-filter: blur(8px);
-      z-index: 28;
-      transition: max-height 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: none;
+      backdrop-filter: none;
+      z-index: 2;
+      transition: flex-basis 240ms cubic-bezier(0.22, 1, 0.36, 1), height 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms ease;
     }
     body.ok-planer-mode #selectionPanel[hidden] {
       display: none;
     }
     body.ok-planer-mode #selectionPanel[data-dock-state="compact"] {
-      max-height: 44px;
+      flex-basis: var(--ok-selection-dock-compact-height);
+      height: var(--ok-selection-dock-compact-height);
+      max-height: var(--ok-selection-dock-compact-height);
     }
     body.ok-planer-mode #selectionPanel[data-dock-state="compact"] .selection-body {
       display: none;
     }
     body.ok-planer-mode #selectionPanel[data-dock-state="expanded"] {
-      max-height: min(58vh, 520px);
+      flex-basis: var(--ok-selection-dock-expanded-height);
+      height: var(--ok-selection-dock-expanded-height);
+      max-height: var(--ok-selection-dock-expanded-height);
     }
     body.ok-planer-mode.ok-export-sidebar-open #selectionPanel {
-      right: calc(var(--ok-planer-sidebar-width) + 16px);
+      margin-right: calc(var(--ok-planer-sidebar-width) + 12px);
     }
     body.ok-planer-mode .selection-head {
       min-height: 44px;
@@ -2658,52 +2670,53 @@
       font-size: 17px;
     }
     body.ok-planer-mode .selection-body {
-      max-height: calc(min(34vh, 286px) - 44px);
+      max-height: calc(var(--ok-selection-dock-normal-height) - 44px);
       padding: 8px;
       overflow: auto;
     }
     body.ok-planer-mode #selectionPanel[data-dock-state="expanded"] .selection-body {
-      max-height: calc(min(58vh, 520px) - 44px);
+      max-height: calc(var(--ok-selection-dock-expanded-height) - 44px);
     }
     body.ok-planer-mode.ok-selection-dock-visible #sourcePanel {
       z-index: 36;
     }
     body.ok-planer-mode.ok-selection-dock-visible #zoomReadout {
-      bottom: calc(min(34vh, 286px) + 56px);
       z-index: 36;
     }
     body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-compact #zoomReadout {
-      bottom: 96px;
+      bottom: 52px;
     }
     body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-expanded #zoomReadout {
-      bottom: calc(min(58vh, 520px) + 56px);
+      bottom: 52px;
     }
     @media (max-width: 760px) {
+      body.ok-planer-mode {
+        --ok-selection-dock-normal-height: min(38vh, 340px);
+        --ok-selection-dock-expanded-height: min(60vh, 540px);
+      }
       body.ok-planer-mode #selectionPanel,
       body.ok-planer-mode.ok-export-sidebar-open #selectionPanel {
-        left: 8px;
-        right: 8px;
-        bottom: 40px;
-        max-height: min(42vh, 360px);
+        margin: 0 8px 8px;
+        max-height: var(--ok-selection-dock-normal-height);
         border-radius: 12px;
       }
       body.ok-planer-mode #selectionPanel[data-dock-state="expanded"] {
-        max-height: min(64vh, 560px);
+        max-height: var(--ok-selection-dock-expanded-height);
       }
       body.ok-planer-mode .selection-body {
-        max-height: calc(min(42vh, 360px) - 44px);
+        max-height: calc(var(--ok-selection-dock-normal-height) - 44px);
       }
       body.ok-planer-mode #selectionPanel[data-dock-state="expanded"] .selection-body {
-        max-height: calc(min(64vh, 560px) - 44px);
+        max-height: calc(var(--ok-selection-dock-expanded-height) - 44px);
       }
       body.ok-planer-mode.ok-selection-dock-visible #zoomReadout {
-        bottom: calc(min(42vh, 360px) + 52px);
+        bottom: 52px;
       }
       body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-compact #zoomReadout {
-        bottom: 92px;
+        bottom: 52px;
       }
       body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-expanded #zoomReadout {
-        bottom: calc(min(64vh, 560px) + 52px);
+        bottom: 52px;
       }
     }
 
@@ -2934,7 +2947,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-planer-overlay1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-planer-dock2"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

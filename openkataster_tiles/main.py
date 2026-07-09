@@ -7439,10 +7439,7 @@ def _rank_place_suggestion(entry: dict, query_norm: str, query_ascii: str, query
         or name_base_norm.startswith(query_norm)
         or name_base_ascii.startswith(query_ascii)
     ):
-        municipality_norm = normalize_place_search_text(str(entry.get("municipality") or ""))
-        municipality_ascii = compact_place_search_text(str(entry.get("municipality") or ""))
-        if not (municipality_norm.startswith(query_norm) or municipality_ascii.startswith(query_ascii)):
-            return None
+        return None
     municipality = str(entry.get("municipality") or "").strip()
     state_label = str(entry.get("state_label") or state_display_name(entry_state))
     subtitle_parts = []
@@ -7504,7 +7501,7 @@ def _search_place_suggestions_from_sqlite(query: str, allowed_states: set[str], 
               p.state_key, p.state_name, p.class, p.name, p.municipality, p.district, p.ags,
               p.lon, p.lat, p.min_lon, p.min_lat, p.max_lon, p.max_lat, p.population
             """
-            prefix_params: list[object] = [f"{query}%", f"{query}%"]
+            prefix_params: list[object] = [f"{query}%"]
             if state_values:
                 prefix_params.extend(state_values)
             prefix_params.append(max(int(limit) * 80, 400))
@@ -7512,7 +7509,7 @@ def _search_place_suggestions_from_sqlite(query: str, allowed_states: set[str], 
                 f"""
                 SELECT {columns}
                 FROM places p
-                WHERE (p.name LIKE ? COLLATE NOCASE OR p.municipality LIKE ? COLLATE NOCASE)
+                WHERE p.name LIKE ? COLLATE NOCASE
                 {state_clause}
                 LIMIT ?
                 """,

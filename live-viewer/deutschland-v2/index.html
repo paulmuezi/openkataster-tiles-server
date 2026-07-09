@@ -982,17 +982,17 @@
       pointer-events: auto;
       border: 2px solid var(--ok-accent);
       background: rgba(248, 109, 20, 0.10);
-      box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.08);
+      box-shadow: none;
       z-index: 12;
       cursor: grab;
       touch-action: none;
-      transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+      transition: background-color 120ms ease, border-color 120ms ease;
     }
     .export-selection-box:hover,
     .export-selection-box.is-hover {
       border-color: #ea580c;
       background: rgba(248, 109, 20, 0.16);
-      box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.10);
+      box-shadow: none;
     }
     .export-selection-box.is-dragging {
       cursor: grabbing;
@@ -1014,7 +1014,7 @@
       .export-selection-box.is-dragging {
         border-color: var(--ok-accent);
         background: rgba(248, 109, 20, 0.10);
-        box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.08);
+        box-shadow: none;
       }
       .export-center-marker {
         pointer-events: none;
@@ -2557,7 +2557,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-search-suggestions1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-export-frame1"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

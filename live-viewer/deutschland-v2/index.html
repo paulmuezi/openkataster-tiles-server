@@ -2756,6 +2756,30 @@
       }
     }
 
+
+    /* Final planner dock overrides: keep these late so generic/mobile export styles cannot win. */
+    @media (min-width: 761px) {
+      body.ok-planer-mode #exportPanel {
+        right: 0 !important;
+        left: auto !important;
+        width: min(var(--ok-planer-sidebar-width), 100vw) !important;
+        transform: translate3d(100%, 0, 0) !important;
+        opacity: 0 !important;
+        visibility: hidden !important;
+      }
+      body.ok-planer-mode.ok-export-sidebar-open #exportPanel {
+        transform: translate3d(0, 0, 0) !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+      }
+      body.ok-planer-mode.ok-export-sidebar-open #layerSwitch {
+        right: calc(var(--ok-planer-sidebar-width) + 12px) !important;
+      }
+      body.ok-planer-mode.ok-export-sidebar-open #sourcePanel {
+        right: var(--ok-planer-sidebar-width) !important;
+      }
+    }
+
   </style>
 </head>
 <body>
@@ -2983,7 +3007,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-planer-dock11"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-planer-dock12"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

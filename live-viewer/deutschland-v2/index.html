@@ -2889,6 +2889,122 @@
       bottom: calc(var(--ok-selection-dock-expanded-height) + 24px) !important;
     }
 
+
+    /* Selection table as a real bottom dock in planner mode. */
+    body.ok-planer-mode {
+      --ok-selection-dock-height: var(--ok-selection-dock-normal-height);
+    }
+    body.ok-planer-mode #mapShell {
+      transition:
+        flex-basis 420ms cubic-bezier(0.22, 1, 0.36, 1),
+        height 420ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    body.ok-planer-mode.ok-selection-dock-visible #mapShell {
+      flex: 0 0 calc(100% - var(--ok-selection-dock-height));
+      height: calc(100% - var(--ok-selection-dock-height));
+    }
+    body.ok-planer-mode #selectionPanel,
+    body.ok-planer-mode.ok-export-sidebar-open #selectionPanel,
+    body.ok-planer-mode #selectionPanel.is-open,
+    body.ok-planer-mode.ok-export-sidebar-open #selectionPanel.is-open {
+      position: fixed !important;
+      left: 0 !important;
+      right: 0 !important;
+      bottom: 0 !important;
+      inset: auto 0 0 0 !important;
+      width: auto !important;
+      height: var(--ok-selection-dock-height) !important;
+      max-height: var(--ok-selection-dock-height) !important;
+      min-height: 122px !important;
+      border-right: 0 !important;
+      border-bottom: 0 !important;
+      border-left: 0 !important;
+      border-radius: 0 !important;
+      box-shadow: 0 -10px 32px rgba(15, 23, 42, 0.08) !important;
+      transform: translate3d(0, 100%, 0) !important;
+      transition:
+        transform 420ms cubic-bezier(0.22, 1, 0.36, 1),
+        height 180ms ease,
+        max-height 180ms ease,
+        right 420ms cubic-bezier(0.22, 1, 0.36, 1),
+        opacity 180ms ease,
+        visibility 0s linear 420ms !important;
+    }
+    body.ok-planer-mode #selectionPanel.is-open,
+    body.ok-planer-mode.ok-selection-dock-visible #selectionPanel.is-open {
+      transform: translate3d(0, 0, 0) !important;
+      opacity: 1 !important;
+      visibility: visible !important;
+      pointer-events: auto !important;
+      transition:
+        transform 420ms cubic-bezier(0.22, 1, 0.36, 1),
+        height 180ms ease,
+        max-height 180ms ease,
+        right 420ms cubic-bezier(0.22, 1, 0.36, 1),
+        opacity 180ms ease,
+        visibility 0s linear 0s !important;
+    }
+    @media (min-width: 761px) {
+      body.ok-planer-mode.ok-export-sidebar-open #selectionPanel,
+      body.ok-planer-mode.ok-export-sidebar-open #selectionPanel.is-open {
+        right: var(--ok-planer-sidebar-width) !important;
+      }
+    }
+    body.ok-planer-mode .selection-dock-actions #selectionDockToggle,
+    body.ok-planer-mode .selection-dock-actions #selectionDockExpand {
+      display: none !important;
+    }
+    body.ok-planer-mode .selection-resize-handle {
+      position: absolute;
+      top: -7px;
+      left: 0;
+      right: 0;
+      height: 14px;
+      cursor: ns-resize;
+      z-index: 2;
+      touch-action: none;
+    }
+    body.ok-planer-mode .selection-resize-handle::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 5px;
+      width: 44px;
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(17, 24, 39, 0.18);
+      transform: translateX(-50%);
+      transition: background 160ms ease, width 160ms ease;
+    }
+    body.ok-planer-mode .selection-resize-handle:hover::after,
+    body.ok-planer-mode.ok-selection-resizing .selection-resize-handle::after {
+      width: 56px;
+      background: rgba(248, 109, 20, 0.48);
+    }
+    body.ok-planer-mode .selection-head {
+      cursor: default;
+    }
+    body.ok-planer-mode .selection-body,
+    body.ok-planer-mode #selectionPanel[data-dock-state="expanded"] .selection-body,
+    body.ok-planer-mode #selectionPanel[data-dock-state="compact"] .selection-body {
+      display: block !important;
+      max-height: calc(var(--ok-selection-dock-height) - 44px) !important;
+      padding: 8px !important;
+      overflow: auto !important;
+    }
+    body.ok-planer-mode.ok-selection-dock-visible #sourcePanel,
+    body.ok-planer-mode.ok-selection-dock-visible #zoomReadout,
+    body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-compact #sourcePanel,
+    body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-compact #zoomReadout,
+    body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-expanded #sourcePanel,
+    body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-expanded #zoomReadout {
+      bottom: calc(var(--ok-selection-dock-height) + 12px) !important;
+    }
+    body.ok-planer-mode.ok-selection-resizing #selectionPanel,
+    body.ok-planer-mode.ok-selection-resizing #mapShell {
+      transition: none !important;
+    }
+
   </style>
 </head>
 <body>
@@ -3102,6 +3218,7 @@
     <div id="statusRight"></div>
   </section>
   <section id="selectionPanel" class="floating" data-dock-state="normal" hidden>
+    <div id="selectionResizeHandle" class="selection-resize-handle" aria-hidden="true"></div>
     <div class="selection-head">
       <span>Auswahl</span>
       <div class="selection-dock-actions">
@@ -3116,7 +3233,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-planer-dock17"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-selection-dock1"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

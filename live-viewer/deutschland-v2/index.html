@@ -1229,6 +1229,64 @@
     .clear-field.has-value .field-clear {
       display: inline-flex;
     }
+    .field-suggestions {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 4px);
+      z-index: 140;
+      max-height: 210px;
+      overflow: auto;
+      border: 1px solid var(--ok-line);
+      border-radius: 4px;
+      background: rgba(255,255,255,.98);
+      box-shadow: 0 8px 22px rgba(15,23,42,.10);
+    }
+    .field-suggestions[hidden] {
+      display: none;
+    }
+    .field-suggestion {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      width: 100%;
+      min-height: 34px;
+      padding: 8px 10px;
+      border: 0;
+      border-bottom: 1px solid rgba(30,42,60,.08);
+      border-radius: 0;
+      background: transparent;
+      color: var(--ok-text);
+      font: inherit;
+      font-size: 13px;
+      line-height: 18px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .field-suggestion:last-child {
+      border-bottom: 0;
+    }
+    .field-suggestion:hover,
+    .field-suggestion:focus-visible {
+      outline: none;
+      background: #fff4ec;
+    }
+    .field-suggestion-main {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .field-suggestion-meta {
+      flex: 0 1 auto;
+      max-width: 46%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #64748b;
+      font-size: 12px;
+    }
     .cadastre-search-actions {
       margin-top: 8px;
     }
@@ -2412,10 +2470,12 @@
         <div class="clear-field">
           <input id="addressPlace" data-native-autocomplete="off" name="ok_address_place_20260630" type="text" autocomplete="off" aria-autocomplete="none" placeholder="Ort erforderlich" aria-label="Ort erforderlich" required autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-form-type="other">
           <button class="field-clear" type="button" aria-label="Ort löschen" data-clear-target="addressPlace">&times;</button>
+          <div id="addressPlaceSuggestions" class="field-suggestions" hidden></div>
         </div>
         <div class="clear-field">
           <input id="addressStreet" data-native-autocomplete="off" name="ok_address_street_20260630" type="text" autocomplete="off" aria-autocomplete="none" placeholder="Straße optional" aria-label="Straße optional" autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-form-type="other">
           <button class="field-clear" type="button" aria-label="Straße löschen" data-clear-target="addressStreet">&times;</button>
+          <div id="addressStreetSuggestions" class="field-suggestions" hidden></div>
         </div>
         <div class="clear-field">
           <input id="addressHouseNumber" data-native-autocomplete="off" name="ok_address_house_20260630" type="text" autocomplete="off" aria-autocomplete="none" placeholder="Hausnummer optional" aria-label="Hausnummer optional" autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-form-type="other">
@@ -2497,7 +2557,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-search-results2"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-search-suggestions1"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

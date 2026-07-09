@@ -2825,6 +2825,28 @@
       body.ok-planer-mode.ok-export-sidebar-open #sourcePanel {
         right: var(--ok-planer-sidebar-width) !important;
       }
+
+      body.ok-planer-mode #exportPanel.is-open {
+        transform: translate3d(0, 0, 0) !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+      }
+      body.ok-planer-mode #selectionPanel.is-open {
+        transform: translate3d(0, 0, 0) !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+      }
+      body.ok-planer-mode.ok-export-sidebar-open #selectionPanel.is-open {
+        right: calc(var(--ok-planer-sidebar-width) + 12px) !important;
+      }
+      body.ok-planer-mode.ok-selection-dock-visible #sourcePanel {
+        bottom: calc(var(--ok-selection-dock-normal-height) + 24px) !important;
+      }
+      body.ok-planer-mode.ok-selection-dock-visible #zoomReadout {
+        bottom: calc(var(--ok-selection-dock-normal-height) + 24px) !important;
+      }
     }
 
   </style>

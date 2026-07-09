@@ -710,6 +710,29 @@
     #exportPanel[hidden] {
       display: none;
     }
+    body.ok-planer-mode {
+      --ok-planer-sidebar-width: min(372px, 34vw);
+    }
+    body.ok-planer-mode #exportPanel {
+      position: relative;
+      inset: auto;
+      flex: 0 0 var(--ok-planer-sidebar-width);
+      width: var(--ok-planer-sidebar-width);
+      height: 100%;
+      max-height: none;
+      order: 20;
+      z-index: 26;
+      border-left: 1px solid rgba(31, 41, 55, 0.10);
+      box-shadow: none;
+      backdrop-filter: none;
+    }
+    body.ok-planer-mode.ok-export-sidebar-open #mapShell {
+      flex: 1 1 calc(100% - var(--ok-planer-sidebar-width));
+    }
+    body.ok-planer-mode.ok-export-sidebar-open #layerSwitch,
+    body.ok-planer-mode.ok-export-sidebar-open #sourcePanel {
+      right: calc(var(--ok-planer-sidebar-width) + 12px);
+    }
     .export-title {
       display: flex;
       align-items: center;
@@ -2368,7 +2391,16 @@
       animation: ok-spin 0.75s linear infinite;
     }
     @keyframes ok-spin { to { transform: rotate(360deg); } }
-    body.ok-free-mode:not(.ok-onoffice-mode) #exportPanel { display: none !important; }
+    body.ok-free-mode:not(.ok-onoffice-mode):not(.ok-planer-mode) #exportPanel { display: none !important; }
+    @media (max-width: 760px) {
+      body.ok-planer-mode.ok-export-sidebar-open #mapShell {
+        flex-basis: auto;
+      }
+      body.ok-planer-mode.ok-export-sidebar-open #layerSwitch,
+      body.ok-planer-mode.ok-export-sidebar-open #sourcePanel {
+        right: 8px;
+      }
+    }
 
   </style>
 </head>
@@ -2557,7 +2589,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-export-center1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-iframe-sidebar1"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

@@ -3084,6 +3084,16 @@
       }
     }
 
+
+    /* Last-resort planner export open state: must win over desktop and mobile hidden transforms. */
+    body.ok-planer-mode.ok-export-sidebar-open #exportPanel.is-open,
+    body.ok-planer-mode #exportPanel.is-open {
+      transform: translate3d(0, 0, 0) !important;
+      opacity: 1 !important;
+      visibility: visible !important;
+      pointer-events: auto !important;
+    }
+
   </style>
 </head>
 <body>
@@ -3312,7 +3322,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-mobile-export-sheet1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-mobile-export-sheet5"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

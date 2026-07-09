@@ -3005,6 +3005,19 @@
       transition: none !important;
     }
 
+
+    /* Keep the map camera visually steady while the selection table slides up. */
+    body.ok-planer-mode.ok-selection-dock-visible #mapShell,
+    body.ok-planer-mode.ok-selection-resizing #mapShell {
+      flex: 1 1 auto !important;
+      height: 100% !important;
+      transition: none !important;
+    }
+    body.ok-planer-mode #selectionPanel,
+    body.ok-planer-mode #selectionPanel.is-open {
+      will-change: transform, height;
+    }
+
   </style>
 </head>
 <body>
@@ -3233,7 +3246,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-selection-dock1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-selection-dock2"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

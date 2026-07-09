@@ -112,6 +112,17 @@
       font: inherit;
       letter-spacing: 0;
     }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
     #mapShell {
       position: relative;
       flex: 1 1 auto;
@@ -711,7 +722,7 @@
       display: none;
     }
     body.ok-planer-mode {
-      --ok-planer-sidebar-width: min(372px, 34vw);
+      --ok-planer-sidebar-width: 320px;
     }
     body.ok-planer-mode #exportPanel {
       position: relative;
@@ -723,6 +734,12 @@
       order: 20;
       z-index: 26;
       border-left: 1px solid rgba(31, 41, 55, 0.10);
+      padding: 0;
+      gap: 0;
+      display: flex;
+      flex-direction: column;
+      align-content: stretch;
+      background: #fff;
       box-shadow: none;
       backdrop-filter: none;
     }
@@ -732,6 +749,86 @@
     body.ok-planer-mode.ok-export-sidebar-open #layerSwitch,
     body.ok-planer-mode.ok-export-sidebar-open #sourcePanel {
       right: calc(var(--ok-planer-sidebar-width) + 12px);
+    }
+    body.ok-planer-mode #exportPanel .export-title {
+      flex: 0 0 auto;
+      padding: 16px 16px 10px;
+      border-bottom: 1px solid rgba(31, 41, 55, 0.08);
+    }
+    body.ok-planer-mode #exportPanel .export-sidebar-content {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 16px;
+      display: grid;
+      align-content: start;
+      gap: 24px;
+    }
+    body.ok-planer-mode #exportPanel .export-mobile-row,
+    body.ok-planer-mode #exportPanel .export-summary {
+      display: none;
+    }
+    body.ok-planer-mode #exportPanel .export-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+    }
+    body.ok-planer-mode #exportPanel .export-field {
+      gap: 6px;
+      color: var(--ok-ui-muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    body.ok-planer-mode #exportPanel .export-field select {
+      height: 40px;
+      border: 2px solid #ede9e3;
+      border-radius: 8px;
+      padding: 0 12px;
+      color: #1f2937;
+      background: #fff;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    body.ok-planer-mode #exportPanel .export-field select:focus {
+      border-color: var(--ok-accent);
+      outline: none;
+    }
+    body.ok-planer-mode #exportPanel .export-center-row {
+      display: block;
+      color: var(--ok-ui-muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    body.ok-planer-mode #exportPanel .export-sidebar-section-title {
+      color: var(--ok-ui-muted);
+      font-size: 12px;
+      font-weight: 600;
+      margin: 0 0 6px;
+    }
+    body.ok-planer-mode #exportPanel .export-sidebar-footer {
+      flex: 0 0 auto;
+      padding: 16px;
+      border-top: 1px solid rgba(31, 41, 55, 0.10);
+      background: rgba(255, 255, 255, 0.92);
+    }
+    body.ok-planer-mode #exportPanel .export-actions {
+      display: grid;
+      gap: 8px;
+    }
+    body.ok-planer-mode #exportPanel .export-actions button[data-primary="true"] {
+      min-height: 48px;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    body.ok-planer-mode #exportPanel .export-status {
+      min-height: 16px;
+      margin-top: 8px;
+      text-align: center;
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--ok-ui-muted);
     }
     .export-title {
       display: flex;
@@ -2430,56 +2527,70 @@
       <span id="exportPanelTitle">Karte exportieren</span>
       <button id="exportClose" class="export-close" type="button" aria-label="Export schließen">×</button>
     </div>
-    <div class="export-mobile-row">
-      <div id="exportSummary" class="export-summary">A4 · 1:1000 · PDF</div>
-      <button id="exportSettingsToggle" class="export-settings-toggle" type="button" aria-label="Export-Einstellungen" aria-expanded="false">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.1 2.1 0 0 1-2.97 2.97l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.1 1.66V21.4a2.1 2.1 0 0 1-4.2 0v-.15a1.8 1.8 0 0 0-1.1-1.66 1.8 1.8 0 0 0-1.98.36l-.04.04a2.1 2.1 0 0 1-2.97-2.97l.04-.04A1.8 1.8 0 0 0 3.6 15a1.8 1.8 0 0 0-1.66-1.1H1.8a2.1 2.1 0 0 1 0-4.2h.15A1.8 1.8 0 0 0 3.6 8a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.1 2.1 0 0 1 2.97-2.97l.04.04A1.8 1.8 0 0 0 8.2 3.4a1.8 1.8 0 0 0 1.1-1.66V1.6a2.1 2.1 0 0 1 4.2 0v.15a1.8 1.8 0 0 0 1.1 1.66 1.8 1.8 0 0 0 1.98-.36l.04-.04a2.1 2.1 0 0 1 2.97 2.97l-.04.04A1.8 1.8 0 0 0 19.4 8a1.8 1.8 0 0 0 1.66 1.1h.15a2.1 2.1 0 0 1 0 4.2h-.15A1.8 1.8 0 0 0 19.4 15z"/></svg>
-      </button>
-    </div>
-    <div class="export-grid">
-      <label class="export-field">Format
-        <select id="exportPaper">
-          <option value="a4">A4</option>
-          <option value="a3">A3</option>
-        </select>
-      </label>
-      <label class="export-field">Maßstab
-        <select id="exportScale">
-          <option value="500">1:500</option>
-          <option value="1000" selected>1:1000</option>
-          <option value="2000">1:2000</option>
-        </select>
-      </label>
-      <label class="export-field">Ausrichtung
-        <select id="exportOrientation">
-          <option value="portrait" selected>Hochformat</option>
-          <option value="landscape">Querformat</option>
-        </select>
-      </label>
-      <label class="export-field">Datei
-        <select id="exportOutput">
-          <option value="png">PNG</option>
-          <option value="pdf">PDF</option>
-        </select>
-      </label>
-    </div>
-    <div class="export-center-row">
-      <div id="exportCenterSummary" class="export-center-summary">Mitte: aktuelle Kartenmitte</div>
-    </div>
-    <div class="export-actions">
-      <button id="exportDownloadPng" type="button" data-primary="true">Export herunterladen</button>
-    </div>
-    <div id="onofficeReview" class="onoffice-review" hidden>
-      <div class="onoffice-review-title">Ausgewählte Immobilie</div>
-      <div id="onofficeReviewList" class="onoffice-review-list">
-        <div class="onoffice-review-item">Noch kein Gebäude oder Flurstück ausgewählt.</div>
+    <div class="export-sidebar-content">
+      <div class="export-mobile-row" hidden>
+        <div id="exportSummary" class="export-summary">A4 · 1:1000 · PDF</div>
+        <button id="exportSettingsToggle" class="export-settings-toggle" type="button" aria-label="Export-Einstellungen" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.1 2.1 0 0 1-2.97 2.97l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.1 1.66V21.4a2.1 2.1 0 0 1-4.2 0v-.15a1.8 1.8 0 0 0-1.1-1.66 1.8 1.8 0 0 0-1.98.36l-.04.04a2.1 2.1 0 0 1-2.97-2.97l.04-.04A1.8 1.8 0 0 0 3.6 15a1.8 1.8 0 0 0-1.66-1.1H1.8a2.1 2.1 0 0 1 0-4.2h.15A1.8 1.8 0 0 0 3.6 8a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.1 2.1 0 0 1 2.97-2.97l.04.04A1.8 1.8 0 0 0 8.2 3.4a1.8 1.8 0 0 0 1.1-1.66V1.6a2.1 2.1 0 0 1 4.2 0v.15a1.8 1.8 0 0 0 1.1 1.66 1.8 1.8 0 0 0 1.98-.36l.04-.04a2.1 2.1 0 0 1 2.97 2.97l-.04.04A1.8 1.8 0 0 0 19.4 8a1.8 1.8 0 0 0 1.66 1.1h.15a2.1 2.1 0 0 1 0 4.2h-.15A1.8 1.8 0 0 0 19.4 15z"/></svg>
+        </button>
+      </div>
+      <div>
+        <p class="export-sidebar-section-title">Papierformat</p>
+        <label class="export-field"><span class="sr-only">Papierformat</span>
+          <select id="exportPaper">
+            <option value="a4">DIN A4</option>
+            <option value="a3">DIN A3</option>
+          </select>
+        </label>
+      </div>
+      <div>
+        <p class="export-sidebar-section-title">Ausrichtung</p>
+        <label class="export-field"><span class="sr-only">Ausrichtung</span>
+          <select id="exportOrientation">
+            <option value="portrait" selected>Hochformat</option>
+            <option value="landscape">Querformat</option>
+          </select>
+        </label>
+      </div>
+      <div>
+        <p class="export-sidebar-section-title">Maßstab</p>
+        <label class="export-field"><span class="sr-only">Maßstab</span>
+          <select id="exportScale">
+            <option value="500">1:500</option>
+            <option value="1000" selected>1:1000</option>
+            <option value="2000">1:2000</option>
+          </select>
+        </label>
+      </div>
+      <div>
+        <p class="export-sidebar-section-title">Export</p>
+        <label class="export-field"><span class="sr-only">Datei</span>
+          <select id="exportOutput">
+            <option value="pdf" selected>PDF</option>
+            <option value="png">PNG</option>
+          </select>
+        </label>
+      </div>
+      <div class="export-center-row">
+        <div id="exportCenterSummary" class="export-center-summary">Mitte: aktuelle Kartenmitte</div>
+      </div>
+      <div id="onofficeReview" class="onoffice-review" hidden>
+        <div class="onoffice-review-title">Ausgewählte Immobilie</div>
+        <div id="onofficeReviewList" class="onoffice-review-list">
+          <div class="onoffice-review-item">Noch kein Gebäude oder Flurstück ausgewählt.</div>
+        </div>
+      </div>
+      <div id="onofficeActions" class="onoffice-actions" hidden>
+        <button id="onofficeExportPdf" type="button" data-primary="true">PDF für onOffice</button>
+        <button id="onofficeTransferSelection" type="button">Informationen übernehmen</button>
       </div>
     </div>
-    <div id="onofficeActions" class="onoffice-actions" hidden>
-      <button id="onofficeExportPdf" type="button" data-primary="true">PDF für onOffice</button>
-      <button id="onofficeTransferSelection" type="button">Informationen übernehmen</button>
+    <div class="export-sidebar-footer">
+      <div class="export-actions">
+        <button id="exportDownloadPng" type="button" data-primary="true">Datei herunterladen</button>
+      </div>
+      <div id="exportStatus" class="export-status"></div>
     </div>
-    <div id="exportStatus" class="export-status"></div>
   </section>
   <section id="searchPanel" class="floating">
     <div class="panel-label">Suche</div>
@@ -2589,7 +2700,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-iframe-sidebar1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-planer-sidebar2"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

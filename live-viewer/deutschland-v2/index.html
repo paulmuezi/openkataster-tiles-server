@@ -725,14 +725,15 @@
       --ok-planer-sidebar-width: 320px;
     }
     body.ok-planer-mode #exportPanel {
-      position: relative;
-      inset: auto;
-      flex: 0 0 var(--ok-planer-sidebar-width);
-      width: var(--ok-planer-sidebar-width);
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      left: auto;
+      width: min(var(--ok-planer-sidebar-width), 100vw);
       height: 100%;
       max-height: none;
-      order: 20;
-      z-index: 26;
+      z-index: 34;
       border-left: 1px solid rgba(31, 41, 55, 0.10);
       padding: 0;
       gap: 0;
@@ -742,16 +743,19 @@
       background: #fff;
       box-shadow: none;
       backdrop-filter: none;
+      transform: translateX(100%);
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease;
+      will-change: transform, opacity;
+    }
+    body.ok-planer-mode.ok-export-sidebar-open #exportPanel {
+      transform: translateX(0);
+      opacity: 1;
+      pointer-events: auto;
     }
     body.ok-planer-mode #exportPanel[hidden] {
-      display: none;
-    }
-    body.ok-planer-mode.ok-export-sidebar-open #mapShell {
-      flex: 1 1 calc(100% - var(--ok-planer-sidebar-width));
-    }
-    body.ok-planer-mode.ok-export-sidebar-open #layerSwitch,
-    body.ok-planer-mode.ok-export-sidebar-open #sourcePanel {
-      right: calc(var(--ok-planer-sidebar-width) + 12px);
+      display: flex;
     }
     body.ok-planer-mode #exportPanel .export-title {
       display: none;
@@ -768,6 +772,31 @@
     body.ok-planer-mode #exportPanel .export-mobile-row,
     body.ok-planer-mode #exportPanel .export-summary {
       display: none;
+    }
+    body.ok-planer-mode #exportPanel .export-address-card {
+      display: grid;
+      gap: 6px;
+      padding: 12px;
+      border: 1px solid rgba(237, 233, 227, 0.9);
+      border-radius: 8px;
+      background: rgba(247, 245, 241, 0.8);
+    }
+    body.ok-planer-mode #exportPanel .export-address-card[hidden] {
+      display: none;
+    }
+    body.ok-planer-mode #exportPanel .export-address-card h4 {
+      margin: 0;
+      color: var(--ok-ui-muted);
+      font-size: 10px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+    body.ok-planer-mode #exportPanel .export-address-card p {
+      margin: 0;
+      color: #1f2937;
+      font-size: 12px;
+      line-height: 1.25;
+      font-weight: 500;
     }
     body.ok-planer-mode #exportPanel .export-grid {
       display: grid;
@@ -848,7 +877,7 @@
       display: none;
     }
     body.ok-planer-mode #exportPanel .export-center-row {
-      display: block;
+      display: none;
       color: var(--ok-ui-muted);
       font-size: 12px;
       line-height: 1.35;
@@ -2552,6 +2581,132 @@
       }
     }
 
+    body.ok-planer-mode #selectionPanel {
+      position: fixed;
+      top: auto;
+      left: 72px;
+      right: 56px;
+      bottom: 42px;
+      width: auto;
+      max-height: min(34vh, 286px);
+      min-height: 44px;
+      overflow: hidden;
+      border: 1px solid rgba(17, 23, 19, 0.10);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
+      backdrop-filter: blur(8px);
+      z-index: 28;
+      transition: max-height 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    body.ok-planer-mode #selectionPanel[hidden] {
+      display: none;
+    }
+    body.ok-planer-mode #selectionPanel[data-dock-state="compact"] {
+      max-height: 44px;
+    }
+    body.ok-planer-mode #selectionPanel[data-dock-state="compact"] .selection-body {
+      display: none;
+    }
+    body.ok-planer-mode #selectionPanel[data-dock-state="expanded"] {
+      max-height: min(58vh, 520px);
+    }
+    body.ok-planer-mode.ok-export-sidebar-open #selectionPanel {
+      right: calc(var(--ok-planer-sidebar-width) + 16px);
+    }
+    body.ok-planer-mode .selection-head {
+      min-height: 44px;
+      padding: 8px 10px 8px 12px;
+      border-bottom: 1px solid var(--ok-line);
+      background: rgba(255, 255, 255, 0.92);
+    }
+    body.ok-planer-mode #selectionPanel[data-dock-state="compact"] .selection-head {
+      border-bottom: 0;
+    }
+    .selection-dock-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+    }
+    .selection-dock-button {
+      width: 26px;
+      height: 26px;
+      border: 1px solid var(--ok-border);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ok-muted);
+      display: inline-grid;
+      place-items: center;
+      cursor: pointer;
+      font: 500 15px/1 var(--ok-font-ui);
+    }
+    .selection-dock-button:hover,
+    .selection-close:hover {
+      color: var(--ok-accent);
+      border-color: rgba(248, 109, 20, 0.35);
+      background: #fff7ed;
+    }
+    body.ok-planer-mode .selection-close {
+      width: 26px;
+      height: 26px;
+      border: 1px solid var(--ok-border);
+      border-radius: 7px;
+      background: #fff;
+      display: inline-grid;
+      place-items: center;
+      font-size: 17px;
+    }
+    body.ok-planer-mode .selection-body {
+      max-height: calc(min(34vh, 286px) - 44px);
+      padding: 8px;
+      overflow: auto;
+    }
+    body.ok-planer-mode #selectionPanel[data-dock-state="expanded"] .selection-body {
+      max-height: calc(min(58vh, 520px) - 44px);
+    }
+    body.ok-planer-mode.ok-selection-dock-visible #sourcePanel {
+      z-index: 36;
+    }
+    body.ok-planer-mode.ok-selection-dock-visible #zoomReadout {
+      bottom: calc(min(34vh, 286px) + 56px);
+      z-index: 36;
+    }
+    body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-compact #zoomReadout {
+      bottom: 96px;
+    }
+    body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-expanded #zoomReadout {
+      bottom: calc(min(58vh, 520px) + 56px);
+    }
+    @media (max-width: 760px) {
+      body.ok-planer-mode #selectionPanel,
+      body.ok-planer-mode.ok-export-sidebar-open #selectionPanel {
+        left: 8px;
+        right: 8px;
+        bottom: 40px;
+        max-height: min(42vh, 360px);
+        border-radius: 12px;
+      }
+      body.ok-planer-mode #selectionPanel[data-dock-state="expanded"] {
+        max-height: min(64vh, 560px);
+      }
+      body.ok-planer-mode .selection-body {
+        max-height: calc(min(42vh, 360px) - 44px);
+      }
+      body.ok-planer-mode #selectionPanel[data-dock-state="expanded"] .selection-body {
+        max-height: calc(min(64vh, 560px) - 44px);
+      }
+      body.ok-planer-mode.ok-selection-dock-visible #zoomReadout {
+        bottom: calc(min(42vh, 360px) + 52px);
+      }
+      body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-compact #zoomReadout {
+        bottom: 92px;
+      }
+      body.ok-planer-mode.ok-selection-dock-visible.ok-selection-dock-expanded #zoomReadout {
+        bottom: calc(min(64vh, 560px) + 52px);
+      }
+    }
+
   </style>
 </head>
 <body>
@@ -2584,6 +2739,10 @@
       <div class="export-mobile-row" hidden>
         <div id="exportSummary" class="export-summary">A4 · 1:1000 · PDF</div>
         <button id="exportSettingsToggle" class="export-settings-toggle" type="button" aria-label="Export-Einstellungen" aria-expanded="false">Einstellungen</button>
+      </div>
+      <div id="exportAddressCard" class="export-address-card" hidden>
+        <h4>Adresse</h4>
+        <p id="exportAddressValue"></p>
       </div>
       <div class="export-control-block">
         <p class="export-sidebar-section-title">Papierformat</p>
@@ -2760,15 +2919,22 @@
     <div id="statusCenter"></div>
     <div id="statusRight"></div>
   </section>
-  <section id="selectionPanel" class="floating" hidden>
-    <div class="selection-head"> <span>Auswahl</span> <button id="selectionClose" class="selection-close" aria-label="Auswahl schließen">&times;</button></div>
+  <section id="selectionPanel" class="floating" data-dock-state="normal" hidden>
+    <div class="selection-head">
+      <span>Auswahl</span>
+      <div class="selection-dock-actions">
+        <button id="selectionDockToggle" class="selection-dock-button" type="button" aria-label="Auswahl einklappen" title="Einklappen">−</button>
+        <button id="selectionDockExpand" class="selection-dock-button" type="button" aria-label="Auswahl vergrößern" title="Vergrößern">⌃</button>
+        <button id="selectionClose" class="selection-close" aria-label="Auswahl schließen">&times;</button>
+      </div>
+    </div>
     <div id="selectionBody" class="selection-body"></div>
   </section>
   <div id="status" class="floating" data-ready="false">Karte wird geladen …</div>
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-planer-sidebar4"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-planer-overlay1"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

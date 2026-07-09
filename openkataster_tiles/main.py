@@ -7742,14 +7742,40 @@ def search_street_suggestions_for_dataset(dataset: str, place: str, q: str, limi
     if not is_virtual_germany_dataset(dataset):
         get_dataset(dataset)
     states = search_suggestion_states_for_dataset(dataset, state)
-    results = search_street_suggestions_cached(
+    results = list(search_street_suggestions_cached(
         place,
         q,
         int(limit),
         tuple(sorted(state for state in states if state)),
         search_db_signature_for_states(states),
-    )
-    return {"results": list(results)}
+    ))
+    if not results and place.strip():
+        seen: set[tuple[str, str, str]] = set()
+        for item in results:
+            seen.add((str(item.get("state") or ""), normalize_geocoder_text(str(item.get("label") or "")), normalize_geocoder_text(str(item.get("subtitle") or ""))))
+        place_suggestions = search_place_suggestions_for_dataset(dataset, place, 8, state=state).get("results") or []
+        for suggestion in place_suggestions:
+            suggested_place = str(suggestion.get("value") or suggestion.get("label") or "").strip()
+            suggested_state = normalize_state_key(str(suggestion.get("state") or ""))
+            if not suggested_place or normalize_place_search_text(suggested_place) == normalize_place_search_text(place):
+                continue
+            candidate_states = {suggested_state} if suggested_state in states else states
+            candidate_results = search_street_suggestions_cached(
+                suggested_place,
+                q,
+                int(limit),
+                tuple(sorted(state for state in candidate_states if state)),
+                search_db_signature_for_states(candidate_states),
+            )
+            for candidate in candidate_results:
+                key = (str(candidate.get("state") or ""), normalize_geocoder_text(str(candidate.get("label") or "")), normalize_geocoder_text(str(candidate.get("subtitle") or "")))
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append(dict(candidate))
+                if len(results) >= int(limit):
+                    return {"results": results[:int(limit)]}
+    return {"results": results[:int(limit)]}
 
 
 @lru_cache(maxsize=2048)
@@ -14207,13 +14233,33 @@ def api_v1_search_address(
         if len(inferred_states) == 1:
             state_key = inferred_states[0]
     mode = "street" if street.strip() and not house_number.strip() else "address"
-    return cached_search_features_for_dataset(
+    result = cached_search_features_for_dataset(
         VIRTUAL_GERMANY_DATASET,
         query,
         limit,
         mode,
         state=state_key,
     )
+    if result.get("results") or q.strip() or not place.strip() or not street.strip():
+        return result
+    place_suggestions = search_place_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, place, 8, state=state).get("results") or []
+    for suggestion in place_suggestions:
+        suggested_place = str(suggestion.get("value") or suggestion.get("label") or "").strip()
+        suggested_state = normalize_state_key(str(suggestion.get("state") or ""))
+        if not suggested_place or normalize_place_search_text(suggested_place) == normalize_place_search_text(place):
+            continue
+        fallback_query = _api_v1_search_query_from_parts(street, house_number, suggested_place)
+        fallback = cached_search_features_for_dataset(
+            VIRTUAL_GERMANY_DATASET,
+            fallback_query,
+            limit,
+            mode,
+            state=suggested_state or state_key,
+        )
+        if fallback.get("results"):
+            fallback["query"] = query
+            return fallback
+    return result
 
 
 @app.api_route("/api/v1/search/parcel", methods=["GET", "HEAD"])

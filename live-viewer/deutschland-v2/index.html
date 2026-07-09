@@ -794,6 +794,58 @@
       border-color: var(--ok-accent);
       outline: none;
     }
+    body.ok-planer-mode #exportPanel .export-control-block {
+      display: grid;
+      gap: 6px;
+    }
+    body.ok-planer-mode #exportPanel .export-format-list {
+      display: grid;
+      gap: 10px;
+      padding-top: 2px;
+    }
+    body.ok-planer-mode #exportPanel .export-check-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #1f2937;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      user-select: none;
+    }
+    body.ok-planer-mode #exportPanel .export-check-row input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    body.ok-planer-mode #exportPanel .export-check-box {
+      position: relative;
+      width: 20px;
+      height: 20px;
+      flex: 0 0 20px;
+      border: 2px solid #ede9e3;
+      border-radius: 6px;
+      background: #fff;
+      transition: background-color 120ms ease, border-color 120ms ease;
+    }
+    body.ok-planer-mode #exportPanel .export-check-row input:checked + .export-check-box {
+      border-color: var(--ok-accent);
+      background: var(--ok-accent);
+    }
+    body.ok-planer-mode #exportPanel .export-check-row input:checked + .export-check-box::after {
+      content: "";
+      position: absolute;
+      left: 5px;
+      top: 2px;
+      width: 6px;
+      height: 10px;
+      border: solid #fff;
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+    body.ok-planer-mode #exportPanel .export-output-field {
+      display: none;
+    }
     body.ok-planer-mode #exportPanel .export-center-row {
       display: block;
       color: var(--ok-ui-muted);
@@ -2524,17 +2576,15 @@
   <section id="measureTracker" class="floating" hidden aria-live="polite"></section>
   <section id="exportPanel" class="floating" hidden>
     <div class="export-title">
-      <span id="exportPanelTitle">Karte exportieren</span>
+      <span id="exportPanelTitle">Export</span>
       <button id="exportClose" class="export-close" type="button" aria-label="Export schließen">×</button>
     </div>
     <div class="export-sidebar-content">
       <div class="export-mobile-row" hidden>
         <div id="exportSummary" class="export-summary">A4 · 1:1000 · PDF</div>
-        <button id="exportSettingsToggle" class="export-settings-toggle" type="button" aria-label="Export-Einstellungen" aria-expanded="false">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.1 2.1 0 0 1-2.97 2.97l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.1 1.66V21.4a2.1 2.1 0 0 1-4.2 0v-.15a1.8 1.8 0 0 0-1.1-1.66 1.8 1.8 0 0 0-1.98.36l-.04.04a2.1 2.1 0 0 1-2.97-2.97l.04-.04A1.8 1.8 0 0 0 3.6 15a1.8 1.8 0 0 0-1.66-1.1H1.8a2.1 2.1 0 0 1 0-4.2h.15A1.8 1.8 0 0 0 3.6 8a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.1 2.1 0 0 1 2.97-2.97l.04.04A1.8 1.8 0 0 0 8.2 3.4a1.8 1.8 0 0 0 1.1-1.66V1.6a2.1 2.1 0 0 1 4.2 0v.15a1.8 1.8 0 0 0 1.1 1.66 1.8 1.8 0 0 0 1.98-.36l.04-.04a2.1 2.1 0 0 1 2.97 2.97l-.04.04A1.8 1.8 0 0 0 19.4 8a1.8 1.8 0 0 0 1.66 1.1h.15a2.1 2.1 0 0 1 0 4.2h-.15A1.8 1.8 0 0 0 19.4 15z"/></svg>
-        </button>
+        <button id="exportSettingsToggle" class="export-settings-toggle" type="button" aria-label="Export-Einstellungen" aria-expanded="false">Einstellungen</button>
       </div>
-      <div>
+      <div class="export-control-block">
         <p class="export-sidebar-section-title">Papierformat</p>
         <label class="export-field"><span class="sr-only">Papierformat</span>
           <select id="exportPaper">
@@ -2543,7 +2593,7 @@
           </select>
         </label>
       </div>
-      <div>
+      <div class="export-control-block">
         <p class="export-sidebar-section-title">Ausrichtung</p>
         <label class="export-field"><span class="sr-only">Ausrichtung</span>
           <select id="exportOrientation">
@@ -2552,7 +2602,7 @@
           </select>
         </label>
       </div>
-      <div>
+      <div class="export-control-block">
         <p class="export-sidebar-section-title">Maßstab</p>
         <label class="export-field"><span class="sr-only">Maßstab</span>
           <select id="exportScale">
@@ -2562,10 +2612,27 @@
           </select>
         </label>
       </div>
-      <div>
-        <p class="export-sidebar-section-title">Export</p>
-        <label class="export-field"><span class="sr-only">Datei</span>
-          <select id="exportOutput">
+      <div class="export-control-block">
+        <p class="export-sidebar-section-title">Dateiformate</p>
+        <div class="export-format-list">
+          <label class="export-check-row">
+            <input id="exportPdfSelected" type="checkbox" checked>
+            <span class="export-check-box" aria-hidden="true"></span>
+            <span>Liegenschaftskarte (.pdf)</span>
+          </label>
+          <label class="export-check-row">
+            <input id="exportDxfSelected" type="checkbox">
+            <span class="export-check-box" aria-hidden="true"></span>
+            <span>Lageplan (.dxf)</span>
+          </label>
+          <label class="export-check-row">
+            <input id="exportAerialSelected" type="checkbox">
+            <span class="export-check-box" aria-hidden="true"></span>
+            <span>Luftbild (.jpg)</span>
+          </label>
+        </div>
+        <label class="export-field export-output-field"><span class="sr-only">Datei</span>
+          <select id="exportOutput" aria-label="Export-Dateityp">
             <option value="pdf" selected>PDF</option>
             <option value="png">PNG</option>
           </select>
@@ -2587,7 +2654,7 @@
     </div>
     <div class="export-sidebar-footer">
       <div class="export-actions">
-        <button id="exportDownloadPng" type="button" data-primary="true">Datei herunterladen</button>
+        <button id="exportDownloadPng" type="button" data-primary="true">Vorschau</button>
       </div>
       <div id="exportStatus" class="export-status"></div>
     </div>
@@ -2700,7 +2767,7 @@
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-planer-sidebar2"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-planer-sidebar3"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

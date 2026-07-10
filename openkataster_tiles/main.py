@@ -14201,6 +14201,7 @@ async def api_v1_tilejson(state: str, request: Request):
             {"id": "lines", "fields": {}},
             {"id": "parcel_outline_lines", "fields": {}},
             {"id": "parcel_number_lines", "fields": {}},
+            {"id": "boundary_point_geometries", "fields": {}},
             {"id": "point_symbol_fills_simplified", "fields": {}},
             {"id": "labels", "fields": {}},
         ],

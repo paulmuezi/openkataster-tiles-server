@@ -1,0 +1,11 @@
+*
+!.gitignore
+!live-viewer/
+!live-viewer/deutschland-v2/
+!live-viewer/deutschland-v2/index.html
+!live-viewer/deutschland-v2/viewer.bundle.js
+!live-viewer/deutschland-v2/openkataster-logo.svg
+!live-viewer/deutschland-v2/alkis-symbol-denkmal.svg
+!live-viewer/deutschland-v2/maplibre-gl-5.14.0.css
+!live-viewer/deutschland-v2/maplibre-gl-5.14.0.js
+!live-viewer/deutschland-v2/bkg-style.json

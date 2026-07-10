@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenKataster Planer Clean</title>
+  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.css">
+  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/planer-clean.css?v=20260710-clean1">
+</head>
+<body>
+  <main id="plannerApp" class="planner-app" data-sidebar-open="false" data-table-open="false">
+    <section class="map-workspace" aria-label="Karte">
+      <div class="map-pane">
+        <div id="map"></div>
+
+        <div class="search-shell">
+          <button class="round-tool" type="button" aria-label="Suchen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.3-4.3"/><circle cx="10.5" cy="10.5" r="6.5"/></svg>
+          </button>
+        </div>
+
+        <nav class="tool-stack" aria-label="Werkzeuge">
+          <button id="selectTool" class="round-tool" type="button" aria-label="Objekte auswählen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h5M14 5h5v5M19 14v5h-5M10 19H5v-5"/><path d="m9 9 7 12 1-5 5-2z"/></svg>
+          </button>
+          <button id="measureTool" class="round-tool" type="button" aria-label="Messen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h15M4 17h15M4 7v10M7 7v3M10 7v5M13 7v3M16 7v5"/><text x="9.8" y="16" text-anchor="middle">1</text><text x="15.8" y="16" text-anchor="middle">2</text></svg>
+          </button>
+          <button id="exportTool" class="round-tool" type="button" aria-label="Karte exportieren">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>
+          </button>
+        </nav>
+
+        <button class="layer-button round-tool" type="button" aria-label="Layer">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></svg>
+        </button>
+
+        <div id="zoomBadge" class="zoom-badge">Zoom --</div>
+        <button class="source-pill" type="button" aria-label="Quellen">i</button>
+        <div class="brand-mark"><img src="/viewer-assets/deutschland-v2/openkataster-logo.svg" alt=""><span>OpenKataster</span></div>
+      </div>
+
+      <section id="selectionDock" class="selection-dock" aria-label="Auswahl" hidden>
+        <div class="dock-resize" aria-hidden="true"></div>
+        <header class="dock-head">
+          <div>
+            <strong>Auswahl</strong>
+            <span id="selectionCount">Keine Objekte ausgewählt</span>
+          </div>
+          <button id="closeSelection" type="button" aria-label="Auswahl schließen">×</button>
+        </header>
+        <div class="dock-table-wrap">
+          <table>
+            <thead><tr><th>Typ</th><th>Adresse</th><th>Gemarkung</th><th>Flur</th><th>Flurstück</th></tr></thead>
+            <tbody id="selectionRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <aside id="exportSidebar" class="export-sidebar" aria-label="Export" hidden>
+      <header>
+        <strong>Karte exportieren</strong>
+        <button id="closeExport" type="button" aria-label="Export schließen">×</button>
+      </header>
+      <div class="field"><label>Papierformat</label><select><option>DIN A4</option><option>Quadratisch</option></select></div>
+      <div class="field"><label>Ausrichtung</label><select><option>Querformat</option><option>Hochformat</option></select></div>
+      <div class="field"><label>Maßstab</label><select><option>1:1000</option><option>1:500</option><option>1:2000</option></select></div>
+      <fieldset>
+        <legend>Dateiformate</legend>
+        <label><input type="checkbox" checked> Liegenschaftskarte (.pdf)</label>
+        <label><input type="checkbox"> Lageplan (.dxf)</label>
+        <label><input type="checkbox"> Luftbild (.jpg)</label>
+      </fieldset>
+      <button class="primary-action" type="button">Vorschau</button>
+    </aside>
+  </main>
+
+  <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js"></script>
+  <script src="/viewer-assets/deutschland-v2/planer-clean.js?v=20260710-clean1"></script>
+</body>
+</html>

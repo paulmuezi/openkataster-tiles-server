@@ -24,7 +24,12 @@ const defaultLayers = {
 const store = createStore({
   activeTool: 'none',
   access: { ready: false, pro: false, session: null },
-  layout: { sidebarOpen: !!saved?.layout?.sidebarOpen, tableOpen: !!saved?.layout?.tableOpen, tableHeight: Number(saved?.layout?.tableHeight || 260) },
+  layout: {
+    sidebarOpen: !!saved?.layout?.sidebarOpen,
+    tableOpen: !!saved?.layout?.tableOpen,
+    tableHeight: Number(saved?.layout?.tableHeight || 260),
+    mobileExportSettings: !!saved?.layout?.mobileExportSettings
+  },
   layers: { ...defaultLayers, ...(saved?.layers || {}) },
   selection: { parcels: saved?.selection?.parcels || [], buildings: saved?.selection?.buildings || [], loading: false },
   export: { center: saved?.export?.center || null },
@@ -36,7 +41,7 @@ const elements = Object.fromEntries([
   'exportSidebar','selectionDock','exportTool','selectTool','measureTool','selectionResize','selectionClose','selectionContent','selectionCount',
   'layerButton','layerMenu','layerZoomNote','searchButton','searchPanel','searchClose','searchMode','addressFields','parcelFields','placeInput','streetInput','houseInput','gemarkungInput','flurInput','parcelInput','placeSuggestions','streetSuggestions','searchSubmit','searchResults','searchStatus',
   'measurePanel','measureDistance','measureArea','measureUndo','measureClear','sourceButton','sourcePanel','sourceList',
-  'exportFrame','exportFrameBox','exportCenterMarker','exportPaper','exportOrientation','exportScale','exportPdf','exportDxf','exportAerial','exportSummary','exportStatus','exportPreview','exportClose',
+  'exportFrame','exportFrameBox','exportCenterMarker','exportPaper','exportOrientation','exportScale','exportPdf','exportDxf','exportAerial','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings',
   'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge'
 ].map((id) => [id, document.getElementById(id)]));
 elements.layerInputs = [...document.querySelectorAll('[data-layer]')];
@@ -54,6 +59,7 @@ elements.selectTool.addEventListener('click', () => requirePro('select'));
 elements.measureTool.addEventListener('click', () => requirePro('measure'));
 elements.exportTool.addEventListener('click', () => layout.setTool('export'));
 elements.exportClose.addEventListener('click', () => layout.setSidebar(false));
+elements.mobileExportSettings.addEventListener('click', layout.toggleMobileExportSettings);
 elements.selectionClose.addEventListener('click', selection.clear);
 elements.selectionResize.addEventListener('pointerdown', layout.beginTableResize);
 elements.noticeClose.addEventListener('click', () => store.setState({ notice: null }, 'notice'));

@@ -114,13 +114,22 @@
         <div class="field"><label for="exportScale">Maßstab</label><select id="exportScale"><option value="500">1:500</option><option value="1000" selected>1:1000</option><option value="2000">1:2000</option></select></div>
         <fieldset><legend>Dateiformate</legend><label><input id="exportPdf" type="checkbox" checked><span>Liegenschaftskarte (.pdf)</span></label><label><input id="exportDxf" type="checkbox"><span>Lageplan (.dxf)</span></label><label><input id="exportAerial" type="checkbox"><span>Luftbild (.jpg)</span></label></fieldset>
       </div>
-      <footer><div id="exportSummary" class="export-summary">A4 · 1:1000 · PDF</div><button id="exportPreview" class="primary-action" type="button">Vorschau</button><div id="exportStatus" class="export-status" aria-live="polite"></div></footer>
+      <footer>
+        <div class="export-summary-row">
+          <div id="exportSummary" class="export-summary">A4 · 1:1000 · PDF</div>
+          <button id="mobileExportSettings" class="mobile-export-settings" type="button" aria-label="Exporteinstellungen" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.12 2.12-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.04 1.56V20.3h-3v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-2.12-2.12.06-.06A1.7 1.7 0 0 0 7 15a1.7 1.7 0 0 0-1.56-1.04H5.3v-3h.14A1.7 1.7 0 0 0 7 9.92a1.7 1.7 0 0 0-.34-1.88L6.6 7.98l2.12-2.12.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 11.7 4.7v-.1h3v.1a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.12 2.12-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.56 1.04h.14v3h-.14A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+          </button>
+        </div>
+        <button id="exportPreview" class="primary-action" type="button">Vorschau</button>
+        <div id="exportStatus" class="export-status" aria-live="polite"></div>
+      </footer>
     </aside>
 
     <section id="noticePanel" class="notice-panel ui-panel" hidden><button id="noticeClose" class="icon-button" type="button" aria-label="Hinweis schließen">×</button><strong id="noticeTitle">OpenKataster Pro</strong><p id="noticeText"></p><a class="primary-action" href="/pro" target="_top">Pro buchen</a></section>
   </main>
 
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js"></script>
-  <script type="module" src="/viewer-assets/deutschland-v2/planer-v2/app.js?v=20260711-table-transition1"></script>
+  <script type="module" src="/viewer-assets/deutschland-v2/planer-v2/app.js?v=20260711-mobile-export1"></script>
 </body>
 </html>

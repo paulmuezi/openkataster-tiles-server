@@ -1,11 +1,12 @@
 export function createLayout({ app, map, store, elements }) {
-  const { exportSidebar, selectionDock, exportTool, selectTool, measureTool } = elements;
+  const { exportSidebar, selectionDock, exportTool, selectTool, measureTool, mobileExportSettings } = elements;
   let resizing = false;
 
   function render(state, reason) {
     const { layout, activeTool } = state;
     app.dataset.sidebarOpen = layout.sidebarOpen ? 'true' : 'false';
     app.dataset.tableOpen = layout.tableOpen ? 'true' : 'false';
+    app.dataset.mobileExportSettings = layout.mobileExportSettings ? 'true' : 'false';
     app.dataset.activeTool = activeTool;
     app.style.setProperty('--table-height-open', `${layout.tableHeight}px`);
     exportSidebar.setAttribute('aria-hidden', layout.sidebarOpen ? 'false' : 'true');
@@ -13,6 +14,7 @@ export function createLayout({ app, map, store, elements }) {
     exportTool.classList.toggle('is-active', activeTool === 'export');
     selectTool.classList.toggle('is-active', activeTool === 'select');
     measureTool.classList.toggle('is-active', activeTool === 'measure');
+    mobileExportSettings.setAttribute('aria-pressed', layout.mobileExportSettings ? 'true' : 'false');
     if (reason !== 'boot') requestAnimationFrame(() => map.resize());
   }
 
@@ -23,14 +25,25 @@ export function createLayout({ app, map, store, elements }) {
       activeTool: nextTool,
       layout: {
         ...current.layout,
-        sidebarOpen: nextTool === 'export' ? true : current.layout.sidebarOpen && activeTool !== 'export'
+        sidebarOpen: nextTool === 'export' ? true : current.layout.sidebarOpen && activeTool !== 'export',
+        mobileExportSettings: nextTool === 'export' ? current.layout.mobileExportSettings : false
       }
     }, 'tool');
   }
 
   function setSidebar(open) {
     const state = store.getState();
-    store.setState({ activeTool: open ? 'export' : state.activeTool === 'export' ? 'none' : state.activeTool, layout: { ...state.layout, sidebarOpen: open } }, 'sidebar');
+    store.setState({
+      activeTool: open ? 'export' : state.activeTool === 'export' ? 'none' : state.activeTool,
+      layout: { ...state.layout, sidebarOpen: open, mobileExportSettings: open ? state.layout.mobileExportSettings : false }
+    }, 'sidebar');
+  }
+
+  function toggleMobileExportSettings() {
+    const state = store.getState();
+    store.setState({
+      layout: { ...state.layout, mobileExportSettings: !state.layout.mobileExportSettings }
+    }, 'sidebar');
   }
 
   function setTable(open) {
@@ -69,5 +82,5 @@ export function createLayout({ app, map, store, elements }) {
 
   store.subscribe(render);
   render(store.getState(), 'boot');
-  return { setTool, setSidebar, setTable, beginTableResize };
+  return { setTool, setSidebar, setTable, toggleMobileExportSettings, beginTableResize };
 }

@@ -6,6 +6,16 @@
   <title>OpenKataster Karte - deutschland v2</title>
   <script>
     (function(){
+      try {
+        var params = new URLSearchParams(window.location.search);
+        if (params.get("planer") === "1" || params.get("mode") === "planer") {
+          document.documentElement.classList.add("ok-planer-preboot", "ok-planner-booting");
+        }
+      } catch (_) {}
+    })();
+  </script>
+  <script>
+    (function(){
       if (new URLSearchParams(window.location.search).get("debugInput") !== "1") return;
       var counts = {
         wheel: 0,
@@ -4595,6 +4605,22 @@ html body.ok-planer-mode section#selectionPanel.floating[data-closing="true"] {
 }
 
 
+
+html.ok-planer-preboot #searchPanel,
+html.ok-planer-preboot #toolDock,
+html.ok-planer-preboot #layerSwitch,
+html.ok-planer-preboot #sourcePanel,
+html.ok-planer-preboot #zoomReadout,
+html.ok-planer-preboot #embedBranding,
+html.ok-planer-preboot .maplibregl-ctrl-bottom-left {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+html.ok-planer-preboot #exportPanel,
+html.ok-planer-preboot #selectionPanel {
+  transition: none !important;
+}
+
 /* Planner boot sync: restore saved panels without visible opening animations. */
 body.ok-planer-mode.ok-planner-booting #mapShell,
 body.ok-planer-mode.ok-planner-booting #exportPanel,
@@ -4621,7 +4647,7 @@ body.ok-planer-mode.ok-planner-booting .maplibregl-ctrl-bottom-left {
 
   </style>
 </head>
-<body>
+<body class="ok-planer-mode ok-planner-booting">
   <div id="mapShell">
     <img id="mapBootstrapBackdrop" class="map-bootstrap-backdrop" alt="" loading="eager" decoding="async">
     <img id="mapFrameFallback" class="map-frame-fallback" alt="">
@@ -4847,7 +4873,7 @@ body.ok-planer-mode.ok-planner-booting .maplibregl-ctrl-bottom-left {
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260710-planner-boot-sync1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260710-no-flicker-boot1"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

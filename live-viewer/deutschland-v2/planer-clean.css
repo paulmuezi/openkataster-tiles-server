@@ -41,7 +41,12 @@ button, select, input { font: inherit; }
 .round-tool.is-active { border-color: var(--ok-orange); box-shadow: 0 0 0 3px rgba(248,109,20,.16), 0 8px 24px rgba(23,29,38,.10); }
 .search-shell { position: absolute; left: 14px; top: 14px; z-index: 10; }
 .tool-stack { position: absolute; left: 14px; top: 74px; z-index: 10; display: grid; gap: 8px; }
-.layer-button { position: absolute; right: 14px; top: 14px; z-index: 10; }
+.layer-control { position: absolute; right: 14px; top: 14px; z-index: 10; display: grid; justify-items: end; gap: 8px; }
+.layer-button { position: static; }
+.layer-menu { min-width: 206px; border: 1px solid var(--ok-border); border-radius: 8px; background: rgba(255,255,255,.97); box-shadow: 0 12px 32px rgba(23,29,38,.14); padding: 10px; display: grid; gap: 8px; }
+.layer-menu[hidden] { display: none; }
+.layer-menu label { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--ok-text); }
+.layer-menu input { accent-color: var(--ok-orange); }
 .zoom-badge { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 10; padding: 7px 12px; border-radius: 999px; background: rgba(255,255,255,.94); font-size: 12px; font-weight: 500; box-shadow: 0 4px 16px rgba(23,29,38,.10); }
 .source-pill { position: absolute; right: 10px; bottom: 10px; z-index: 10; width: 18px; height: 18px; border: 0; border-radius: 999px; background: rgba(255,255,255,.95); color: #1d2430; font: 600 12px/18px system-ui; cursor: pointer; box-shadow: 0 2px 8px rgba(23,29,38,.14); }
 .brand-mark { position: absolute; left: 10px; bottom: 8px; z-index: 10; display: flex; align-items: center; gap: 5px; color: #6c7280; font-size: 12px; pointer-events: none; }

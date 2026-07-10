@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenKataster Planer Clean</title>
   <link rel="stylesheet" href="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.css">
-  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/planer-clean.css?v=20260710-clean1">
+  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/planer-clean.css?v=20260710-clean2">
 </head>
 <body>
   <main id="plannerApp" class="planner-app" data-sidebar-open="false" data-table-open="false">
@@ -31,9 +31,18 @@
           </button>
         </nav>
 
-        <button class="layer-button round-tool" type="button" aria-label="Layer">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></svg>
-        </button>
+        <div class="layer-control">
+          <button id="layerButton" class="layer-button round-tool" type="button" aria-label="Layer" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></svg>
+          </button>
+          <div id="layerMenu" class="layer-menu" hidden>
+            <label><input type="checkbox" data-layer="alkis" checked> ALKIS</label>
+            <label><input type="checkbox" data-layer="surfaces" checked> Flächennutzung</label>
+            <label><input type="checkbox" data-layer="buildings" checked> Gebäude</label>
+            <label><input type="checkbox" data-layer="parcels" checked> Flurstücksgrenzen</label>
+            <label><input type="checkbox" data-layer="labels" checked> Beschriftungen</label>
+          </div>
+        </div>
 
         <div id="zoomBadge" class="zoom-badge">Zoom --</div>
         <button class="source-pill" type="button" aria-label="Quellen">i</button>
@@ -77,6 +86,6 @@
   </main>
 
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js"></script>
-  <script src="/viewer-assets/deutschland-v2/planer-clean.js?v=20260710-clean1"></script>
+  <script src="/viewer-assets/deutschland-v2/planer-clean.js?v=20260710-clean2"></script>
 </body>
 </html>

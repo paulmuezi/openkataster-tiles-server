@@ -39,6 +39,7 @@ button, select, input { font: inherit; }
 .round-tool svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 .round-tool text { fill: currentColor; stroke: none; font-size: 5px; font-weight: 500; }
 .round-tool.is-active { border-color: var(--ok-orange); box-shadow: 0 0 0 3px rgba(248,109,20,.16), 0 8px 24px rgba(23,29,38,.10); }
+.round-tool.is-loading { opacity: .72; cursor: progress; }
 .search-shell { position: absolute; left: 14px; top: 14px; z-index: 10; }
 .tool-stack { position: absolute; left: 14px; top: 74px; z-index: 10; display: grid; gap: 8px; }
 .layer-control { position: absolute; right: 14px; top: 14px; z-index: 10; display: grid; justify-items: end; gap: 8px; }
@@ -70,7 +71,8 @@ fieldset label { display: flex; gap: 9px; align-items: center; font-size: 13px; 
 .dock-head span { color: var(--ok-muted); font-size: 12px; }
 .dock-table-wrap { overflow: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
-th, td { padding: 9px 14px; border-bottom: 1px solid #eeeae4; text-align: left; }
+th, td { padding: 9px 14px; border-bottom: 1px solid #eeeae4; text-align: left; vertical-align: top; }
+td.muted { color: var(--ok-muted); }
 th { color: #687181; font-weight: 600; background: #fbfaf8; position: sticky; top: 0; z-index: 1; }
 @media (max-width: 760px) {
   .planner-app { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) var(--sidebar-width); }

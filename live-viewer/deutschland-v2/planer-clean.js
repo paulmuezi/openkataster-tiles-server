@@ -9,6 +9,13 @@ const closeSelection = document.getElementById('closeSelection');
 const selectionRows = document.getElementById('selectionRows');
 const selectionCount = document.getElementById('selectionCount');
 const zoomBadge = document.getElementById('zoomBadge');
+const urlParams = new URLSearchParams(window.location.search);
+const accessToken = urlParams.get('token') || '';
+const featureUrl = `/api/v1/features/point?client=viewer${accessToken ? `&token=${encodeURIComponent(accessToken)}` : ''}`;
+const selectedParcels = new Map();
+const selectedBuildings = new Map();
+let selectionAbort = null;
+
 const layerButton = document.getElementById('layerButton');
 const layerMenu = document.getElementById('layerMenu');
 const layerInputs = Array.from(document.querySelectorAll('[data-layer]'));
@@ -36,6 +43,121 @@ map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom
 
 const resizeObserver = new ResizeObserver(() => map.resize());
 resizeObserver.observe(mapEl);
+
+
+function itemKey(item) { return `${item.source_db || ''}:${item.gml_id || item.flurstueckskennzeichen || ''}`; }
+function featureCollection(items) {
+  return { type: 'FeatureCollection', features: items.filter(item => item.geometry).map(item => ({ type: 'Feature', properties: { id: itemKey(item) }, geometry: item.geometry })) };
+}
+function coordKey(point) { return `${Number(point[0]).toFixed(7)},${Number(point[1]).toFixed(7)}`; }
+function segmentKey(a, b) { const ka = coordKey(a); const kb = coordKey(b); return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`; }
+function ringSegments(ring, segments) {
+  let points = (ring || []).filter(point => Array.isArray(point) && point.length >= 2).map(point => [Number(point[0]), Number(point[1])]).filter(point => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+  if (points.length > 1 && points[0][0] === points[points.length - 1][0] && points[0][1] === points[points.length - 1][1]) points = points.slice(0, -1);
+  if (points.length < 2) return;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    if (a[0] !== b[0] || a[1] !== b[1]) segments.push([a, b]);
+  }
+}
+function geometrySegments(geometry, segments) {
+  if (!geometry) return;
+  if (geometry.type === 'Polygon') (geometry.coordinates || []).forEach(ring => ringSegments(ring, segments));
+  else if (geometry.type === 'MultiPolygon') for (const polygon of geometry.coordinates || []) (polygon || []).forEach(ring => ringSegments(ring, segments));
+  else if (geometry.type === 'LineString') { const line = geometry.coordinates || []; for (let i = 1; i < line.length; i++) segments.push([line[i - 1], line[i]]); }
+  else if (geometry.type === 'MultiLineString') for (const line of geometry.coordinates || []) for (let i = 1; i < line.length; i++) segments.push([line[i - 1], line[i]]);
+}
+function outlineCollection(items) {
+  const edges = new Map();
+  for (const item of items) {
+    const segments = [];
+    geometrySegments(item.geometry, segments);
+    for (const [a, b] of segments) {
+      const key = segmentKey(a, b);
+      if (edges.has(key)) edges.delete(key); else edges.set(key, [a, b]);
+    }
+  }
+  return { type: 'FeatureCollection', features: [...edges.values()].map((line, index) => ({ type: 'Feature', properties: { id: String(index) }, geometry: { type: 'LineString', coordinates: line } })) };
+}
+function addSelectionLayers() {
+  if (map.getSource('selected-parcels')) return;
+  map.addSource('selected-parcels', { type: 'geojson', data: featureCollection([]) });
+  map.addSource('selected-buildings', { type: 'geojson', data: featureCollection([]) });
+  map.addSource('selected-parcel-outlines', { type: 'geojson', data: outlineCollection([]) });
+  map.addSource('selected-building-outlines', { type: 'geojson', data: outlineCollection([]) });
+  map.addLayer({ id: 'selected-parcel-fill', type: 'fill', source: 'selected-parcels', paint: { 'fill-color': '#ef4444', 'fill-opacity': 0 } });
+  map.addLayer({ id: 'selected-parcel-halo', type: 'line', source: 'selected-parcel-outlines', layout: { 'line-cap': 'butt', 'line-join': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 6.8, 'line-opacity': .92, 'line-dasharray': [0.92, 0.49] } });
+  map.addLayer({ id: 'selected-parcel-outline', type: 'line', source: 'selected-parcel-outlines', layout: { 'line-cap': 'butt', 'line-join': 'round' }, paint: { 'line-color': '#ef4444', 'line-width': 2.4, 'line-opacity': 1, 'line-dasharray': [2.6, 1.4] } });
+  map.addLayer({ id: 'selected-building-fill', type: 'fill', source: 'selected-buildings', paint: { 'fill-color': '#ef4444', 'fill-opacity': 0 } });
+  map.addLayer({ id: 'selected-building-halo', type: 'line', source: 'selected-building-outlines', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 6, 'line-opacity': .92 } });
+  map.addLayer({ id: 'selected-building-outline', type: 'line', source: 'selected-building-outlines', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#ef4444', 'line-width': 2.8, 'line-opacity': 1 } });
+}
+function updateSelectionSources() {
+  const parcels = [...selectedParcels.values()];
+  const buildings = [...selectedBuildings.values()];
+  map.getSource('selected-parcels')?.setData(featureCollection(parcels));
+  map.getSource('selected-buildings')?.setData(featureCollection(buildings));
+  map.getSource('selected-parcel-outlines')?.setData(outlineCollection(parcels));
+  map.getSource('selected-building-outlines')?.setData(outlineCollection(buildings));
+}
+function addressLabel(item) {
+  if (item.address) return item.address;
+  const first = Array.isArray(item.addresses) ? item.addresses[0] : null;
+  return first?.label || [first?.street, first?.house_number].filter(Boolean).join(' ') || '–';
+}
+function formatArea(value) {
+  if (value === null || value === undefined || value === '') return '–';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '–';
+  return `${Math.round(number).toLocaleString('de-DE')} m²`;
+}
+function renderSelectionTable() {
+  const rows = [];
+  for (const building of selectedBuildings.values()) {
+    rows.push(`<tr><td>Gebäude</td><td>${escapeHtml(addressLabel(building))}</td><td class="muted">–</td><td class="muted">–</td><td class="muted">–</td></tr>`);
+  }
+  for (const parcel of selectedParcels.values()) {
+    rows.push(`<tr><td>Flurstück</td><td>${escapeHtml(addressLabel(parcel))}</td><td>${escapeHtml(parcel.gemarkung || '–')}</td><td>${escapeHtml(parcel.flur ?? '–')}</td><td><strong>${escapeHtml(parcel.flurstueck || [parcel.zaehler, parcel.nenner].filter(Boolean).join('/') || '–')}</strong><br><span class="muted">${formatArea(parcel.amtliche_flaeche_m2)}</span></td></tr>`);
+  }
+  selectionRows.innerHTML = rows.join('');
+  const count = selectedBuildings.size + selectedParcels.size;
+  selectionCount.textContent = count === 1 ? '1 Objekt ausgewählt' : `${count} Objekte ausgewählt`;
+  setTable(count > 0);
+}
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
+}
+async function selectAt(lngLat) {
+  if (selectionAbort) selectionAbort.abort();
+  selectionAbort = new AbortController();
+  selectTool.classList.add('is-loading');
+  const url = `${featureUrl}&lon=${encodeURIComponent(lngLat.lng)}&lat=${encodeURIComponent(lngLat.lat)}`;
+  try {
+    const response = await fetch(url, { signal: selectionAbort.signal });
+    if (!response.ok) throw new Error(`Feature-API ${response.status}`);
+    const data = await response.json();
+    selectedParcels.clear();
+    selectedBuildings.clear();
+    for (const parcel of data.parcels || []) selectedParcels.set(itemKey(parcel), parcel);
+    for (const building of data.buildings || []) selectedBuildings.set(itemKey(building), building);
+    updateSelectionSources();
+    renderSelectionTable();
+  } catch (error) {
+    if (error.name !== 'AbortError') console.error(error);
+  } finally {
+    selectTool.classList.remove('is-loading');
+  }
+}
+function clearSelection() {
+  selectedParcels.clear();
+  selectedBuildings.clear();
+  updateSelectionSources();
+  selectionRows.innerHTML = '';
+  selectionCount.textContent = 'Keine Objekte ausgewählt';
+  app.dataset.tableOpen = 'false';
+  window.setTimeout(() => { if (app.dataset.tableOpen !== 'true') selectionDock.hidden = true; }, 380);
+}
 
 function addAlkisLayers() {
   if (map.getSource(alkisSourceId)) return;
@@ -102,11 +224,6 @@ function setActiveTool(tool) {
   if (tool === 'measure') measureTool.classList.add('is-active');
   if (tool === 'export') exportTool.classList.add('is-active');
 }
-function renderDemoSelection(point) {
-  selectionRows.innerHTML = `<tr><td>Flurstück</td><td>Beispielauswahl</td><td>Demo</td><td>1</td><td>${point.lng.toFixed(4)}, ${point.lat.toFixed(4)}</td></tr>`;
-  selectionCount.textContent = '1 Objekt ausgewählt';
-  setTable(true);
-}
 exportTool.addEventListener('click', () => {
   const open = app.dataset.sidebarOpen !== 'true';
   setSidebar(open);
@@ -115,14 +232,9 @@ exportTool.addEventListener('click', () => {
 closeExport.addEventListener('click', () => setSidebar(false));
 selectTool.addEventListener('click', () => setActiveTool(selectTool.classList.contains('is-active') ? 'none' : 'select'));
 measureTool.addEventListener('click', () => setActiveTool(measureTool.classList.contains('is-active') ? 'none' : 'measure'));
-closeSelection.addEventListener('click', () => {
-  app.dataset.tableOpen = 'false';
-  selectionRows.innerHTML = '';
-  selectionCount.textContent = 'Keine Objekte ausgewählt';
-  window.setTimeout(() => { if (app.dataset.tableOpen !== 'true') selectionDock.hidden = true; }, 380);
-});
+closeSelection.addEventListener('click', clearSelection);
 map.on('click', (event) => {
-  if (selectTool.classList.contains('is-active')) renderDemoSelection(event.lngLat);
+  if (selectTool.classList.contains('is-active')) selectAt(event.lngLat);
 });
 layerButton.addEventListener('click', () => {
   const open = layerMenu.hidden;
@@ -149,4 +261,4 @@ document.addEventListener('click', (event) => {
   }
 });
 map.on('zoom', () => { zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`; });
-map.on('load', () => { zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`; addAlkisLayers(); updateLayerInputs(); });
+map.on('load', () => { zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`; addAlkisLayers(); addSelectionLayers(); updateLayerInputs(); });

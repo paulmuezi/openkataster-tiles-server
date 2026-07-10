@@ -83,7 +83,7 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   map.on('load', addLayers);
   map.on('click', (event) => {
-    if (store.getState().activeTool === 'select') selectAt(event.lngLat, event.originalEvent?.shiftKey || event.originalEvent?.ctrlKey || event.originalEvent?.metaKey);
+    if (store.getState().activeTool === 'select') selectAt(event.lngLat, true);
   });
   store.subscribe((state, reason) => { if (reason.startsWith('selection') || reason === 'restore') render(state); });
   return { selectAt, clear, render };

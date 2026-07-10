@@ -141,7 +141,9 @@ export function createLayerController({ map, store, elements }) {
     }
     if (map.getLayer('alkis-building-fills')) {
       map.setPaintProperty('alkis-building-fills', 'fill-color', layers.buildingUsage ? ['coalesce', ['get', 'fill_color'], '#a7a7a7'] : '#a7a7a7');
+      map.setPaintProperty('alkis-building-fills', 'fill-opacity', detail && layers.aerial ? .36 : 1);
     }
+    if (map.getLayer('alkis-surface-fills')) map.setPaintProperty('alkis-surface-fills', 'fill-opacity', detail && layers.aerial ? .18 : 1);
     updateAerial(detail && layers.aerial);
     const detailBackground = detail && (layers.alkis || (layers.aerial && activeAerial));
     setBasemapVisible(!detailBackground);

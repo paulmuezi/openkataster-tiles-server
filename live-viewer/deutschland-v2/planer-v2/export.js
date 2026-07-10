@@ -79,6 +79,7 @@ export function createExportController({ map, api, store, elements }) {
   function plannerRender() {
     const state = store.getState();
     return {
+      source: 'planner',
       version: 1,
       layers: state.layers,
       selection: { parcels: state.selection.parcels, buildings: state.selection.buildings },

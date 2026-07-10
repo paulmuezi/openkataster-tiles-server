@@ -25,6 +25,67 @@ const selectedBuildings = new Map();
 let selectionAbort = null;
 let exportCenter = null;
 let exportFrameDrag = null;
+let stateSaveTimer = 0;
+let restoringState = false;
+const plannerStateKey = 'openkataster:planer-clean:v1';
+
+function readPlannerState() {
+  try {
+    const raw = window.localStorage?.getItem(plannerStateKey);
+    if (!raw) return null;
+    const state = JSON.parse(raw);
+    if (!state || state.v !== 1) return null;
+    if (state.ts && Date.now() - Number(state.ts) > 1000 * 60 * 60 * 24 * 21) return null;
+    return state;
+  } catch (_) {
+    return null;
+  }
+}
+const savedPlannerState = readPlannerState();
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+function featureSnapshot(item) {
+  if (!item || !item.geometry) return null;
+  try { return JSON.parse(JSON.stringify(item)); } catch (_) { return null; }
+}
+function buildPlannerState() {
+  if (!map) return null;
+  const center = map.getCenter();
+  return {
+    v: 1,
+    ts: Date.now(),
+    view: { lng: center.lng, lat: center.lat, zoom: map.getZoom() },
+    layers: { ...layerState },
+    export: {
+      open: app.dataset.sidebarOpen === 'true',
+      center: exportCenter ? { lng: exportCenter.lng, lat: exportCenter.lat } : null,
+      paper: exportPaper.value,
+      orientation: exportOrientation.value,
+      scale: exportScale.value
+    },
+    selection: {
+      open: app.dataset.tableOpen === 'true',
+      parcels: [...selectedParcels.values()].map(featureSnapshot).filter(Boolean),
+      buildings: [...selectedBuildings.values()].map(featureSnapshot).filter(Boolean)
+    }
+  };
+}
+function savePlannerStateNow() {
+  if (restoringState) return;
+  try {
+    const state = buildPlannerState();
+    if (state) window.localStorage?.setItem(plannerStateKey, JSON.stringify(state));
+  } catch (error) {
+    console.warn('Planer-Zustand konnte nicht gespeichert werden', error);
+  }
+}
+function schedulePlannerStateSave() {
+  if (restoringState) return;
+  window.clearTimeout(stateSaveTimer);
+  stateSaveTimer = window.setTimeout(savePlannerStateNow, 180);
+}
 
 const layerButton = document.getElementById('layerButton');
 const layerMenu = document.getElementById('layerMenu');
@@ -37,13 +98,18 @@ const alkisLayerGroups = {
   labels: ['alkis-labels']
 };
 const layerState = { alkis: true, surfaces: true, buildings: true, parcels: true, labels: true };
+if (savedPlannerState?.layers && typeof savedPlannerState.layers === 'object') {
+  for (const key of Object.keys(layerState)) if (Object.prototype.hasOwnProperty.call(savedPlannerState.layers, key)) layerState[key] = !!savedPlannerState.layers[key];
+}
 
 
+const savedView = savedPlannerState?.view || null;
+const useSavedView = !window.location.hash && finiteNumber(savedView?.lng) !== null && finiteNumber(savedView?.lat) !== null && finiteNumber(savedView?.zoom) !== null;
 const map = new maplibregl.Map({
   container: mapEl,
   style: '/viewer-assets/deutschland-v2/bkg-style.json?v=20260710-clean1',
-  center: [10.45, 51.16],
-  zoom: 5.25,
+  center: useSavedView ? [Number(savedView.lng), Number(savedView.lat)] : [10.45, 51.16],
+  zoom: useSavedView ? Number(savedView.zoom) : 5.25,
   minZoom: 4.2,
   maxZoom: 20,
   hash: true,
@@ -153,6 +219,7 @@ async function selectAt(lngLat) {
     for (const building of data.buildings || []) selectedBuildings.set(itemKey(building), building);
     updateSelectionSources();
     renderSelectionTable();
+    schedulePlannerStateSave();
   } catch (error) {
     if (error.name !== 'AbortError') console.error(error);
   } finally {
@@ -167,6 +234,7 @@ function clearSelection() {
   selectionCount.textContent = 'Keine Objekte ausgewählt';
   app.dataset.tableOpen = 'false';
   window.setTimeout(() => { if (app.dataset.tableOpen !== 'true') selectionDock.hidden = true; }, 380);
+  schedulePlannerStateSave();
 }
 
 function addAlkisLayers() {
@@ -251,6 +319,7 @@ function exportFrameBounds() {
 function setExportCenter(lngLat) {
   exportCenter = { lng: Number(lngLat.lng), lat: Number(lngLat.lat) };
   updateExportFrame();
+  schedulePlannerStateSave();
 }
 function updateExportFrame() {
   if (!exportCenter || app.dataset.sidebarOpen !== 'true') {
@@ -313,11 +382,13 @@ function setSidebar(open) {
   if (open && !exportCenter) setExportCenter(map.getCenter());
   if (!open) exportFrame.hidden = true;
   requestAnimationFrame(() => { map.resize(); updateExportFrame(); });
+  schedulePlannerStateSave();
 }
 function setTable(open) {
   app.dataset.tableOpen = open ? 'true' : 'false';
   selectionDock.hidden = false;
   requestAnimationFrame(() => map.resize());
+  schedulePlannerStateSave();
 }
 function setActiveTool(tool) {
   for (const el of [selectTool, measureTool, exportTool]) el.classList.remove('is-active');
@@ -335,7 +406,7 @@ closeExport.addEventListener('click', () => setSidebar(false));
 selectTool.addEventListener('click', () => setActiveTool(selectTool.classList.contains('is-active') ? 'none' : 'select'));
 measureTool.addEventListener('click', () => setActiveTool(measureTool.classList.contains('is-active') ? 'none' : 'measure'));
 closeSelection.addEventListener('click', clearSelection);
-for (const control of [exportPaper, exportOrientation, exportScale]) control.addEventListener('change', updateExportFrame);
+for (const control of [exportPaper, exportOrientation, exportScale]) control.addEventListener('change', () => { updateExportFrame(); schedulePlannerStateSave(); });
 exportFrameBox.addEventListener('pointerdown', beginExportFrameDrag);
 exportFrameBox.addEventListener('pointermove', moveExportFrameDrag);
 exportFrameBox.addEventListener('pointerup', endExportFrameDrag);
@@ -364,6 +435,7 @@ for (const input of layerInputs) {
     }
     updateLayerInputs();
     applyLayerState();
+    schedulePlannerStateSave();
   });
 }
 document.addEventListener('click', (event) => {
@@ -372,7 +444,35 @@ document.addEventListener('click', (event) => {
     layerButton.setAttribute('aria-expanded', 'false');
   }
 });
-map.on('zoom', () => { zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`; updateExportFrame(); });
+function restorePlannerState() {
+  if (!savedPlannerState) return;
+  restoringState = true;
+  try {
+    const ex = savedPlannerState.export || {};
+    if (ex.paper) exportPaper.value = ex.paper;
+    if (ex.orientation) exportOrientation.value = ex.orientation;
+    if (ex.scale) exportScale.value = ex.scale;
+    if (ex.center && finiteNumber(ex.center.lng) !== null && finiteNumber(ex.center.lat) !== null) exportCenter = { lng: Number(ex.center.lng), lat: Number(ex.center.lat) };
+    selectedParcels.clear();
+    selectedBuildings.clear();
+    for (const parcel of savedPlannerState.selection?.parcels || []) if (parcel?.geometry) selectedParcels.set(itemKey(parcel), parcel);
+    for (const building of savedPlannerState.selection?.buildings || []) if (building?.geometry) selectedBuildings.set(itemKey(building), building);
+    updateLayerInputs();
+    applyLayerState();
+    updateSelectionSources();
+    renderSelectionTable();
+    if (!savedPlannerState.selection?.open || selectedParcels.size + selectedBuildings.size === 0) clearSelection();
+    if (ex.open) {
+      setSidebar(true);
+      setActiveTool('export');
+    }
+    updateExportFrame();
+  } finally {
+    window.setTimeout(() => { restoringState = false; savePlannerStateNow(); }, 100);
+  }
+}
+map.on('zoom', () => { zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`; updateExportFrame(); schedulePlannerStateSave(); });
 map.on('move', updateExportFrame);
+map.on('moveend', schedulePlannerStateSave);
 map.on('resize', updateExportFrame);
-map.on('load', () => { zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`; addAlkisLayers(); addSelectionLayers(); updateLayerInputs(); });
+map.on('load', () => { zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`; addAlkisLayers(); addSelectionLayers(); updateLayerInputs(); restorePlannerState(); });

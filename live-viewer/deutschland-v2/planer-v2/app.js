@@ -33,7 +33,7 @@ const store = createStore({
 const api = createApi({ token: params.get('token') || '', fresh: params.get('fresh') || '' });
 
 const elements = Object.fromEntries([
-  'exportSidebar','selectionDock','exportTool','selectTool','measureTool','selectionResize','selectionClose','selectionRows','selectionCount',
+  'exportSidebar','selectionDock','exportTool','selectTool','measureTool','selectionResize','selectionClose','selectionContent','selectionCount',
   'layerButton','layerMenu','layerZoomNote','searchButton','searchPanel','searchClose','searchMode','addressFields','parcelFields','placeInput','streetInput','houseInput','gemarkungInput','flurInput','parcelInput','placeSuggestions','streetSuggestions','searchSubmit','searchResults','searchStatus',
   'measurePanel','measureDistance','measureArea','measureUndo','measureClear','sourceButton','sourcePanel','sourceList',
   'exportFrame','exportFrameBox','exportCenterMarker','exportPaper','exportOrientation','exportScale','exportPdf','exportDxf','exportAerial','exportSummary','exportStatus','exportPreview','exportClose',

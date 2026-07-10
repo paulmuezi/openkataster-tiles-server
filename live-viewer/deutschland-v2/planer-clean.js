@@ -9,12 +9,22 @@ const closeSelection = document.getElementById('closeSelection');
 const selectionRows = document.getElementById('selectionRows');
 const selectionCount = document.getElementById('selectionCount');
 const zoomBadge = document.getElementById('zoomBadge');
+const exportFrame = document.getElementById('exportFrame');
+const exportFrameBox = document.getElementById('exportFrameBox');
+const exportCenterMarker = document.getElementById('exportCenterMarker');
+const exportPaper = document.getElementById('exportPaper');
+const exportOrientation = document.getElementById('exportOrientation');
+const exportScale = document.getElementById('exportScale');
+const exportFrameSummary = document.getElementById('exportFrameSummary');
+const exportBoxMinScreenSize = 18;
 const urlParams = new URLSearchParams(window.location.search);
 const accessToken = urlParams.get('token') || '';
 const featureUrl = `/api/v1/features/point?client=viewer${accessToken ? `&token=${encodeURIComponent(accessToken)}` : ''}`;
 const selectedParcels = new Map();
 const selectedBuildings = new Map();
 let selectionAbort = null;
+let exportCenter = null;
+let exportFrameDrag = null;
 
 const layerButton = document.getElementById('layerButton');
 const layerMenu = document.getElementById('layerMenu');
@@ -207,11 +217,102 @@ function updateLayerInputs() {
 }
 
 
+
+function paperSizeMeters() {
+  const scale = Number(exportScale.value || 1000);
+  if (exportPaper.value === 'square') return { width: 180 * scale / 1000, height: 180 * scale / 1000 };
+  const longMm = 297;
+  const shortMm = 210;
+  const landscape = exportOrientation.value !== 'portrait';
+  return {
+    width: (landscape ? longMm : shortMm) * scale / 1000,
+    height: (landscape ? shortMm : longMm) * scale / 1000
+  };
+}
+function metersToLngLatDelta(center, meters) {
+  const latRad = center.lat * Math.PI / 180;
+  const metersPerDegLat = 111320;
+  const metersPerDegLng = Math.max(1, 111320 * Math.cos(latRad));
+  return { lng: meters.x / metersPerDegLng, lat: meters.y / metersPerDegLat };
+}
+function exportFrameBounds() {
+  const center = exportCenter || map.getCenter();
+  const size = paperSizeMeters();
+  const half = metersToLngLatDelta(center, { x: size.width / 2, y: size.height / 2 });
+  return {
+    west: center.lng - half.lng,
+    east: center.lng + half.lng,
+    south: center.lat - half.lat,
+    north: center.lat + half.lat,
+    center,
+    size
+  };
+}
+function setExportCenter(lngLat) {
+  exportCenter = { lng: Number(lngLat.lng), lat: Number(lngLat.lat) };
+  updateExportFrame();
+}
+function updateExportFrame() {
+  if (!exportCenter || app.dataset.sidebarOpen !== 'true') {
+    exportFrame.hidden = true;
+    exportFrameSummary.textContent = 'Ausschnitt noch nicht gesetzt';
+    return;
+  }
+  const bounds = exportFrameBounds();
+  const nw = map.project([bounds.west, bounds.north]);
+  const se = map.project([bounds.east, bounds.south]);
+  const centerPx = map.project([bounds.center.lng, bounds.center.lat]);
+  const left = Math.min(nw.x, se.x);
+  const top = Math.min(nw.y, se.y);
+  const width = Math.abs(se.x - nw.x);
+  const height = Math.abs(se.y - nw.y);
+  exportFrame.hidden = false;
+  Object.assign(exportCenterMarker.style, { left: `${centerPx.x}px`, top: `${centerPx.y}px` });
+  if (width < exportBoxMinScreenSize || height < exportBoxMinScreenSize) {
+    exportFrameBox.hidden = true;
+  } else {
+    exportFrameBox.hidden = false;
+    Object.assign(exportFrameBox.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
+  }
+  exportFrameSummary.textContent = `Mitte: ${bounds.center.lat.toFixed(6)}, ${bounds.center.lng.toFixed(6)} · ${Math.round(bounds.size.width)} × ${Math.round(bounds.size.height)} m`;
+}
+function beginExportFrameDrag(event) {
+  if (!exportCenter) return;
+  event.preventDefault();
+  event.stopPropagation();
+  exportFrameBox.classList.add('is-dragging');
+  const startPoint = map.project([exportCenter.lng, exportCenter.lat]);
+  exportFrameDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startPoint, moved: false };
+  exportFrameBox.setPointerCapture(event.pointerId);
+}
+function moveExportFrameDrag(event) {
+  if (!exportFrameDrag) return;
+  event.preventDefault();
+  const dx = event.clientX - exportFrameDrag.startX;
+  const dy = event.clientY - exportFrameDrag.startY;
+  if (Math.hypot(dx, dy) > 3) exportFrameDrag.moved = true;
+  const point = { x: exportFrameDrag.startPoint.x + dx, y: exportFrameDrag.startPoint.y + dy };
+  const lngLat = map.unproject(point);
+  setExportCenter(lngLat);
+}
+function endExportFrameDrag(event) {
+  if (!exportFrameDrag) return;
+  exportFrameBox.classList.remove('is-dragging');
+  try { exportFrameBox.releasePointerCapture(exportFrameDrag.pointerId); } catch (_) {}
+  if (!exportFrameDrag.moved) {
+    const rect = mapEl.getBoundingClientRect();
+    setExportCenter(map.unproject({ x: event.clientX - rect.left, y: event.clientY - rect.top }));
+  }
+  exportFrameDrag = null;
+}
+
 function setSidebar(open) {
   app.dataset.sidebarOpen = open ? 'true' : 'false';
   exportTool.classList.toggle('is-active', open);
   document.getElementById('exportSidebar').hidden = false;
-  requestAnimationFrame(() => map.resize());
+  if (open && !exportCenter) setExportCenter(map.getCenter());
+  if (!open) exportFrame.hidden = true;
+  requestAnimationFrame(() => { map.resize(); updateExportFrame(); });
 }
 function setTable(open) {
   app.dataset.tableOpen = open ? 'true' : 'false';
@@ -223,6 +324,7 @@ function setActiveTool(tool) {
   if (tool === 'select') selectTool.classList.add('is-active');
   if (tool === 'measure') measureTool.classList.add('is-active');
   if (tool === 'export') exportTool.classList.add('is-active');
+  if (exportFrameBox) exportFrameBox.style.pointerEvents = (tool === 'select' || tool === 'measure') ? 'none' : 'auto';
 }
 exportTool.addEventListener('click', () => {
   const open = app.dataset.sidebarOpen !== 'true';
@@ -233,8 +335,18 @@ closeExport.addEventListener('click', () => setSidebar(false));
 selectTool.addEventListener('click', () => setActiveTool(selectTool.classList.contains('is-active') ? 'none' : 'select'));
 measureTool.addEventListener('click', () => setActiveTool(measureTool.classList.contains('is-active') ? 'none' : 'measure'));
 closeSelection.addEventListener('click', clearSelection);
+for (const control of [exportPaper, exportOrientation, exportScale]) control.addEventListener('change', updateExportFrame);
+exportFrameBox.addEventListener('pointerdown', beginExportFrameDrag);
+exportFrameBox.addEventListener('pointermove', moveExportFrameDrag);
+exportFrameBox.addEventListener('pointerup', endExportFrameDrag);
+exportFrameBox.addEventListener('pointercancel', endExportFrameDrag);
 map.on('click', (event) => {
-  if (selectTool.classList.contains('is-active')) selectAt(event.lngLat);
+  if (selectTool.classList.contains('is-active')) {
+    selectAt(event.lngLat);
+    return;
+  }
+  if (measureTool.classList.contains('is-active')) return;
+  if (app.dataset.sidebarOpen === 'true') setExportCenter(event.lngLat);
 });
 layerButton.addEventListener('click', () => {
   const open = layerMenu.hidden;
@@ -260,5 +372,7 @@ document.addEventListener('click', (event) => {
     layerButton.setAttribute('aria-expanded', 'false');
   }
 });
-map.on('zoom', () => { zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`; });
+map.on('zoom', () => { zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`; updateExportFrame(); });
+map.on('move', updateExportFrame);
+map.on('resize', updateExportFrame);
 map.on('load', () => { zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`; addAlkisLayers(); addSelectionLayers(); updateLayerInputs(); });

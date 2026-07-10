@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenKataster Planer Clean</title>
   <link rel="stylesheet" href="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.css">
-  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/planer-clean.css?v=20260710-clean3">
+  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/planer-clean.css?v=20260710-clean7">
 </head>
 <body>
   <main id="plannerApp" class="planner-app" data-sidebar-open="false" data-table-open="false">
@@ -45,6 +45,10 @@
         </div>
 
         <div id="zoomBadge" class="zoom-badge">Zoom --</div>
+        <div id="exportFrame" class="export-frame" hidden>
+          <div id="exportFrameBox" class="export-frame-box" aria-label="Exportausschnitt"></div>
+          <div id="exportCenterMarker" class="export-center-marker" aria-label="Exportmittelpunkt"></div>
+        </div>
         <button class="source-pill" type="button" aria-label="Quellen">i</button>
         <div class="brand-mark"><img src="/viewer-assets/deutschland-v2/openkataster-logo.svg" alt=""><span>OpenKataster</span></div>
       </div>
@@ -72,9 +76,10 @@
         <strong>Karte exportieren</strong>
         <button id="closeExport" type="button" aria-label="Export schließen">×</button>
       </header>
-      <div class="field"><label>Papierformat</label><select><option>DIN A4</option><option>Quadratisch</option></select></div>
-      <div class="field"><label>Ausrichtung</label><select><option>Querformat</option><option>Hochformat</option></select></div>
-      <div class="field"><label>Maßstab</label><select><option>1:1000</option><option>1:500</option><option>1:2000</option></select></div>
+      <div class="field"><label>Papierformat</label><select id="exportPaper"><option value="a4">DIN A4</option><option value="square">Quadratisch</option></select></div>
+      <div class="field"><label>Ausrichtung</label><select id="exportOrientation"><option value="landscape">Querformat</option><option value="portrait">Hochformat</option></select></div>
+      <div class="field"><label>Maßstab</label><select id="exportScale"><option value="1000">1:1000</option><option value="500">1:500</option><option value="2000">1:2000</option></select></div>
+      <p id="exportFrameSummary" class="export-frame-summary">Ausschnitt noch nicht gesetzt</p>
       <fieldset>
         <legend>Dateiformate</legend>
         <label><input type="checkbox" checked> Liegenschaftskarte (.pdf)</label>
@@ -86,6 +91,6 @@
   </main>
 
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js"></script>
-  <script src="/viewer-assets/deutschland-v2/planer-clean.js?v=20260710-clean3"></script>
+  <script src="/viewer-assets/deutschland-v2/planer-clean.js?v=20260710-clean7"></script>
 </body>
 </html>

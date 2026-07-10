@@ -61,7 +61,14 @@ button, select, input { font: inherit; }
 select { height: 38px; border: 1px solid var(--ok-border); border-radius: 6px; background: #fff; padding: 0 10px; color: var(--ok-text); }
 fieldset { border: 0; padding: 0; display: grid; gap: 10px; margin: 0; }
 fieldset label { display: flex; gap: 9px; align-items: center; font-size: 13px; }
+.export-frame-summary { margin: -4px 0 0; color: var(--ok-muted); font-size: 12px; line-height: 1.45; }
 .primary-action { margin-top: auto; height: 46px; border: 0; border-radius: 6px; background: var(--ok-orange); color: #fff; font-weight: 600; cursor: pointer; }
+.export-frame { position: absolute; inset: 0; z-index: 8; pointer-events: none; }
+.export-frame-box { position: absolute; border: 2px solid rgba(248, 109, 20, .82); background: rgba(248, 109, 20, .12); box-shadow: 0 0 0 1px rgba(255,255,255,.72) inset; pointer-events: auto; cursor: grab; }
+.export-frame-box[hidden] { display: none; }
+.export-frame-box:hover { background: rgba(248, 109, 20, .17); border-color: var(--ok-orange); }
+.export-frame-box.is-dragging { cursor: grabbing; background: rgba(248, 109, 20, .2); }
+.export-center-marker { position: absolute; width: 12px; height: 12px; border-radius: 999px; border: 2px solid #fff; background: var(--ok-orange); box-shadow: 0 1px 4px rgba(23,29,38,.28); transform: translate(-50%, -50%); pointer-events: none; }
 .selection-dock { min-height: 0; border-top: 1px solid var(--ok-border); background: #fff; overflow: hidden; display: grid; grid-template-rows: 12px auto minmax(0, 1fr); }
 .selection-dock[hidden] { display: none; }
 .dock-resize { height: 12px; cursor: ns-resize; position: relative; }

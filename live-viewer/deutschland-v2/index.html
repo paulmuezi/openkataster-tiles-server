@@ -4662,7 +4662,7 @@ body.ok-planer-mode.ok-planner-booting .maplibregl-ctrl-bottom-left {
 }
 
 
-/* Selection table final motion: keep close/open height animated after all legacy overrides. */
+/* Selection table motion: JS owns height; CSS only follows the sidebar edge. */
 @media (min-width: 761px) {
   html body.ok-planer-mode #selectionPanel,
   html body.ok-planer-mode #selectionPanel.is-open,
@@ -4672,25 +4672,14 @@ body.ok-planer-mode.ok-planner-booting .maplibregl-ctrl-bottom-left {
   html body.ok-planer-mode.ok-export-sidebar-open #selectionPanel.is-open,
   html body.ok-planer-mode.ok-export-sidebar-open.ok-selection-dock-visible #selectionPanel,
   html body.ok-planer-mode.ok-export-sidebar-open.ok-selection-dock-visible #selectionPanel.is-open {
-    transition: height 420ms cubic-bezier(0.22, 1, 0.36, 1), max-height 420ms cubic-bezier(0.22, 1, 0.36, 1), right 420ms cubic-bezier(0.22, 1, 0.36, 1), opacity 420ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear !important;
+    transition: right 420ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear !important;
   }
   html body.ok-planer-mode.ok-selection-resizing #selectionPanel,
   html body.ok-planer-mode.ok-selection-resizing #selectionPanel.is-open,
   html body.ok-planer-mode.ok-planner-booting #selectionPanel,
-  html.ok-planer-preboot body.ok-planer-mode #selectionPanel {
+  html.ok-planer-preboot body.ok-planer-mode #selectionPanel,
+  html body.ok-planer-mode #selectionPanel[data-opening="true"] {
     transition: none !important;
-  }
-}
-
-
-/* Selection table slide close: the panel itself moves down instead of vanishing. */
-@media (min-width: 761px) {
-  html body.ok-planer-mode #selectionPanel[data-closing="true"],
-  html body.ok-planer-mode section#selectionPanel.floating[data-closing="true"] {
-    transform: translate3d(0, 100%, 0) !important;
-    opacity: 1 !important;
-    visibility: visible !important;
-    transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1), height 420ms cubic-bezier(0.22, 1, 0.36, 1), max-height 420ms cubic-bezier(0.22, 1, 0.36, 1), right 420ms cubic-bezier(0.22, 1, 0.36, 1) !important;
   }
 }
 
@@ -4922,7 +4911,7 @@ body.ok-planer-mode.ok-planner-booting .maplibregl-ctrl-bottom-left {
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260710-table-slide-close1"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260710-selection-motion-clean2"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

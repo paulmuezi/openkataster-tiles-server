@@ -10,6 +10,7 @@
   --table-height-open: 260px;
   --table-height: 0px;
   --motion-duration: 360ms;
+  --table-motion-duration: 280ms;
   --motion-easing: cubic-bezier(.22, 1, .36, 1);
   font-family: "IBM Plex Sans", "Helvetica Neue", Arial, system-ui, sans-serif;
   font-size: 13px;
@@ -45,7 +46,7 @@ button { letter-spacing: 0; }
   grid-template-rows: minmax(0, 1fr) var(--table-height);
   background: #fff;
   overflow: hidden;
-  transition: grid-template-rows var(--motion-duration) var(--motion-easing);
+  transition: grid-template-rows var(--table-motion-duration) var(--motion-easing);
 }
 .map-pane { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #fff; contain: layout paint; }
 #map { position: absolute; inset: 0; }
@@ -145,8 +146,8 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .export-frame-box.is-dragging { cursor: grabbing; background: rgba(248,109,20,.18); }
 .export-center-marker { position: absolute; width: 12px; height: 12px; transform: translate(-50%,-50%); border: 2px solid #fff; border-radius: 50%; background: var(--ok-orange); box-shadow: 0 1px 4px rgba(24,30,39,.28); }
 
-.selection-dock { min-width: 0; min-height: 0; overflow: hidden; display: grid; grid-template-rows: 12px 43px minmax(0,1fr); border-top: 1px solid var(--ok-border); background: #fff; visibility: hidden; transition: visibility 0s linear var(--motion-duration); }
-.planner-app[data-table-open="true"] .selection-dock { visibility: visible; transition: visibility 0s; }
+.selection-dock { min-width: 0; min-height: 0; overflow: hidden; display: grid; grid-template-rows: 12px 43px minmax(0,1fr); border-top: 1px solid transparent; background: #fff; pointer-events: none; transform: translateY(8px); transition: transform var(--table-motion-duration) var(--motion-easing), border-color 100ms ease; }
+.planner-app[data-table-open="true"] .selection-dock { border-top-color: var(--ok-border); pointer-events: auto; transform: translateY(0); }
 .selection-resize { position: relative; height: 12px; cursor: ns-resize; touch-action: none; }
 .selection-resize span { position: absolute; left: 50%; top: 4px; width: 46px; height: 4px; border-radius: 999px; background: #c7ccd3; transform: translateX(-50%); }
 .selection-resize:hover span { background: #9da4ad; }
@@ -210,5 +211,5 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root { --motion-duration: 1ms; }
+  :root { --motion-duration: 1ms; --table-motion-duration: 1ms; }
 }

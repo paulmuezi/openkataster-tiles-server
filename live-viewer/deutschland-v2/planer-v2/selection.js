@@ -3,6 +3,7 @@ import { addressLabel, escapeHtml, featureKey, formatArea, polygonAreaMeters } f
 export function createSelectionController({ map, api, store, layout, elements }) {
   const { selectionContent, selectionCount, selectTool, selectionDock } = elements;
   let request = null;
+  let clearGeneration = 0;
 
   function featureCollection(items) {
     return { type: 'FeatureCollection', features: items.filter((item) => item.geometry).map((item) => ({ type: 'Feature', properties: { id: featureKey(item) }, geometry: item.geometry })) };
@@ -122,12 +123,33 @@ export function createSelectionController({ map, api, store, layout, elements })
   }
 
   function clear() {
+    const state = store.getState();
+    if (!state.layout.tableOpen) {
+      store.setState({ selection: { parcels: [], buildings: [], loading: false } }, 'selection-clear');
+      return;
+    }
+
+    const generation = ++clearGeneration;
+    const workspace = selectionDock.parentElement;
+    const finish = () => {
+      if (generation !== clearGeneration || store.getState().layout.tableOpen) return;
+      store.setState({ selection: { parcels: [], buildings: [], loading: false } }, 'selection-clear');
+    };
+    const onEnd = (event) => {
+      if (event.target !== workspace || event.propertyName !== 'grid-template-rows') return;
+      workspace.removeEventListener('transitionend', onEnd);
+      workspace.removeEventListener('transitioncancel', onCancel);
+      finish();
+    };
+    const onCancel = () => {
+      workspace.removeEventListener('transitionend', onEnd);
+      workspace.removeEventListener('transitioncancel', onCancel);
+      finish();
+    };
+
+    workspace.addEventListener('transitionend', onEnd);
+    workspace.addEventListener('transitioncancel', onCancel);
     layout.setTable(false);
-    window.setTimeout(() => {
-      if (!store.getState().layout.tableOpen) {
-        store.setState({ selection: { parcels: [], buildings: [], loading: false } }, 'selection-clear');
-      }
-    }, 360);
   }
 
   map.on('load', addLayers);

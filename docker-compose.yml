@@ -31,6 +31,7 @@ services:
       - "443:443"
       - "8081:8081"
       - "8082:8082"
+      - "8083:8083"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

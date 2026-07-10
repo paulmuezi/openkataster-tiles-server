@@ -13,3 +13,7 @@ tiles.openkataster.de {
 	encode gzip zstd
 	reverse_proxy openkataster-api:8000
 }
+
+:8083 {
+	reverse_proxy openkataster-pocketbase:8090
+}

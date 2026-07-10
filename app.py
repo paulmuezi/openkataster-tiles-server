@@ -17,7 +17,7 @@ from pmtiles.reader import MmapSource, Reader
 from pmtiles.tile import Compression
 
 DATA_ROOT = Path(os.environ.get("OPENKATASTER_PMTILES_ROOT", "/srv/openkataster/pmtiles"))
-ADMIN_API_BASE_URL = os.environ.get("OPENKATASTER_ADMIN_API_BASE_URL", "https://api.openkataster.de").rstrip("/")
+ADMIN_API_BASE_URL = os.environ.get("OPENKATASTER_ADMIN_API_BASE_URL", "http://openkataster-api:8000").rstrip("/")
 S3_BUCKET = os.environ.get("OPENKATASTER_TILES_BUCKET", "")
 S3_ENDPOINT_URL = os.environ.get("OPENKATASTER_TILES_S3_ENDPOINT", "")
 S3_REGION = os.environ.get("OPENKATASTER_TILES_S3_REGION", "nbg1")

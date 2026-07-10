@@ -4,6 +4,7 @@ export function createSelectionController({ map, api, store, layout, elements })
   const { selectionContent, selectionCount, selectTool, selectionDock } = elements;
   let request = null;
   let clearGeneration = 0;
+  let clearObserver = null;
 
   function featureCollection(items) {
     return { type: 'FeatureCollection', features: items.filter((item) => item.geometry).map((item) => ({ type: 'Feature', properties: { id: featureKey(item) }, geometry: item.geometry })) };
@@ -130,25 +131,23 @@ export function createSelectionController({ map, api, store, layout, elements })
     }
 
     const generation = ++clearGeneration;
-    const workspace = selectionDock.parentElement;
+    clearObserver?.disconnect();
     const finish = () => {
       if (generation !== clearGeneration || store.getState().layout.tableOpen) return;
       store.setState({ selection: { parcels: [], buildings: [], loading: false } }, 'selection-clear');
     };
-    const onEnd = (event) => {
-      if (event.target !== workspace || event.propertyName !== 'grid-template-rows') return;
-      workspace.removeEventListener('transitionend', onEnd);
-      workspace.removeEventListener('transitioncancel', onCancel);
+    clearObserver = new ResizeObserver(() => {
+      if (generation !== clearGeneration || store.getState().layout.tableOpen) {
+        clearObserver?.disconnect();
+        clearObserver = null;
+        return;
+      }
+      if (selectionDock.getBoundingClientRect().height > 1.5) return;
+      clearObserver?.disconnect();
+      clearObserver = null;
       finish();
-    };
-    const onCancel = () => {
-      workspace.removeEventListener('transitionend', onEnd);
-      workspace.removeEventListener('transitioncancel', onCancel);
-      finish();
-    };
-
-    workspace.addEventListener('transitionend', onEnd);
-    workspace.addEventListener('transitioncancel', onCancel);
+    });
+    clearObserver.observe(selectionDock);
     layout.setTable(false);
   }
 

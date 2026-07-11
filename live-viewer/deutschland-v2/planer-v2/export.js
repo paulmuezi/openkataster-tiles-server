@@ -94,6 +94,7 @@ export function createExportController({ map, api, store, elements }) {
     const selection = store.getState().selection;
     const hasSelection = selection.parcels.length + selection.buildings.length > 0;
     exportHighlight.disabled = !hasSelection;
+    exportHighlight.closest('label').hidden = !hasSelection;
   }
 
   function render() {

@@ -7,6 +7,7 @@ export function createExportController({ map, api, store, elements }) {
     exportDxf, exportSummary, exportStatus, exportPreview, sourceList
   } = elements;
   let drag = null;
+  let activeObjectUrls = [];
 
   const PAPER_MM = {
     a4: [210, 297],
@@ -215,10 +216,12 @@ export function createExportController({ map, api, store, elements }) {
     const wantsDxf = exportDxf.checked;
     exportPreview.disabled = true;
     exportStatus.textContent = 'Export wird vorbereitet …';
+    releaseObjectUrls();
     try {
-      if (wantsPng) await exportPng();
-      if (wantsPdf || wantsDxf) await exportVectorFiles({ pdf: wantsPdf, dxf: wantsDxf });
-      exportStatus.textContent = 'Export ist fertig.';
+      const downloads = [];
+      if (wantsPng) downloads.push(await exportPng());
+      if (wantsPdf || wantsDxf) downloads.push(...await exportVectorFiles({ pdf: wantsPdf, dxf: wantsDxf }));
+      showDownloads(downloads);
     } catch (error) {
       console.error(error);
       exportStatus.textContent = error.message || 'Export fehlgeschlagen.';
@@ -247,17 +250,39 @@ export function createExportController({ map, api, store, elements }) {
       if (status.api_status === 'failed') throw new Error(status.message || 'Export-Erstellung fehlgeschlagen.');
       const outputs = status.outputs || {};
       if ((!options.pdf || outputs.pdf_url) && (!options.dxf || outputs.dxf_url)) {
-        if (options.pdf) openDownload(order.order_id, order.guest_token, 'pdf');
-        if (options.dxf) window.setTimeout(() => openDownload(order.order_id, order.guest_token, 'dxf'), 160);
-        return;
+        return [
+          options.pdf && { label: 'PDF herunterladen', href: downloadUrl(order.order_id, order.guest_token, 'pdf') },
+          options.dxf && { label: 'DXF herunterladen', href: downloadUrl(order.order_id, order.guest_token, 'dxf') }
+        ].filter(Boolean);
       }
     }
     throw new Error('Export ist noch nicht fertig.');
   }
 
-  function openDownload(orderId, guestToken, format) {
-    const url = `/api/orders/${encodeURIComponent(orderId)}/download/${format}${guestToken ? `?guest_token=${encodeURIComponent(guestToken)}` : ''}`;
-    window.open(url, '_blank', 'noopener');
+  function downloadUrl(orderId, guestToken, format) {
+    return `/api/orders/${encodeURIComponent(orderId)}/download/${format}${guestToken ? `?guest_token=${encodeURIComponent(guestToken)}` : ''}`;
+  }
+
+  function releaseObjectUrls() {
+    for (const url of activeObjectUrls) URL.revokeObjectURL(url);
+    activeObjectUrls = [];
+  }
+
+  function showDownloads(downloads) {
+    exportStatus.replaceChildren();
+    const title = document.createElement('span');
+    title.textContent = 'Export ist fertig.';
+    const actions = document.createElement('div');
+    actions.className = 'export-downloads';
+    for (const download of downloads) {
+      const link = document.createElement('a');
+      link.className = 'export-download-link';
+      link.href = download.href;
+      link.textContent = download.label;
+      if (download.filename) link.download = download.filename;
+      actions.append(link);
+    }
+    exportStatus.append(title, actions);
   }
 
   function outputPixelSize() {
@@ -338,11 +363,9 @@ export function createExportController({ map, api, store, elements }) {
       drawPngDetails(output, mapRect);
       const blob = await new Promise((resolve) => output.toBlob(resolve, 'image/png'));
       if (!blob) throw new Error('PNG konnte nicht erstellt werden.');
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `openkataster-${exportPaper.value}-${Date.now()}.png`;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      const href = URL.createObjectURL(blob);
+      activeObjectUrls.push(href);
+      return { label: 'PNG herunterladen', href, filename: `openkataster-${exportPaper.value}-${Date.now()}.png` };
     } finally { printMap.remove(); container.remove(); }
   }
 
@@ -357,5 +380,6 @@ export function createExportController({ map, api, store, elements }) {
   exportFrameBox.addEventListener('wheel', forwardWheelToMap, { passive: false });
   for (const control of [exportOutput, exportPaper, exportOrientation, exportScale, exportLayout, exportHighlight, exportDxf]) control.addEventListener('change', render);
   exportPreview.addEventListener('click', preview);
+  window.addEventListener('beforeunload', releaseObjectUrls);
   return { render, setCenter, preview };
 }

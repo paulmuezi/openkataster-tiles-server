@@ -228,6 +228,9 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
 .primary-action { min-height: 42px; border: 0; border-radius: 5px; background: var(--ok-orange); color: #fff; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 16px; font-weight: 550; text-decoration: none; cursor: pointer; }
 .primary-action:disabled { opacity: .58; cursor: progress; }
 .export-status { min-height: 16px; color: var(--ok-muted); font-size: 11px; }
+.export-downloads { display: grid; gap: 6px; margin-top: 7px; }
+.export-download-link { min-height: 34px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--ok-border); border-radius: 4px; background: #fff; color: var(--ok-text); font-size: 12px; font-weight: 500; text-decoration: none; }
+.export-download-link:hover { border-color: rgba(248,109,20,.72); color: #cf540b; }
 
 .notice-panel { position: fixed; z-index: 100; left: 50%; top: 22px; transform: translateX(-50%); width: min(320px, calc(100vw - 30px)); padding: 15px; }
 .notice-panel .icon-button { position: absolute; right: 5px; top: 5px; }

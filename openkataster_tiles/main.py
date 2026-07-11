@@ -6044,6 +6044,23 @@ def features_at_point_for_dataset(dataset: str, lon: float, lat: float) -> dict:
     }
 
 
+def feature_preview_item(item: dict, kind: str) -> dict | None:
+    geometry = item.get("geometry")
+    if not isinstance(geometry, dict):
+        return None
+    identity = "|".join(
+        str(item.get(key) or "")
+        for key in ("source_db", "gml_id", "flurstueckskennzeichen", "id")
+    )
+    if not identity.replace("|", ""):
+        identity = json.dumps(geometry, sort_keys=True, separators=(",", ":"))
+    return {
+        "preview_id": hashlib.sha256(f"{kind}|{identity}".encode("utf-8")).hexdigest()[:20],
+        "kind": kind,
+        "geometry": geometry,
+    }
+
+
 def search_features_in_index(path: Path, query: str, limit: int) -> list[dict]:
     results: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
@@ -14749,6 +14766,31 @@ def api_v1_features_at_point(
     payload = features_at_point_for_dataset(dataset, lon, lat)
     payload["access"] = access.mode
     return payload
+
+
+@app.api_route("/api/v1/features/point-preview", methods=["GET", "HEAD"])
+def api_v1_features_at_point_preview(
+    lon: Annotated[float, Query(ge=-180, le=180)],
+    lat: Annotated[float, Query(ge=-90, le=90)],
+    dataset: str = VIRTUAL_GERMANY_DATASET,
+) -> dict:
+    if not is_virtual_germany_dataset(dataset):
+        try:
+            get_dataset(dataset)
+        except HTTPException:
+            if not feature_db_entries_for_dataset(dataset):
+                raise
+    payload = features_at_point_for_dataset(dataset, lon, lat)
+    parcels = [preview for item in payload["parcels"] if (preview := feature_preview_item(item, "parcel"))]
+    buildings = [preview for item in payload["buildings"] if (preview := feature_preview_item(item, "building"))]
+    return {
+        "access": "free",
+        "lon": lon,
+        "lat": lat,
+        "count": len(parcels) + len(buildings),
+        "parcels": parcels,
+        "buildings": buildings,
+    }
 
 
 @app.api_route("/active/{state_slug}/{asset_path:path}", methods=["GET", "HEAD"])

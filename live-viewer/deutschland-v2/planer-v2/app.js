@@ -1,5 +1,5 @@
 import { createApi } from './api.js?v=20260711-free-preview1';
-import { createExportController } from './export.js?v=20260711-layout-stability1';
+import { createExportController } from './export.js?v=20260711-composed-export1';
 import { createLayerController } from './layers.js?v=20260711-parcel-spacing1';
 import { createLayout } from './layout.js?v=20260711-independent-export1';
 import { createPlannerMap } from './map.js?v=20260711-north-up1';
@@ -43,7 +43,7 @@ const elements = Object.fromEntries([
   'exportSidebar','selectionDock','exportTool','selectTool','measureTool','selectionResize','selectionClose','selectionContent','selectionCount',
   'layerButton','layerMenu','layerZoomNote','searchButton','searchPanel','searchClose','searchMode','addressFields','parcelFields','placeInput','streetInput','houseInput','gemarkungInput','flurInput','parcelInput','placeSuggestions','streetSuggestions','searchSubmit','searchResults','searchStatus',
   'measurePanel','measureValues','measureLocked','measureDistance','measureAngle','measureCumulative','measureArea','sourceButton','sourcePanel','sourceList',
-  'exportFrame','exportFrameBox','exportCenterMarker','exportPaper','exportOrientation','exportScale','exportPdf','exportDxf','exportAerial','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings','mobileExportBackdrop',
+  'exportFrame','exportPageBox','exportFrameBox','exportCenterMarker','exportOutput','exportPaper','exportOrientationField','exportOrientation','exportScale','exportLayout','exportHighlight','exportDxf','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings','mobileExportBackdrop',
   'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge'
 ].map((id) => [id, document.getElementById(id)]));
 elements.layerInputs = [...document.querySelectorAll('[data-layer]')];
@@ -87,9 +87,11 @@ const mapReady = new Promise((resolve) => map.once('load', resolve));
 const accessReady = api.session().then((session) => {
   const state = store.getState();
   const pro = !!(session.authenticated && ['pro', 'partner'].includes(session.access));
+  const hasPreviewSelection = [...state.selection.parcels, ...state.selection.buildings]
+    .some((item) => item?.preview_id && !item?.gml_id);
   store.setState({
     access: { ready: true, pro, session },
-    ...(!pro ? {
+    ...((!pro || hasPreviewSelection) ? {
       selection: { parcels: [], buildings: [], loading: false },
       layout: { ...state.layout, tableOpen: false }
     } : {})

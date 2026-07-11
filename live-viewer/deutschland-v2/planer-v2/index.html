@@ -102,6 +102,7 @@
         </div>
 
         <div id="exportFrame" class="export-frame" hidden>
+          <div id="exportPageBox" class="export-page-box" hidden><span class="export-page-title">OpenKataster</span><span class="export-page-footer">Maßstab · Quellen</span></div>
           <div id="exportFrameBox" class="export-frame-box" aria-label="Exportausschnitt"></div>
           <div id="exportCenterMarker" class="export-center-marker" aria-hidden="true"></div>
         </div>
@@ -126,10 +127,12 @@
     <aside id="exportSidebar" class="export-sidebar" aria-label="Export" aria-hidden="true">
       <header class="panel-head"><strong>Karte exportieren</strong><button id="exportClose" class="icon-button" type="button" aria-label="Export schließen">×</button></header>
       <div class="sidebar-scroll">
-        <div class="field"><label for="exportPaper">Papierformat</label><select id="exportPaper"><option value="a4">DIN A4</option><option value="a3">DIN A3</option></select></div>
-        <div class="field"><label for="exportOrientation">Ausrichtung</label><select id="exportOrientation"><option value="portrait">Hochformat</option><option value="landscape">Querformat</option></select></div>
+        <div class="field"><label for="exportOutput">Ausgabe</label><select id="exportOutput"><option value="pdf">PDF</option><option value="png">PNG</option></select></div>
+        <div class="field"><label for="exportPaper">Format</label><select id="exportPaper"><option value="a4">DIN A4</option><option value="a3">DIN A3</option><option value="square">Quadratisch</option><option value="ratio43">4:3</option></select></div>
+        <div id="exportOrientationField" class="field"><label for="exportOrientation">Ausrichtung</label><select id="exportOrientation"><option value="portrait">Hochformat</option><option value="landscape">Querformat</option></select></div>
         <div class="field"><label for="exportScale">Maßstab</label><select id="exportScale"><option value="500">1:500</option><option value="1000" selected>1:1000</option><option value="2000">1:2000</option></select></div>
-        <fieldset><legend>Dateiformate</legend><label><input id="exportPdf" type="checkbox" checked><span>Liegenschaftskarte (.pdf)</span></label><label><input id="exportDxf" type="checkbox"><span>Lageplan (.dxf)</span></label><label><input id="exportAerial" type="checkbox"><span>Luftbild (.jpg)</span></label></fieldset>
+        <fieldset><legend>Darstellung</legend><label><input id="exportLayout" type="checkbox" checked><span>Mit Layout</span></label><label><input id="exportHighlight" type="checkbox" checked><span>Auswahl hervorheben</span></label></fieldset>
+        <fieldset><legend>Zusätzlich</legend><label><input id="exportDxf" type="checkbox"><span>DXF exportieren</span></label></fieldset>
       </div>
       <footer>
         <div class="export-summary-row">
@@ -138,7 +141,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.12 2.12-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.04 1.56V20.3h-3v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-2.12-2.12.06-.06A1.7 1.7 0 0 0 7 15a1.7 1.7 0 0 0-1.56-1.04H5.3v-3h.14A1.7 1.7 0 0 0 7 9.92a1.7 1.7 0 0 0-.34-1.88L6.6 7.98l2.12-2.12.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 11.7 4.7v-.1h3v.1a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.12 2.12-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.56 1.04h.14v3h-.14A1.7 1.7 0 0 0 19.4 15Z"/></svg>
           </button>
         </div>
-        <button id="exportPreview" class="primary-action" type="button">Vorschau</button>
+        <button id="exportPreview" class="primary-action" type="button">Exportieren</button>
         <div id="exportStatus" class="export-status" aria-live="polite"></div>
       </footer>
     </aside>
@@ -147,6 +150,6 @@
   </main>
 
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js"></script>
-  <script type="module" src="/viewer-assets/deutschland-v2/planer-v2/app.js?v=20260711-free-available1"></script>
+  <script type="module" src="/viewer-assets/deutschland-v2/planer-v2/app.js?v=20260711-composed-export2"></script>
 </body>
 </html>

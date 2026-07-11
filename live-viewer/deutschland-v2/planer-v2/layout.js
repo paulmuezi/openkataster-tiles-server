@@ -42,12 +42,10 @@ export function createLayout({ app, map, store, elements }) {
     if (activeTool === 'export') {
       if (!sidebarOpen) {
         sidebarOpen = true;
-        nextTool = 'export';
-      } else if (current.activeTool !== 'export') {
-        nextTool = 'export';
+        nextTool = current.activeTool === 'none' ? 'export' : current.activeTool;
       } else {
         sidebarOpen = false;
-        nextTool = 'none';
+        nextTool = current.activeTool === 'export' ? 'none' : current.activeTool;
       }
     } else {
       nextTool = current.activeTool === activeTool ? 'none' : activeTool;

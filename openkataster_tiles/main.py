@@ -403,6 +403,11 @@ STATE_LABEL_POINTS = {
 
 _STATE_METADATA_CACHE: dict[str, object] = {"expires_at": 0.0, "states": []}
 LOCAL_STATE_METADATA = {
+    "baden-wurttemberg": {
+        "bundesland": "Baden-Württemberg",
+        "quellenvermerk": "Datenquelle: LGL, www.lgl-bw.de, dl-de/by-2-0",
+        "lizenz": "dl-de/by-2-0",
+    },
     "sachsen-anhalt": {
         "bundesland": "Sachsen-Anhalt",
         "datenstand": "01.06.2026",
@@ -527,25 +532,34 @@ def _state_metadata_slug(value: str) -> str:
     for source, target in replacements:
         normalized = normalized.replace(source, target)
     normalized = re.sub(r"[^a-z0-9-]+", "-", normalized)
-    return normalized.strip("-")
+    normalized = normalized.strip("-")
+    return {
+        # The first BW upload predates the umlaut-safe slug convention.
+        "baden-wuerttemberg": "baden-wurttemberg",
+    }.get(normalized, normalized)
 
 
 def _merge_local_state_metadata(states: list[dict]) -> list[dict]:
     merged = list(states)
     existing = {
-        _state_metadata_slug(str(state.get("bundesland") or state.get("state") or state.get("name") or ""))
+        _state_metadata_slug(str(state.get("bundesland") or state.get("state") or state.get("name") or "")): state
         for state in merged
     }
     for slug, metadata in LOCAL_STATE_METADATA.items():
-        if slug not in existing:
+        state = existing.get(slug)
+        if state is None:
             merged.append(dict(metadata))
+            continue
+        for field, value in metadata.items():
+            if not state.get(field):
+                state[field] = value
     return merged
 
 
 def _state_metadata_cache() -> list[dict]:
     now = time.time()
     if _STATE_METADATA_CACHE["expires_at"] >= now:
-        return _STATE_METADATA_CACHE["states"]  # type: ignore[return-value]
+        return _merge_local_state_metadata(list(_STATE_METADATA_CACHE["states"]))  # type: ignore[arg-type]
 
     request = urllib.request.Request(
         STATE_METADATA_ENDPOINT,
@@ -555,23 +569,23 @@ def _state_metadata_cache() -> list[dict]:
     try:
         with urllib.request.urlopen(request, timeout=12) as response:
             if response.status != 200:
-                return _STATE_METADATA_CACHE["states"]  # type: ignore[return-value]
+                return _merge_local_state_metadata(list(_STATE_METADATA_CACHE["states"]))  # type: ignore[arg-type]
             payload = json.loads(response.read().decode("utf-8"))
             if isinstance(payload, dict):
                 states = payload.get("states", [])
             else:
                 states = payload
             if not isinstance(states, list):
-                return _STATE_METADATA_CACHE["states"]  # type: ignore[return-value]
+                return _merge_local_state_metadata(list(_STATE_METADATA_CACHE["states"]))  # type: ignore[arg-type]
             states = [state for state in states if isinstance(state, dict)]
             if not states:
-                return _STATE_METADATA_CACHE["states"]  # type: ignore[return-value]
+                return _merge_local_state_metadata(list(_STATE_METADATA_CACHE["states"]))  # type: ignore[arg-type]
             states = _merge_local_state_metadata(states)
             _STATE_METADATA_CACHE["states"] = states
             _STATE_METADATA_CACHE["expires_at"] = now + STATE_METADATA_CACHE_SECONDS
             return states
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError):
-        return _STATE_METADATA_CACHE["states"]  # type: ignore[return-value]
+        return _merge_local_state_metadata(list(_STATE_METADATA_CACHE["states"]))  # type: ignore[arg-type]
 
 
 def require_api_key(

@@ -10,12 +10,12 @@ export function createMeasureController({ map, store, elements, finish }) {
     measurePanel, measureDistance, measureAngle, measureCumulative, measureArea
   } = elements;
   let points = [];
-  let completedMeasurements = [];
   let draft = null;
-  let completedMetrics = null;
   let cursorPoint = null;
   let snapped = false;
   let clickRevision = 0;
+  let hoverCandidate = null;
+  let hoverFrame = 0;
 
   function featureCollection(features = []) {
     return { type: 'FeatureCollection', features };
@@ -153,6 +153,10 @@ export function createMeasureController({ map, store, elements, finish }) {
     return workingPoints();
   }
 
+  function coordinateKey(coordinate) {
+    return `${Number(coordinate[0]).toFixed(9)},${Number(coordinate[1]).toFixed(9)}`;
+  }
+
   function orientation(a, b, c) {
     const value = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
     return Math.abs(value) < 1e-14 ? 0 : Math.sign(value);
@@ -194,6 +198,28 @@ export function createMeasureController({ map, store, elements, finish }) {
       }
     }
     return false;
+  }
+
+  function areaParts(coordinates) {
+    const closedRings = [];
+    let active = [];
+    let positions = new Map();
+    for (const coordinate of coordinates) {
+      const key = coordinateKey(coordinate);
+      const repeatedAt = positions.get(key);
+      if (repeatedAt !== undefined && active.length - repeatedAt >= 3) {
+        const ring = [...active.slice(repeatedAt), coordinate];
+        const core = ring.slice(0, -1);
+        if (!hasSelfIntersection(core, true)) closedRings.push(ring);
+        active = [coordinate];
+        positions = new Map([[key, 0]]);
+        continue;
+      }
+      if (repeatedAt === undefined) positions.set(key, active.length);
+      active.push(coordinate);
+    }
+    const activeRing = active.length >= 3 && !hasSelfIntersection(active, true) ? [...active, active[0]] : null;
+    return { closedRings, activeRing };
   }
 
   function planarDelta(start, end) {
@@ -245,12 +271,15 @@ export function createMeasureController({ map, store, elements, finish }) {
     const currentDistance = working.length >= 2 ? haversineMeters(working[working.length - 2], working[working.length - 1]) : 0;
     const cumulative = line.slice(1).reduce((sum, point, index) => sum + haversineMeters(line[index], point), 0);
     const angle = angleValue(working);
+    const parts = areaParts(working);
+    const area = [...parts.closedRings, ...(parts.activeRing ? [parts.activeRing] : [])]
+      .reduce((sum, ring) => sum + polygonAreaMeters(ring.slice(0, -1)), 0);
     return {
       distance: formatDistance(currentDistance),
       cumulative: formatDistance(cumulative),
       angleLabel: angle.label,
       angle: `${angle.value.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}°`,
-      area: working.length >= 3 && !hasSelfIntersection(working, true) ? formatArea(polygonAreaMeters(working)) : '–'
+      area: area > 0 ? formatArea(area) : '–'
     };
   }
 
@@ -264,50 +293,40 @@ export function createMeasureController({ map, store, elements, finish }) {
 
   function render() {
     const active = store.getState().activeTool === 'measure';
-    measurePanel.hidden = !active || (!points.length && !completedMetrics);
+    measurePanel.hidden = !active || !points.length;
     if (!map.getSource('measure-v2')) return;
     const working = workingPoints();
     const line = lineCoordinates();
     const features = [];
-    for (const measurement of completedMeasurements) {
-      const closedLine = [...measurement.points, measurement.points[0]];
-      features.push({ type: 'Feature', properties: { kind: 'area' }, geometry: { type: 'Polygon', coordinates: [closedLine] } });
-      features.push({ type: 'Feature', properties: { kind: 'line' }, geometry: { type: 'LineString', coordinates: closedLine } });
-      measurement.points.forEach((coordinates, index) => features.push({
-        type: 'Feature', properties: { kind: index === 0 ? 'start' : 'point' }, geometry: { type: 'Point', coordinates }
-      }));
-    }
     points.forEach((coordinates, index) => features.push({
       type: 'Feature', properties: { kind: index === 0 ? 'start' : 'point' }, geometry: { type: 'Point', coordinates }
     }));
     if (line.length >= 2) features.unshift({ type: 'Feature', properties: { kind: 'line' }, geometry: { type: 'LineString', coordinates: line } });
-    if (working.length >= 3 && !hasSelfIntersection(working, true)) {
-      features.unshift({ type: 'Feature', properties: { kind: 'area' }, geometry: { type: 'Polygon', coordinates: [[...working, working[0]]] } });
+    const parts = areaParts(working);
+    for (const ring of [...parts.closedRings, ...(parts.activeRing ? [parts.activeRing] : [])]) {
+      features.unshift({ type: 'Feature', properties: { kind: 'area' }, geometry: { type: 'Polygon', coordinates: [ring] } });
     }
     map.getSource('measure-v2').setData(featureCollection(features));
 
-    showMetrics(completedMetrics || metricsFor(working, line));
+    showMetrics(metricsFor(working, line));
     measurePanel.dataset.snapped = snapped ? 'true' : 'false';
     positionPanel();
   }
 
   function clear() {
     points = [];
-    completedMeasurements = [];
     draft = null;
-    completedMetrics = null;
     snapped = false;
     clickRevision += 1;
+    hoverCandidate = null;
+    if (hoverFrame) window.cancelAnimationFrame(hoverFrame);
+    hoverFrame = 0;
     setSnapIndicator(null);
     render();
   }
 
   function undo() {
-    if (points.length) points.pop();
-    else if (completedMeasurements.length) {
-      completedMeasurements.pop();
-      completedMetrics = completedMeasurements.at(-1)?.metrics || null;
-    } else completedMetrics = null;
+    points.pop();
     draft = null;
     setSnapIndicator(null);
     render();
@@ -317,7 +336,6 @@ export function createMeasureController({ map, store, elements, finish }) {
   map.on('click', (event) => {
     if (store.getState().activeTool !== 'measure') return;
     cursorPoint = event.point;
-    completedMetrics = null;
 
     if (!points.length) {
       const revision = ++clickRevision;
@@ -327,11 +345,15 @@ export function createMeasureController({ map, store, elements, finish }) {
         lngLat: { lng: event.lngLat.lng, lat: event.lngLat.lat },
         originalEvent: event.originalEvent
       };
-      points = [fallback];
+      const hovered = hoverCandidate && Math.hypot(hoverCandidate.point.x - event.point.x, hoverCandidate.point.y - event.point.y) <= 4
+        ? hoverCandidate
+        : null;
+      points = [hovered?.coordinate || fallback];
       draft = null;
-      snapped = false;
-      setSnapIndicator(fallback);
+      snapped = Boolean(hovered?.snapped);
+      setSnapIndicator(points[0]);
       render();
+      if (hovered) return;
       window.requestAnimationFrame(() => window.setTimeout(() => {
         if (revision !== clickRevision || store.getState().activeTool !== 'measure' || points.length !== 1) return;
         const candidate = nearestSnap(snapEvent);
@@ -345,18 +367,10 @@ export function createMeasureController({ map, store, elements, finish }) {
 
     const candidate = nearestSnap(event);
     const coordinate = candidate.coordinate;
-    if (points.length >= 3 && haversineMeters(points[0], coordinate) < .05 && !hasSelfIntersection(points, true)) {
-      const closedLine = [...points, points[0]];
-      completedMetrics = metricsFor(points, closedLine);
-      completedMeasurements.push({ points: [...points], metrics: completedMetrics });
-      points = [];
-      clickRevision += 1;
-      snapped = false;
-      setSnapIndicator(null);
-    } else if (!points.length || haversineMeters(points[points.length - 1], coordinate) >= .03) {
+    if (haversineMeters(points[points.length - 1], coordinate) >= .03) {
       points.push(coordinate);
       snapped = candidate.snapped;
-      setSnapIndicator(candidate.snapped ? coordinate : null);
+      setSnapIndicator(coordinate);
     }
     draft = null;
     render();
@@ -365,19 +379,34 @@ export function createMeasureController({ map, store, elements, finish }) {
     if (store.getState().activeTool !== 'measure') return;
     cursorPoint = event.point;
     if (!points.length) {
-      positionPanel();
+      const hoverEvent = {
+        point: { x: event.point.x, y: event.point.y },
+        lngLat: { lng: event.lngLat.lng, lat: event.lngLat.lat },
+        originalEvent: event.originalEvent
+      };
+      if (hoverFrame) window.cancelAnimationFrame(hoverFrame);
+      hoverFrame = window.requestAnimationFrame(() => {
+        hoverFrame = 0;
+        const candidate = nearestSnap(hoverEvent);
+        hoverCandidate = { ...candidate, point: hoverEvent.point };
+        snapped = candidate.snapped;
+        setSnapIndicator(candidate.coordinate);
+      });
       return;
     }
     const candidate = nearestSnap(event);
     draft = candidate.coordinate;
     snapped = candidate.snapped;
-    setSnapIndicator(candidate.snapped ? draft : null);
+    setSnapIndicator(draft);
     render();
   });
   map.on('mouseout', () => {
     if (store.getState().activeTool !== 'measure') return;
     draft = null;
     snapped = false;
+    hoverCandidate = null;
+    if (hoverFrame) window.cancelAnimationFrame(hoverFrame);
+    hoverFrame = 0;
     setSnapIndicator(null);
     render();
   });

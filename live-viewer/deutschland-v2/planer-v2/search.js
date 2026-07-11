@@ -4,7 +4,7 @@ export function createSearchController({ map, api, store, elements, selection })
   const {
     searchButton, searchPanel, searchClose, searchMode, addressFields, parcelFields,
     placeInput, streetInput, houseInput, gemarkungInput, flurInput, parcelInput,
-    placeSuggestions, streetSuggestions, gemarkungSuggestions, searchResults, searchStatus
+    placeSuggestions, streetSuggestions, gemarkungSuggestions, searchSubmit, searchResults, searchStatus
   } = elements;
   let searchRequest = null;
   let placeRequest = null;
@@ -27,9 +27,10 @@ export function createSearchController({ map, api, store, elements, selection })
   }
 
   function setBusy(busy, message = '') {
+    searchSubmit.disabled = busy;
+    searchSubmit.classList.toggle('is-loading', busy);
     searchStatus.hidden = !message;
     searchStatus.textContent = message;
-    searchPanel.classList.toggle('is-loading', busy);
   }
 
   function clearResults() {
@@ -71,7 +72,12 @@ export function createSearchController({ map, api, store, elements, selection })
     try {
       const data = await api.suggestPlaces(query, placeRequest.signal);
       if (document.activeElement !== placeInput || placeInput.value.trim() !== query) return;
-      renderSuggestions(placeSuggestions, data.results || []);
+      renderSuggestions(placeSuggestions, data.results || [], (result) => {
+        placeInput.value = result.value || result.label || '';
+        selectedPlaceState = result.state || '';
+        clearSuggestions();
+        streetInput.focus();
+      });
     } catch (error) { if (error.name !== 'AbortError') console.warn(error); }
   }, 80);
 
@@ -84,7 +90,12 @@ export function createSearchController({ map, api, store, elements, selection })
     try {
       const data = await api.suggestStreets(place, query, selectedPlaceState, streetRequest.signal);
       if (document.activeElement !== streetInput || streetInput.value.trim() !== query) return;
-      renderSuggestions(streetSuggestions, data.results || []);
+      renderSuggestions(streetSuggestions, data.results || [], (result) => {
+        streetInput.value = result.value || result.label || '';
+        selectedPlaceState = result.state || selectedPlaceState;
+        clearSuggestions();
+        houseInput.focus();
+      });
     } catch (error) { if (error.name !== 'AbortError') console.warn(error); }
   }, 80);
 
@@ -107,14 +118,6 @@ export function createSearchController({ map, api, store, elements, selection })
       });
     } catch (error) { if (error.name !== 'AbortError') console.warn(error); }
   }, 80);
-
-  const scheduleAddressSearch = debounce(() => {
-    if (searchMode.value === 'address' && placeInput.value.trim() && streetInput.value.trim() && houseInput.value.trim()) submit();
-  }, 160);
-
-  const scheduleParcelSearch = debounce(() => {
-    if (searchMode.value === 'parcel' && gemarkungInput.value.trim() && flurInput.value.trim() && parcelInput.value.trim()) submit();
-  }, 160);
 
   async function submit() {
     clearSuggestions();
@@ -172,16 +175,13 @@ export function createSearchController({ map, api, store, elements, selection })
     clearSuggestions();
     const place = placeInput.value.trim();
     const street = streetInput.value.trim();
-    const houseNumber = houseInput.value.trim();
-    if (place && street && houseNumber) scheduleAddressSearch();
-    else if (place && street) suggestStreets();
-    else if (place) suggestPlaces();
+    if (place && street && !houseInput.value.trim()) suggestStreets();
+    else if (place && !street) suggestPlaces();
   }
 
   function handleParcelInput() {
     clearSuggestions();
-    if (gemarkungInput.value.trim() && flurInput.value.trim() && parcelInput.value.trim()) scheduleParcelSearch();
-    else if (document.activeElement === gemarkungInput) suggestGemarkungen();
+    if (document.activeElement === gemarkungInput) suggestGemarkungen();
   }
 
   searchButton.addEventListener('click', () => setOpen(searchPanel.hidden));
@@ -193,6 +193,7 @@ export function createSearchController({ map, api, store, elements, selection })
   gemarkungInput.addEventListener('input', handleParcelInput);
   flurInput.addEventListener('input', handleParcelInput);
   parcelInput.addEventListener('input', handleParcelInput);
+  searchSubmit.addEventListener('click', submit);
   for (const input of [placeInput, streetInput, houseInput, gemarkungInput, flurInput, parcelInput]) {
     input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); submit(); } });
   }

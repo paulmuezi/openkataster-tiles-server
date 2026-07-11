@@ -1,6 +1,6 @@
 export function createPlannerMap({ container, savedView }) {
   const hashView = parseHashView(window.location.hash);
-  const view = hashView || savedView || { lng: 10.45, lat: 51.16, zoom: 4.45 };
+  const view = hashView || savedView || { lng: 10.45, lat: 51.16, zoom: 4.05 };
   const map = new maplibregl.Map({
     container,
     style: '/viewer-assets/deutschland-v2/bkg-style.json?v=20260710-planer-v2-1',
@@ -8,9 +8,8 @@ export function createPlannerMap({ container, savedView }) {
     zoom: view.zoom,
     bearing: 0,
     pitch: 0,
-    minZoom: 3.8,
+    minZoom: 3.2,
     maxZoom: 20,
-    maxBounds: [[2.8, 45.0], [17.8, 57.2]],
     hash: true,
     attributionControl: false,
     dragRotate: false,

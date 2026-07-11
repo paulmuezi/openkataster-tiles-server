@@ -56,7 +56,14 @@ export function createLayerController({ map, store, elements }) {
     const add = (layer) => map.addLayer(layer, before);
     add({ id: 'alkis-surface-fills', type: 'fill', source: SOURCE_ID, 'source-layer': 'surfaces', minzoom: DETAIL_ZOOM,
       filter: ['all', ['!=', ['get', 'theme_index'], 0], ['!=', ['get', 'thema'], 'Verkehr']],
-      paint: { 'fill-color': ['coalesce', ['get', 'fill_color'], 'rgba(0,0,0,0)'], 'fill-opacity': 1 } });
+      paint: { 'fill-color': ['case',
+        ['has', 'fill_color'], ['get', 'fill_color'],
+        ['==', ['get', 'thema'], 'Wohnbauflächen'], '#FFEAF4',
+        ['==', ['get', 'thema'], 'Vegetation'], '#EAFFD3',
+        ['==', ['get', 'thema'], 'Gewässer'], '#DCEFFF',
+        ['==', ['get', 'thema'], 'Sport und Freizeit'], '#E0FFD8',
+        ['==', ['get', 'thema'], 'Industrie und Gewerbe'], '#EDEDED',
+        'rgba(0,0,0,0)'], 'fill-opacity': 1 } });
     add({ id: 'alkis-traffic-surface-fills', type: 'fill', source: SOURCE_ID, 'source-layer': 'surfaces', minzoom: DETAIL_ZOOM,
       filter: ['all', ['==', ['get', 'thema'], 'Verkehr'], ['any', ['!', ['has', 'z_index']], ['<', ['to-number', ['get', 'z_index']], 400]]],
       paint: { 'fill-color': '#ffffff', 'fill-opacity': 1 } });
@@ -64,7 +71,7 @@ export function createLayerController({ map, store, elements }) {
       paint: { 'line-color': ['coalesce', ['get', 'stroke_color'], '#888888'], 'line-width': ['interpolate', ['linear'], ['zoom'], 17, .35, 20, 1.15], 'line-opacity': .72 } });
     add({ id: 'alkis-building-fills', type: 'fill', source: SOURCE_ID, 'source-layer': 'building_fills', minzoom: DETAIL_ZOOM,
       filter: ['!=', ['get', 'render_fill_role'], 'underground'],
-      paint: { 'fill-color': ['coalesce', ['get', 'fill_color'], '#a7a7a7'], 'fill-opacity': 1 } });
+      paint: { 'fill-color': ['coalesce', ['get', 'fill_color'], '#CCCCCC'], 'fill-opacity': 1 } });
     add({ id: 'alkis-parcel-lines', type: 'line', source: SOURCE_ID, 'source-layer': 'parcel_outline_lines', minzoom: DETAIL_ZOOM,
       paint: { 'line-color': '#36383c', 'line-width': ['interpolate', ['linear'], ['zoom'], 17, .5, 20, 1.15], 'line-opacity': .82 } });
     add({ id: 'alkis-building-lines', type: 'line', source: SOURCE_ID, 'source-layer': 'building_lines', minzoom: DETAIL_ZOOM,
@@ -91,6 +98,15 @@ export function createLayerController({ map, store, elements }) {
         'text-size': ['interpolate', ['linear'], ['zoom'], 17, baseSize, 19, baseSize + 2, 20, baseSize + 4],
         'text-rotation-alignment': 'map',
         'text-rotate': ['*', -1, ['coalesce', ['to-number', ['get', 'render_rotation']], 0]],
+        'text-anchor': ['match', ['get', 'render_anchor'],
+          'top', 'top', 'bottom', 'bottom', 'left', 'left', 'right', 'right',
+          'top-left', 'top-left', 'top-right', 'top-right',
+          'bottom-left', 'bottom-left', 'bottom-right', 'bottom-right', 'center'],
+        'text-justify': ['match', ['get', 'render_justify'], 'left', 'left', 'right', 'right', 'center'],
+        'text-offset': ['case',
+          ['all', ['==', ['get', 'signaturnummer'], '4115'], ['==', ['get', 'render_anchor'], 'bottom']], ['literal', [0, -0.22]],
+          ['all', ['==', ['get', 'signaturnummer'], '4115'], ['==', ['get', 'render_anchor'], 'top']], ['literal', [0, 0.22]],
+          ['literal', [0, 0]]],
         'text-allow-overlap': true,
         'text-ignore-placement': true
       },
@@ -148,7 +164,7 @@ export function createLayerController({ map, store, elements }) {
       for (const id of ids) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
     }
     if (map.getLayer('alkis-building-fills')) {
-      map.setPaintProperty('alkis-building-fills', 'fill-color', layers.buildingUsage ? ['coalesce', ['get', 'fill_color'], '#a7a7a7'] : '#a7a7a7');
+      map.setPaintProperty('alkis-building-fills', 'fill-color', layers.buildingUsage ? ['coalesce', ['get', 'fill_color'], '#CCCCCC'] : '#CCCCCC');
       map.setPaintProperty('alkis-building-fills', 'fill-opacity', detail && layers.aerial ? .36 : 1);
     }
     for (const id of ['alkis-surface-fills', 'alkis-traffic-surface-fills']) {

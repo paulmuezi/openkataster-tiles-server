@@ -105,8 +105,8 @@ export function createLayerController({ map, store, elements }) {
           'bottom-left', 'bottom-left', 'bottom-right', 'bottom-right', 'center'],
         'text-justify': ['match', ['get', 'render_justify'], 'left', 'left', 'right', 'right', 'center'],
         'text-offset': ['case',
-          ['all', ['==', ['get', 'signaturnummer'], '4115'], ['==', ['get', 'render_anchor'], 'bottom']], ['literal', [0, -0.08]],
-          ['all', ['==', ['get', 'signaturnummer'], '4115'], ['==', ['get', 'render_anchor'], 'top']], ['literal', [0, 0.08]],
+          ['all', ['==', ['get', 'signaturnummer'], '4115'], ['==', ['get', 'render_anchor'], 'bottom']], ['literal', [0, -0.02]],
+          ['all', ['==', ['get', 'signaturnummer'], '4115'], ['==', ['get', 'render_anchor'], 'top']], ['literal', [0, 0.02]],
           ['literal', [0, 0]]],
         'text-allow-overlap': true,
         'text-ignore-placement': true

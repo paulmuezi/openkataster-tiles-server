@@ -254,8 +254,8 @@ export function createMeasureController({ map, store, elements, finish }) {
     const working = workingPoints();
     const line = lineCoordinates();
     const features = [];
-    points.forEach((coordinates, index) => features.push({
-      type: 'Feature', properties: { kind: index === 0 ? 'start' : 'point' }, geometry: { type: 'Point', coordinates }
+    points.forEach((coordinates) => features.push({
+      type: 'Feature', properties: { kind: 'point' }, geometry: { type: 'Point', coordinates }
     }));
     if (line.length >= 2) features.unshift({ type: 'Feature', properties: { kind: 'line' }, geometry: { type: 'LineString', coordinates: line } });
     const parts = areaParts(working);
@@ -307,7 +307,7 @@ export function createMeasureController({ map, store, elements, finish }) {
       points = [hovered?.coordinate || fallback];
       draft = null;
       snapped = Boolean(hovered?.snapped);
-      setSnapIndicator(points[0]);
+      setSnapIndicator(null);
       render();
       if (hovered) return;
       window.requestAnimationFrame(() => window.setTimeout(() => {
@@ -315,7 +315,7 @@ export function createMeasureController({ map, store, elements, finish }) {
         const candidate = nearestSnap(snapEvent);
         points[0] = candidate.coordinate;
         snapped = candidate.snapped;
-        setSnapIndicator(candidate.coordinate);
+        setSnapIndicator(null);
         render();
       }, 0));
       return;
@@ -326,7 +326,7 @@ export function createMeasureController({ map, store, elements, finish }) {
     if (haversineMeters(points[points.length - 1], coordinate) >= .03) {
       points.push(coordinate);
       snapped = candidate.snapped;
-      setSnapIndicator(coordinate);
+      setSnapIndicator(null);
     }
     draft = null;
     render();

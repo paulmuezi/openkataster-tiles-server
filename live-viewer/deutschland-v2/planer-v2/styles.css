@@ -196,6 +196,8 @@ table { width: 100%; min-width: 760px; border-collapse: collapse; table-layout: 
 th, td { padding: 8px 13px; border-bottom: 1px solid var(--ok-border-soft); text-align: left; vertical-align: top; }
 th { position: sticky; top: 0; z-index: 1; background: #fbfaf8; color: #66707d; font-weight: 550; }
 td.strong { font-weight: 600; }
+tfoot td { border-top: 1px solid var(--ok-border); border-bottom: 0; background: #fbfaf8; }
+tfoot .summary-label, tfoot .summary-value { font-weight: 600; color: #343a43; }
 .address-chip { display: block; }
 
 .export-sidebar { width: var(--sidebar-open); min-width: var(--sidebar-open); height: 100%; border-left: 1px solid var(--ok-border); background: #fff; display: grid; grid-template-rows: 58px minmax(0,1fr) auto; overflow: hidden; opacity: 0; transform: translateX(12px); visibility: hidden; transition: opacity var(--motion-duration) var(--motion-easing), transform var(--motion-duration) var(--motion-easing), visibility 0s linear var(--motion-duration); }

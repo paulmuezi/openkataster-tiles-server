@@ -225,7 +225,14 @@ export function createSelectionController({ map, api, store, layout, elements })
       const content = column.html ? column.html(item, value) : formatCell(value, column.format);
       return `<td${column.strong ? ' class="strong"' : ''}>${content}</td>`;
     }).join('')}</tr>`).join('');
-    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div></section>`;
+    const hasTotals = columns.some((column) => column.sum);
+    const totals = hasTotals ? `<tfoot><tr>${columns.map((column, index) => {
+      if (index === 0) return '<td class="summary-label">Summe</td>';
+      if (!column.sum) return '<td></td>';
+      const values = items.map((item) => Number(columnValue(column, item))).filter(Number.isFinite);
+      return `<td class="summary-value">${values.length ? formatCell(values.reduce((sum, value) => sum + value, 0), column.format) : '–'}</td>`;
+    }).join('')}</tr></tfoot>` : '';
+    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody>${totals}</table></div></section>`;
   }
 
   function buildingTable(buildings) {
@@ -239,9 +246,9 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Dachgeschossausbau', keys: ['dachgeschossausbau_text', 'dachgeschossausbau'] },
       { label: 'Bauweise', keys: ['bauweise_text', 'bauweise'] },
       { label: 'Baujahr', keys: ['baujahr'] },
-      { label: 'Grundfläche', keys: ['grundflaeche_m2'], format: 'area' },
-      { label: 'Geschossfläche', keys: ['geschossflaeche_m2'], format: 'area' },
-      { label: 'Geometrische Fläche', keys: ['geometrische_flaeche_m2'], value: (item) => item.geometrische_flaeche_m2 || geometryArea(item.geometry), format: 'area' },
+      { label: 'Grundfläche', keys: ['grundflaeche_m2'], format: 'area', sum: true },
+      { label: 'Geschossfläche', keys: ['geschossflaeche_m2'], format: 'area', sum: true },
+      { label: 'Geometrische Fläche', keys: ['geometrische_flaeche_m2'], value: (item) => item.geometrische_flaeche_m2 || geometryArea(item.geometry), format: 'area', sum: true },
       { label: 'Umbauter Raum', keys: ['umbauter_raum_m3'], format: 'volume' },
       { label: 'Objekthöhe', keys: ['objekthoehe_m'], format: 'length' },
       { label: 'Lage', keys: ['lage_zur_erdoberflaeche_text', 'lage_zur_erdoberflaeche'] },
@@ -259,7 +266,7 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], value: (item) => item.gemarkung && item.gemarkungsnummer ? `${item.gemarkung} (${item.gemarkungsnummer})` : item.gemarkung || item.gemarkungsnummer },
       { label: 'Flur', keys: ['flur'] },
       { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], value: (item) => item.flurstueck || [item.zaehler, item.nenner].filter(Boolean).join('/'), strong: true },
-      { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'], format: 'area' },
+      { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'], format: 'area', sum: true },
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'], value: parcelUsage },
       { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
       { label: 'Flurstücksfolge', keys: ['flurstuecksfolge'] },

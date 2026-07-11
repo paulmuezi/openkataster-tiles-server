@@ -247,11 +247,19 @@ export function createMeasureController({ map, store, elements, finish }) {
     measureArea.textContent = metrics.area;
   }
 
+  function showLockedMetrics() {
+    measureDistance.textContent = '–';
+    measureAngle.textContent = '–';
+    measureCumulative.textContent = '–';
+    measureArea.textContent = '–';
+  }
+
   function render() {
     const active = store.getState().activeTool === 'measure';
+    const pro = store.getState().access.pro;
     measurePanel.hidden = !active || !points.length;
-    measureValues.hidden = !store.getState().access.pro;
-    measureLocked.hidden = store.getState().access.pro;
+    measureValues.hidden = false;
+    measureLocked.hidden = pro;
     if (!map.getSource('measure-v2')) return;
     const working = workingPoints();
     const line = lineCoordinates();
@@ -266,7 +274,8 @@ export function createMeasureController({ map, store, elements, finish }) {
     }
     map.getSource('measure-v2').setData(featureCollection(features));
 
-    showMetrics(metricsFor(working, line));
+    if (pro) showMetrics(metricsFor(working, line));
+    else showLockedMetrics();
     measurePanel.dataset.snapped = snapped ? 'true' : 'false';
     positionPanel();
   }

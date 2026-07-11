@@ -125,10 +125,52 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function freePreviewTable(buildings, parcels) {
     const sections = [];
-    if (buildings.length) sections.push('<section class="selection-section"><div class="selection-section-title">Gebäude</div></section>');
-    if (parcels.length) sections.push('<section class="selection-section"><div class="selection-section-title">Flurstücke</div></section>');
+    if (buildings.length) sections.push(lockedPreviewTable('Gebäude', buildings, [
+      { label: 'Gebäudefunktion', keys: ['gebaeudefunktion_text', 'gebaeudefunktion'] },
+      { label: 'Name', keys: ['name'] },
+      { label: 'Vollgeschosse', keys: ['geschosse_oberirdisch'] },
+      { label: 'Unterirdische Geschosse', keys: ['geschosse_unterirdisch'] },
+      { label: 'Dachform', keys: ['dachform_text', 'dachform'] },
+      { label: 'Dachart', keys: ['dachart'] },
+      { label: 'Dachgeschossausbau', keys: ['dachgeschossausbau_text', 'dachgeschossausbau'] },
+      { label: 'Bauweise', keys: ['bauweise_text', 'bauweise'] },
+      { label: 'Baujahr', keys: ['baujahr'] },
+      { label: 'Grundfläche', keys: ['grundflaeche_m2'] },
+      { label: 'Geschossfläche', keys: ['geschossflaeche_m2'] },
+      { label: 'Geometrische Fläche', keys: ['geometrische_flaeche_m2'] },
+      { label: 'Umbauter Raum', keys: ['umbauter_raum_m3'] },
+      { label: 'Objekthöhe', keys: ['objekthoehe_m'] },
+      { label: 'Lage', keys: ['lage_zur_erdoberflaeche_text', 'lage_zur_erdoberflaeche'] },
+      { label: 'Hochhaus', keys: ['hochhaus'] },
+      { label: 'Weitere Gebäudefunktion', keys: ['weitere_gebaeudefunktion_text', 'weitere_gebaeudefunktion'] },
+      { label: 'Zustand', keys: ['zustand_text', 'zustand'] },
+      { label: 'Adressen', keys: ['addresses', 'address'] }
+    ]));
+    if (parcels.length) sections.push(lockedPreviewTable('Flurstücke', parcels, [
+      { label: 'Gem.-Schl.', keys: ['gemarkungsschluessel', 'gemarkung_key'] },
+      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'] },
+      { label: 'Flur', keys: ['flur'] },
+      { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'] },
+      { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] },
+      { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'] },
+      { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
+      { label: 'Flurstücksfolge', keys: ['flurstuecksfolge'] },
+      { label: 'Abweichender Rechtszustand', keys: ['abweichender_rechtszustand'] },
+      { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'] },
+      { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'] },
+      { label: 'Adressen', keys: ['addresses', 'address'] },
+      { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'] }
+    ]));
     if (!sections.length) return '';
     return `${sections.join('')}<div class="selection-pro-lock"><span>Objektinformationen sind in Pro verfügbar.</span><a href="/pro" target="_top">Pro buchen</a></div>`;
+  }
+
+  function lockedPreviewTable(title, items, definitions) {
+    const available = new Set(items.flatMap((item) => item.available_fields || []));
+    const columns = definitions.filter((column) => column.keys.some((key) => available.has(key)));
+    const headers = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('');
+    const cells = columns.map(() => '<td><span class="locked-cell">–</span></td>').join('');
+    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="preview-table"><thead><tr>${headers}</tr></thead><tbody><tr>${cells}</tr></tbody></table></div></section>`;
   }
 
   function display(value) {

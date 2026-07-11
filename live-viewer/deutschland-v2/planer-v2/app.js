@@ -3,10 +3,10 @@ import { createExportController } from './export.js?v=20260711-layout-stability1
 import { createLayerController } from './layers.js?v=20260711-parcel-spacing1';
 import { createLayout } from './layout.js?v=20260711-independent-export1';
 import { createPlannerMap } from './map.js?v=20260711-north-up1';
-import { createMeasureController } from './measure.js?v=20260711-free-preview1';
+import { createMeasureController } from './measure.js?v=20260711-free-columns1';
 import { createPersistence, readPersistedState } from './persistence.js';
 import { createSearchController } from './search.js?v=20260711-search-highlight1';
-import { createSelectionController } from './selection.js?v=20260711-free-preview1';
+import { createSelectionController } from './selection.js?v=20260711-free-available1';
 import { createSourceController } from './sources.js?v=20260711-inline-sources1';
 import { createStore } from './store.js';
 

@@ -153,6 +153,49 @@ export function createMeasureController({ map, store, elements, finish }) {
     return workingPoints();
   }
 
+  function orientation(a, b, c) {
+    const value = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    return Math.abs(value) < 1e-14 ? 0 : Math.sign(value);
+  }
+
+  function pointOnSegment(point, start, end) {
+    const epsilon = 1e-12;
+    return point[0] >= Math.min(start[0], end[0]) - epsilon
+      && point[0] <= Math.max(start[0], end[0]) + epsilon
+      && point[1] >= Math.min(start[1], end[1]) - epsilon
+      && point[1] <= Math.max(start[1], end[1]) + epsilon;
+  }
+
+  function segmentsIntersect(firstStart, firstEnd, secondStart, secondEnd) {
+    const firstA = orientation(firstStart, firstEnd, secondStart);
+    const firstB = orientation(firstStart, firstEnd, secondEnd);
+    const secondA = orientation(secondStart, secondEnd, firstStart);
+    const secondB = orientation(secondStart, secondEnd, firstEnd);
+    if (firstA !== firstB && secondA !== secondB) return true;
+    if (firstA === 0 && pointOnSegment(secondStart, firstStart, firstEnd)) return true;
+    if (firstB === 0 && pointOnSegment(secondEnd, firstStart, firstEnd)) return true;
+    if (secondA === 0 && pointOnSegment(firstStart, secondStart, secondEnd)) return true;
+    return secondB === 0 && pointOnSegment(firstEnd, secondStart, secondEnd);
+  }
+
+  function hasSelfIntersection(coordinates, closeRing = false) {
+    if (coordinates.length < 4 && !closeRing) return false;
+    const segments = [];
+    for (let index = 1; index < coordinates.length; index += 1) {
+      segments.push({ start: index - 1, end: index });
+    }
+    if (closeRing && coordinates.length >= 3) segments.push({ start: coordinates.length - 1, end: 0 });
+    for (let first = 0; first < segments.length; first += 1) {
+      for (let second = first + 1; second < segments.length; second += 1) {
+        const a = segments[first];
+        const b = segments[second];
+        if (a.start === b.start || a.start === b.end || a.end === b.start || a.end === b.end) continue;
+        if (segmentsIntersect(coordinates[a.start], coordinates[a.end], coordinates[b.start], coordinates[b.end])) return true;
+      }
+    }
+    return false;
+  }
+
   function planarDelta(start, end) {
     if (!start || !end) return { dx: 0, dy: 0, distance: 0, angle: 0 };
     const latitude = ((start[1] + end[1]) / 2) * Math.PI / 180;
@@ -207,7 +250,7 @@ export function createMeasureController({ map, store, elements, finish }) {
       cumulative: formatDistance(cumulative),
       angleLabel: angle.label,
       angle: `${angle.value.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}°`,
-      area: working.length >= 3 ? formatArea(polygonAreaMeters(working)) : '–'
+      area: working.length >= 3 && !hasSelfIntersection(working, true) ? formatArea(polygonAreaMeters(working)) : '–'
     };
   }
 
@@ -238,7 +281,9 @@ export function createMeasureController({ map, store, elements, finish }) {
       type: 'Feature', properties: { kind: index === 0 ? 'start' : 'point' }, geometry: { type: 'Point', coordinates }
     }));
     if (line.length >= 2) features.unshift({ type: 'Feature', properties: { kind: 'line' }, geometry: { type: 'LineString', coordinates: line } });
-    if (working.length >= 3) features.unshift({ type: 'Feature', properties: { kind: 'area' }, geometry: { type: 'Polygon', coordinates: [[...working, working[0]]] } });
+    if (working.length >= 3 && !hasSelfIntersection(working, true)) {
+      features.unshift({ type: 'Feature', properties: { kind: 'area' }, geometry: { type: 'Polygon', coordinates: [[...working, working[0]]] } });
+    }
     map.getSource('measure-v2').setData(featureCollection(features));
 
     showMetrics(completedMetrics || metricsFor(working, line));
@@ -300,7 +345,7 @@ export function createMeasureController({ map, store, elements, finish }) {
 
     const candidate = nearestSnap(event);
     const coordinate = candidate.coordinate;
-    if (points.length >= 3 && haversineMeters(points[0], coordinate) < .05) {
+    if (points.length >= 3 && haversineMeters(points[0], coordinate) < .05 && !hasSelfIntersection(points, true)) {
       const closedLine = [...points, points[0]];
       completedMetrics = metricsFor(points, closedLine);
       completedMeasurements.push({ points: [...points], metrics: completedMetrics });

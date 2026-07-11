@@ -160,6 +160,7 @@ export function createLayerController({ map, store, elements }) {
     const layers = state.layers;
     document.body.dataset.detailLayers = detail ? 'enabled' : 'disabled';
     if (layerZoomNote) layerZoomNote.hidden = detail;
+    if (layerMenu) layerMenu.dataset.detailUnavailable = detail ? 'false' : 'true';
     for (const [group, ids] of Object.entries(GROUPS)) {
       const visible = detail && layers.alkis && layers[group];
       for (const id of ids) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
@@ -176,7 +177,7 @@ export function createLayerController({ map, store, elements }) {
     setBasemapVisible(!detailBackground);
     for (const input of layerInputs) {
       input.checked = !!layers[input.dataset.layer];
-      input.disabled = !detail && input.dataset.layer !== 'alkis' && input.dataset.layer !== 'aerial';
+      input.disabled = !detail;
     }
   }
 

@@ -142,6 +142,13 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .layer-menu summary::-webkit-details-marker { display: none; }
 .layer-menu label { min-height: 30px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; }
 .layer-menu input { width: 14px; height: 14px; padding: 0; accent-color: var(--ok-orange); }
+.layer-menu[data-detail-unavailable="true"] > details,
+.layer-menu[data-detail-unavailable="true"] > .layer-single {
+  opacity: .42;
+  pointer-events: none;
+  user-select: none;
+}
+.layer-menu[data-detail-unavailable="true"] input { cursor: not-allowed; }
 .layer-subtree { margin-left: 9px; padding-left: 11px; border-left: 1px solid #e8e3dd; }
 .layer-subtree.nested { margin-left: 7px; }
 .layer-single { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--ok-border-soft); }

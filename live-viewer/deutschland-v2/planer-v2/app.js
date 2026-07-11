@@ -1,7 +1,7 @@
 import { createApi } from './api.js?v=20260711-search-highlight1';
 import { createExportController } from './export.js?v=20260711-export-contract1';
 import { createLayerController } from './layers.js';
-import { createLayout } from './layout.js?v=20260711-mobile-export1';
+import { createLayout } from './layout.js?v=20260711-mobile-sheet1';
 import { createPlannerMap } from './map.js';
 import { createMeasureController } from './measure.js';
 import { createPersistence, readPersistedState } from './persistence.js';
@@ -29,7 +29,7 @@ const store = createStore({
     sidebarOpen: !!saved?.layout?.sidebarOpen,
     tableOpen: !!saved?.layout?.tableOpen && !(mobileBoot && saved?.layout?.sidebarOpen),
     tableHeight: Number(saved?.layout?.tableHeight || 260),
-    mobileExportSettings: !!saved?.layout?.mobileExportSettings
+    mobileExportSettings: !!saved?.layout?.sidebarOpen && !!saved?.layout?.mobileExportSettings
   },
   layers: { ...defaultLayers, ...(saved?.layers || {}) },
   selection: { parcels: saved?.selection?.parcels || [], buildings: saved?.selection?.buildings || [], loading: false },
@@ -42,7 +42,7 @@ const elements = Object.fromEntries([
   'exportSidebar','selectionDock','exportTool','selectTool','measureTool','selectionResize','selectionClose','selectionContent','selectionCount',
   'layerButton','layerMenu','layerZoomNote','searchButton','searchPanel','searchClose','searchMode','addressFields','parcelFields','placeInput','streetInput','houseInput','gemarkungInput','flurInput','parcelInput','placeSuggestions','streetSuggestions','searchSubmit','searchResults','searchStatus',
   'measurePanel','measureDistance','measureArea','measureUndo','measureClear','sourceButton','sourcePanel','sourceList',
-  'exportFrame','exportFrameBox','exportCenterMarker','exportPaper','exportOrientation','exportScale','exportPdf','exportDxf','exportAerial','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings',
+  'exportFrame','exportFrameBox','exportCenterMarker','exportPaper','exportOrientation','exportScale','exportPdf','exportDxf','exportAerial','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings','mobileExportBackdrop',
   'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge'
 ].map((id) => [id, document.getElementById(id)]));
 elements.layerInputs = [...document.querySelectorAll('[data-layer]')];
@@ -61,6 +61,7 @@ elements.measureTool.addEventListener('click', () => requirePro('measure'));
 elements.exportTool.addEventListener('click', () => layout.setTool('export'));
 elements.exportClose.addEventListener('click', layout.closeExportPanel);
 elements.mobileExportSettings.addEventListener('click', layout.toggleMobileExportSettings);
+elements.mobileExportBackdrop.addEventListener('click', layout.closeMobileExportSettings);
 elements.selectionClose.addEventListener('click', selection.clear);
 elements.selectionResize.addEventListener('pointerdown', layout.beginTableResize);
 elements.noticeClose.addEventListener('click', () => store.setState({ notice: null }, 'notice'));

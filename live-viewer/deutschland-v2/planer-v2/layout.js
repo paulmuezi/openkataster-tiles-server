@@ -19,7 +19,8 @@ export function createLayout({ app, map, store, elements }) {
     selectTool.classList.toggle('is-active', activeTool === 'select');
     measureTool.classList.toggle('is-active', activeTool === 'measure');
     mobileExportSettings.setAttribute('aria-pressed', layout.mobileExportSettings ? 'true' : 'false');
-    if (reason !== 'boot') requestAnimationFrame(() => map.resize());
+    const mobileMapGeometryChanged = ['table', 'resize', 'restore'].includes(reason);
+    if (reason !== 'boot' && (!isMobile() || mobileMapGeometryChanged)) requestAnimationFrame(() => map.resize());
   }
 
   function setTool(activeTool) {
@@ -55,6 +56,14 @@ export function createLayout({ app, map, store, elements }) {
         tableOpen: isMobile() ? false : state.layout.tableOpen,
         mobileExportSettings: !state.layout.mobileExportSettings
       }
+    }, 'sidebar');
+  }
+
+  function closeMobileExportSettings() {
+    const state = store.getState();
+    if (!state.layout.mobileExportSettings) return;
+    store.setState({
+      layout: { ...state.layout, mobileExportSettings: false }
     }, 'sidebar');
   }
 
@@ -114,5 +123,5 @@ export function createLayout({ app, map, store, elements }) {
 
   store.subscribe(render);
   render(store.getState(), 'boot');
-  return { setTool, setSidebar, setTable, toggleMobileExportSettings, closeExportPanel, beginTableResize };
+  return { setTool, setSidebar, setTable, toggleMobileExportSettings, closeMobileExportSettings, closeExportPanel, beginTableResize };
 }

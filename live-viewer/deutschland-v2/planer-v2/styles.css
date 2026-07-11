@@ -316,6 +316,9 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
   .planner-app[data-sidebar-open="true"][data-table-open="true"] .selection-content { padding-bottom: var(--mobile-export-bar-height); }
   .maplibregl-ctrl-bottom-left, .source-control, .brand-mark, .zoom-badge { transition: bottom 220ms var(--motion-easing); }
   .search-panel { max-height: calc(100vh - 24px); overflow: auto; }
+  /* iOS Safari zooms the page when a focused form control is smaller than 16px. */
+  .search-panel input,
+  .search-panel select { font-size: 16px; }
   .measure-panel { left: 65px; right: 13px; width: auto; min-width: 0; }
   .layer-menu { max-height: 62vh; }
   .selection-head > div { display: grid; gap: 1px; }

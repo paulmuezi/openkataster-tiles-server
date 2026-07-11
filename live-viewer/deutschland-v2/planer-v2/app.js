@@ -14,6 +14,7 @@ const params = new URLSearchParams(window.location.search);
 const saved = readPersistedState();
 const mobileBoot = window.matchMedia('(max-width: 760px)').matches;
 const app = document.getElementById('plannerApp');
+const headerAccountLink = document.getElementById('headerAccountLink');
 const map = createPlannerMap({ container: document.getElementById('map'), savedView: saved?.view });
 window.__openKatasterPlannerMap = map;
 
@@ -96,6 +97,10 @@ const accessReady = api.session().then((session) => {
       layout: { ...state.layout, tableOpen: false }
     } : {})
   }, 'access');
+  if (session.authenticated) {
+    headerAccountLink.href = '/profile';
+    headerAccountLink.setAttribute('aria-label', 'Profil');
+  }
 }).catch((error) => {
   console.warn('Session konnte nicht geladen werden', error);
   const state = store.getState();

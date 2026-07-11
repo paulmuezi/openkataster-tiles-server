@@ -6,9 +6,19 @@
   <title>OpenKataster Planer</title>
   <link rel="icon" href="/viewer-assets/deutschland-v2/openkataster-logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.css">
-  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/planer-v2/styles.css?v=20260711-mobile-sheet1">
+  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/planer-v2/styles.css?v=20260711-site-ui1">
+  <script>document.documentElement.dataset.embed = new URLSearchParams(location.search).has('iframe') ? 'true' : 'false';</script>
 </head>
 <body>
+  <header class="site-header">
+    <a class="site-brand" href="/" aria-label="OpenKataster Startseite"><img src="/logo.svg" alt=""><span>OpenKataster</span></a>
+    <nav class="site-nav" aria-label="Konto">
+      <a id="headerProLink" class="site-pill site-pro" href="/pro">Pro</a>
+      <a id="headerAccountLink" class="site-account" href="/login" aria-label="Anmelden">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6"/></svg>
+      </a>
+    </nav>
+  </header>
   <main id="plannerApp" class="planner-app" data-ready="false" data-sidebar-open="false" data-table-open="false" data-active-tool="none" data-resizing="false" data-layout-transitioning="false">
     <section class="map-workspace" aria-label="OpenKataster Planer">
       <div id="mapPane" class="map-pane">
@@ -41,7 +51,7 @@
 
         <nav class="tool-stack" aria-label="Werkzeuge">
           <button id="selectTool" class="round-tool pro-tool" type="button" aria-label="Objektinformationen auswählen" aria-pressed="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 4.5h5M14.5 4.5h5v5M19.5 14.5v5h-5M9.5 19.5h-5v-5"/><path d="m9.2 9.8 5.9 11 1.2-4.8 4.4-1.6z"/></svg><span class="pro-badge">Pro</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><path class="selection-pointer" d="m10.2 9.2.4 10.1 2.6-2.5 1.7 3.7 2.1-1-1.7-3.5 3.7-.7z"/></svg><span class="pro-badge">Pro</span>
           </button>
           <button id="measureTool" class="round-tool pro-tool" type="button" aria-label="Messen" aria-pressed="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h15M4 17h15M4 7v10M7 7v3M10 7v5M13 7v3M16 7v5"/><text x="9.8" y="16" text-anchor="middle">1</text><text x="15.8" y="16" text-anchor="middle">2</text></svg><span class="pro-badge">Pro</span>
@@ -133,6 +143,6 @@
   </main>
 
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js"></script>
-  <script type="module" src="/viewer-assets/deutschland-v2/planer-v2/app.js?v=20260711-zoom-table-tunnel1"></script>
+  <script type="module" src="/viewer-assets/deutschland-v2/planer-v2/app.js?v=20260711-site-ui1"></script>
 </body>
 </html>

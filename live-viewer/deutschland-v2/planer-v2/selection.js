@@ -3,6 +3,8 @@ import { addressLabel, escapeHtml, featureKey, formatArea, polygonAreaMeters } f
 export function createSelectionController({ map, api, store, layout, elements }) {
   const { selectionContent, selectionCount, selectTool, selectionDock } = elements;
   let request = null;
+  let geometryRequest = null;
+  let flashTimers = [];
   let clearGeneration = 0;
   let clearObserver = null;
 
@@ -14,8 +16,12 @@ export function createSelectionController({ map, api, store, layout, elements })
     if (map.getSource('selected-parcels-v2')) return;
     map.addSource('selected-parcels-v2', { type: 'geojson', data: featureCollection([]) });
     map.addSource('selected-buildings-v2', { type: 'geojson', data: featureCollection([]) });
+    map.addSource('search-highlight-parcels-v2', { type: 'geojson', data: featureCollection([]) });
+    map.addSource('search-highlight-buildings-v2', { type: 'geojson', data: featureCollection([]) });
     map.addLayer({ id: 'selected-parcels-v2', type: 'line', source: 'selected-parcels-v2', paint: { 'line-color': '#ed3c32', 'line-width': 2.4, 'line-dasharray': [2.5, 1.35] } });
     map.addLayer({ id: 'selected-buildings-v2', type: 'line', source: 'selected-buildings-v2', paint: { 'line-color': '#ed3c32', 'line-width': 2.8 } });
+    map.addLayer({ id: 'search-highlight-parcels-v2', type: 'line', source: 'search-highlight-parcels-v2', paint: { 'line-color': '#ed3c32', 'line-width': 2.4, 'line-dasharray': [2.5, 1.35], 'line-opacity': 0 } });
+    map.addLayer({ id: 'search-highlight-buildings-v2', type: 'line', source: 'search-highlight-buildings-v2', paint: { 'line-color': '#ed3c32', 'line-width': 2.8, 'line-opacity': 0 } });
   }
 
   function updateSources() {
@@ -116,6 +122,37 @@ export function createSelectionController({ map, api, store, layout, elements })
     }
   }
 
+  async function flash(result, preferredKind) {
+    const feature = result?.feature || {};
+    const sourceDb = feature.source_db || result?.source_db;
+    const gmlId = feature.gml_id || result?.gml_id;
+    if (!sourceDb || !gmlId) return;
+    geometryRequest?.abort();
+    geometryRequest = new AbortController();
+    for (const timer of flashTimers) window.clearTimeout(timer);
+    flashTimers = [];
+    try {
+      const geometry = await api.featureGeometry({ state: result.state || '', sourceDb, gmlId, kind: preferredKind || result.kind || '' }, geometryRequest.signal);
+      const kind = geometry.kind === 'parcel' ? 'parcel' : 'building';
+      const sourceId = kind === 'parcel' ? 'search-highlight-parcels-v2' : 'search-highlight-buildings-v2';
+      const layerId = sourceId;
+      const otherSourceId = kind === 'parcel' ? 'search-highlight-buildings-v2' : 'search-highlight-parcels-v2';
+      const otherLayerId = otherSourceId;
+      map.getSource(otherSourceId)?.setData(featureCollection([]));
+      if (map.getLayer(otherLayerId)) map.setPaintProperty(otherLayerId, 'line-opacity', 0);
+      map.getSource(sourceId)?.setData(featureCollection([geometry]));
+      if (map.getLayer(layerId)) map.setPaintProperty(layerId, 'line-opacity', 1);
+      flashTimers.push(window.setTimeout(() => map.getLayer(layerId) && map.setPaintProperty(layerId, 'line-opacity', .18), 230));
+      flashTimers.push(window.setTimeout(() => map.getLayer(layerId) && map.setPaintProperty(layerId, 'line-opacity', 1), 430));
+      flashTimers.push(window.setTimeout(() => {
+        map.getSource(sourceId)?.setData(featureCollection([]));
+        if (map.getLayer(layerId)) map.setPaintProperty(layerId, 'line-opacity', 0);
+      }, 1650));
+    } catch (error) {
+      if (error.name !== 'AbortError') console.warn('Objektumriss konnte nicht geladen werden', error);
+    }
+  }
+
   function toggleItems(target, items, additive) {
     for (const item of items) {
       const key = featureKey(item);
@@ -156,5 +193,5 @@ export function createSelectionController({ map, api, store, layout, elements })
     if (store.getState().activeTool === 'select') selectAt(event.lngLat, true);
   });
   store.subscribe((state, reason) => { if (reason.startsWith('selection') || reason === 'restore') render(state); });
-  return { selectAt, clear, render };
+  return { selectAt, flash, clear, render };
 }

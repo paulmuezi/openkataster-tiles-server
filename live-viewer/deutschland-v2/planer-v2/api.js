@@ -18,6 +18,7 @@ export function createApi({ token = '', fresh = '' } = {}) {
     session: () => json(viewerUrl('/api/v1/session')),
     sources: () => json(viewerUrl('/api/v1/sources')),
     featureAt: (lng, lat, signal) => json(`${viewerUrl('/api/v1/features/point')}&lon=${encodeURIComponent(lng)}&lat=${encodeURIComponent(lat)}`, { signal }),
+    featureGeometry: ({ state = '', sourceDb, gmlId, kind = '' }, signal) => json(`${viewerUrl('/api/v1/features/geometry')}&state=${encodeURIComponent(state)}&source_db=${encodeURIComponent(sourceDb)}&gml_id=${encodeURIComponent(gmlId)}&kind=${encodeURIComponent(kind)}`, { signal }),
     searchAddress: ({ place, street = '', houseNumber = '', state = '', limit = 12 }, signal) => json(`${viewerUrl('/api/v1/search/address')}&place=${encodeURIComponent(place)}&street=${encodeURIComponent(street)}&house_number=${encodeURIComponent(houseNumber)}&state=${encodeURIComponent(state)}&limit=${limit}`, { signal }),
     searchParcel: ({ gemarkung, flur, flurstueck, limit = 12 }, signal) => json(`${viewerUrl('/api/v1/search/parcel')}&gemarkung=${encodeURIComponent(gemarkung)}&flur=${encodeURIComponent(flur)}&flurstueck=${encodeURIComponent(flurstueck)}&limit=${limit}`, { signal }),
     suggestPlaces: (query, signal) => json(`/api/suggest/places/deutschland?key=y2Gi6D47jEClM12fnar_PaLGz9uHCK8Tu7yrbW0FiII&q=${encodeURIComponent(query)}&limit=8`, { signal }),

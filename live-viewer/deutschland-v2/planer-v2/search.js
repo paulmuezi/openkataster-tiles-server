@@ -127,9 +127,10 @@ export function createSearchController({ map, api, store, elements, selection })
     const zoom = type === 'place' ? Number(result.zoom || 12.5) : type === 'street' ? Math.max(Number(result.zoom || 17.4), 17.4) : Number(result.zoom || 18.5);
     map.flyTo({ center, zoom, duration: 1150, essential: true, curve: 1.25 });
     const featureType = result.kind === 'parcel' ? 'parcel' : result.kind === 'building' || result.kind === 'address' || result.result_type === 'address' ? 'building' : null;
-    if (featureType && store.getState().access.pro) {
+    if (featureType) {
       await new Promise((resolve) => map.once('moveend', resolve));
-      selection.selectAt({ lng: center[0], lat: center[1] }, false, featureType);
+      if (store.getState().access.pro) selection.selectAt({ lng: center[0], lat: center[1] }, false, featureType);
+      else selection.flash(result, featureType);
     }
   }
 

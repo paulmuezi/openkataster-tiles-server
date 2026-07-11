@@ -107,9 +107,9 @@ body[data-access="pro"] .pro-badge { display: none; }
 .search-control { position: absolute; z-index: 30; left: 13px; top: 13px; display: flex; align-items: flex-start; gap: 9px; pointer-events: none; }
 .search-control > * { pointer-events: auto; }
 .search-panel { width: min(282px, calc(100vw - 76px)); padding: 9px; }
-.panel-head { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.panel-head { min-height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .panel-head strong { font-size: 13px; font-weight: 600; }
-.panel-head select { min-width: 118px; }
+.panel-head select { min-width: 118px; height: 30px; }
 .icon-button { width: 28px; height: 28px; border: 0; background: transparent; color: #59616d; display: grid; place-items: center; font-size: 21px; line-height: 1; cursor: pointer; }
 select, input { height: 34px; border: 1px solid var(--ok-border); border-radius: 4px; background: #fff; padding: 0 9px; outline: none; }
 select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 0 2px rgba(248,109,20,.1); }

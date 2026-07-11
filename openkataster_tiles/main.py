@@ -7906,12 +7906,12 @@ def search_gemarkung_suggestions_cached(
                 """
                 SELECT gemarkung_label, gemarkungsnummer, COUNT(*) AS parcel_count
                 FROM parcel_lookup
-                WHERE gemarkung_norm LIKE ?
+                WHERE gemarkung_norm GLOB ?
                 GROUP BY gemarkung_norm, gemarkungsnummer
                 ORDER BY parcel_count DESC, gemarkung_label
                 LIMIT ?
                 """,
-                [f"{query_norm}%", int(limit) * 2],
+                [f"{query_norm}*", int(limit) * 2],
             ).fetchall()
         except sqlite3.Error:
             continue

@@ -6,18 +6,31 @@ export function createPlannerMap({ container, savedView }) {
     style: '/viewer-assets/deutschland-v2/bkg-style.json?v=20260710-planer-v2-1',
     center: [view.lng, view.lat],
     zoom: view.zoom,
+    bearing: 0,
+    pitch: 0,
     minZoom: 4.2,
     maxZoom: 20,
     maxBounds: [[2.8, 45.0], [17.8, 57.2]],
     hash: true,
     attributionControl: false,
+    dragRotate: false,
+    touchPitch: false,
+    pitchWithRotate: false,
     fadeDuration: 0
   });
 
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-left');
   map.dragRotate.disable();
   map.touchZoomRotate.disableRotation();
+  map.touchPitch?.disable();
+  map.keyboard?.disableRotation();
   map.scrollZoom.enable();
+  map.on('rotate', () => {
+    if (Math.abs(map.getBearing()) > 0.001) map.setBearing(0);
+  });
+  map.on('pitch', () => {
+    if (Math.abs(map.getPitch()) > 0.001) map.setPitch(0);
+  });
   let resizeFrame = 0;
   const observer = new ResizeObserver(() => {
     const app = container.closest('.planner-app');

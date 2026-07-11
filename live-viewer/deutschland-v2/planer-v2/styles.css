@@ -114,10 +114,6 @@ body[data-access="pro"] .pro-badge { display: none; }
 select, input { height: 34px; border: 1px solid var(--ok-border); border-radius: 4px; background: #fff; padding: 0 9px; outline: none; }
 select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 0 2px rgba(248,109,20,.1); }
 .search-fields { display: grid; gap: 6px; margin-top: 7px; }
-#addressFields { grid-template-columns: minmax(0,1fr) 82px; }
-#addressFields .clear-field:first-child { grid-column: 1 / -1; }
-#parcelFields { grid-template-columns: 72px minmax(0,1fr); }
-#parcelFields .clear-field:first-child { grid-column: 1 / -1; }
 .clear-field { position: relative; display: block; min-width: 0; }
 .clear-field input { width: 100%; padding-right: 30px; }
 .clear-field > button { position: absolute; right: 2px; top: 2px; width: 30px; height: 30px; border: 0; background: transparent; color: #8a9098; font-size: 17px; cursor: pointer; }

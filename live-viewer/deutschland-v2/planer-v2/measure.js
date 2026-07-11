@@ -157,49 +157,6 @@ export function createMeasureController({ map, store, elements, finish }) {
     return `${Number(coordinate[0]).toFixed(9)},${Number(coordinate[1]).toFixed(9)}`;
   }
 
-  function orientation(a, b, c) {
-    const value = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-    return Math.abs(value) < 1e-14 ? 0 : Math.sign(value);
-  }
-
-  function pointOnSegment(point, start, end) {
-    const epsilon = 1e-12;
-    return point[0] >= Math.min(start[0], end[0]) - epsilon
-      && point[0] <= Math.max(start[0], end[0]) + epsilon
-      && point[1] >= Math.min(start[1], end[1]) - epsilon
-      && point[1] <= Math.max(start[1], end[1]) + epsilon;
-  }
-
-  function segmentsIntersect(firstStart, firstEnd, secondStart, secondEnd) {
-    const firstA = orientation(firstStart, firstEnd, secondStart);
-    const firstB = orientation(firstStart, firstEnd, secondEnd);
-    const secondA = orientation(secondStart, secondEnd, firstStart);
-    const secondB = orientation(secondStart, secondEnd, firstEnd);
-    if (firstA !== firstB && secondA !== secondB) return true;
-    if (firstA === 0 && pointOnSegment(secondStart, firstStart, firstEnd)) return true;
-    if (firstB === 0 && pointOnSegment(secondEnd, firstStart, firstEnd)) return true;
-    if (secondA === 0 && pointOnSegment(firstStart, secondStart, secondEnd)) return true;
-    return secondB === 0 && pointOnSegment(firstEnd, secondStart, secondEnd);
-  }
-
-  function hasSelfIntersection(coordinates, closeRing = false) {
-    if (coordinates.length < 4 && !closeRing) return false;
-    const segments = [];
-    for (let index = 1; index < coordinates.length; index += 1) {
-      segments.push({ start: index - 1, end: index });
-    }
-    if (closeRing && coordinates.length >= 3) segments.push({ start: coordinates.length - 1, end: 0 });
-    for (let first = 0; first < segments.length; first += 1) {
-      for (let second = first + 1; second < segments.length; second += 1) {
-        const a = segments[first];
-        const b = segments[second];
-        if (a.start === b.start || a.start === b.end || a.end === b.start || a.end === b.end) continue;
-        if (segmentsIntersect(coordinates[a.start], coordinates[a.end], coordinates[b.start], coordinates[b.end])) return true;
-      }
-    }
-    return false;
-  }
-
   function areaParts(coordinates) {
     const closedRings = [];
     let active = [];
@@ -209,8 +166,7 @@ export function createMeasureController({ map, store, elements, finish }) {
       const repeatedAt = positions.get(key);
       if (repeatedAt !== undefined && active.length - repeatedAt >= 3) {
         const ring = [...active.slice(repeatedAt), coordinate];
-        const core = ring.slice(0, -1);
-        if (!hasSelfIntersection(core, true)) closedRings.push(ring);
+        closedRings.push(ring);
         active = [coordinate];
         positions = new Map([[key, 0]]);
         continue;
@@ -218,7 +174,7 @@ export function createMeasureController({ map, store, elements, finish }) {
       if (repeatedAt === undefined) positions.set(key, active.length);
       active.push(coordinate);
     }
-    const activeRing = active.length >= 3 && !hasSelfIntersection(active, true) ? [...active, active[0]] : null;
+    const activeRing = active.length >= 3 ? [...active, active[0]] : null;
     return { closedRings, activeRing };
   }
 

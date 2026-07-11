@@ -179,8 +179,8 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .brand-mark img { width: 14px; height: 14px; }
 
 .export-frame { position: absolute; z-index: 10; inset: 0; pointer-events: none; }
-.export-page-box { position: absolute; z-index: 2; border: 1px solid rgba(248,109,20,.92); background: transparent; box-shadow: none; }
-.export-frame-box { position: absolute; pointer-events: auto; cursor: grab; border: 2px solid rgba(248,109,20,.84); background: rgba(248,109,20,.09); transition: background-color 120ms ease; }
+.export-page-box { position: absolute; z-index: 2; pointer-events: none; border: 2px solid rgba(248,109,20,.94); background: transparent; box-shadow: none; }
+.export-frame-box { position: absolute; pointer-events: auto; touch-action: none; cursor: grab; border: 1px solid rgba(248,109,20,.72); background: rgba(248,109,20,.09); transition: background-color 120ms ease; }
 .export-frame-box:hover { background: rgba(248,109,20,.14); }
 .export-frame-box.is-dragging { cursor: grabbing; background: rgba(248,109,20,.18); }
 .planner-app[data-active-tool="measure"] .export-frame-box,
@@ -313,10 +313,6 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
   .selection-head > div { display: grid; gap: 1px; }
   th, td { padding: 7px 10px; }
   .selection-resize { cursor: default; }
-}
-
-@media (pointer: coarse) {
-  .export-frame-box { pointer-events: none !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {

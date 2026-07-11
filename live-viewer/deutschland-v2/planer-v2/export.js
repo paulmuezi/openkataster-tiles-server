@@ -7,6 +7,8 @@ export function createExportController({ map, api, store, elements }) {
     exportDxf, exportSummary, exportStatus, exportPreview, sourceList
   } = elements;
   let drag = null;
+  let pinch = null;
+  const activePointers = new Map();
   let activeObjectUrls = [];
 
   const PAPER_MM = {
@@ -144,21 +146,66 @@ export function createExportController({ map, api, store, elements }) {
   function beginDrag(event) {
     event.preventDefault();
     event.stopPropagation();
-    const current = center();
-    drag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, point: map.project([current.lng, current.lat]) };
+    activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     exportFrameBox.setPointerCapture(event.pointerId);
+    if (activePointers.size > 1) {
+      const [first, second] = [...activePointers.values()];
+      const midpoint = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+      pinch = {
+        distance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)),
+        zoom: map.getZoom(),
+        around: map.unproject(mapPoint(midpoint.x, midpoint.y))
+      };
+      drag = null;
+      exportFrameBox.classList.remove('is-dragging');
+      return;
+    }
+    const current = center();
+    drag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, point: map.project([current.lng, current.lat]), moved: false };
     exportFrameBox.classList.add('is-dragging');
   }
 
   function moveDrag(event) {
-    if (!drag) return;
+    if (!activePointers.has(event.pointerId)) return;
+    event.preventDefault();
+    activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pinch && activePointers.size > 1) {
+      const [first, second] = [...activePointers.values()];
+      const midpoint = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+      const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+      map.zoomTo(pinch.zoom + Math.log2(distance / pinch.distance), { around: pinch.around, duration: 0 });
+      const rendered = map.project(pinch.around);
+      const target = mapPoint(midpoint.x, midpoint.y);
+      map.panBy([rendered.x - target.x, rendered.y - target.y], { duration: 0 });
+      return;
+    }
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+    if (!drag.moved && distance < 4) return;
+    drag.moved = true;
     const point = { x: drag.point.x + event.clientX - drag.startX, y: drag.point.y + event.clientY - drag.startY };
     setCenter(map.unproject(point));
   }
 
-  function endDrag() {
-    if (!drag) return;
-    try { exportFrameBox.releasePointerCapture(drag.pointerId); } catch (_) {}
+  function mapPoint(clientX, clientY) {
+    const rect = map.getContainer().getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  }
+
+  function endDrag(event) {
+    const wasPinching = Boolean(pinch);
+    const currentDrag = drag;
+    activePointers.delete(event.pointerId);
+    try { exportFrameBox.releasePointerCapture(event.pointerId); } catch (_) {}
+    if (wasPinching) {
+      if (activePointers.size < 2) pinch = null;
+      drag = null;
+      exportFrameBox.classList.remove('is-dragging');
+      return;
+    }
+    if (currentDrag?.pointerId === event.pointerId && !currentDrag.moved && event.type === 'pointerup') {
+      setCenter(map.unproject(mapPoint(event.clientX, event.clientY)));
+    }
     drag = null;
     exportFrameBox.classList.remove('is-dragging');
   }

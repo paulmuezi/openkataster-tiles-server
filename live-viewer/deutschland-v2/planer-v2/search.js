@@ -1,4 +1,4 @@
-import { centerFromResult, debounce, escapeHtml, resultLabel } from './utils.js';
+import { centerFromResult, debounce, escapeHtml, resultLabel } from './utils.js?v=20260711-search-context1';
 
 export function createSearchController({ map, api, store, elements, selection }) {
   const {
@@ -9,6 +9,7 @@ export function createSearchController({ map, api, store, elements, selection })
   let searchRequest = null;
   let placeRequest = null;
   let streetRequest = null;
+  let selectedPlaceState = '';
 
   function setOpen(open) {
     searchPanel.hidden = !open;
@@ -55,6 +56,7 @@ export function createSearchController({ map, api, store, elements, selection })
       if (document.activeElement !== placeInput || placeInput.value.trim() !== query) return;
       renderSuggestions(placeSuggestions, data.results || [], (result) => {
         placeInput.value = result.value || result.label || '';
+        selectedPlaceState = result.state || '';
         clearSuggestions();
         streetInput.focus();
       });
@@ -68,7 +70,7 @@ export function createSearchController({ map, api, store, elements, selection })
     if (place.length < 2 || query.length < 2) { streetSuggestions.hidden = true; return; }
     streetRequest = new AbortController();
     try {
-      const data = await api.suggestStreets(place, query, streetRequest.signal);
+      const data = await api.suggestStreets(place, query, selectedPlaceState, streetRequest.signal);
       if (document.activeElement !== streetInput || streetInput.value.trim() !== query) return;
       renderSuggestions(streetSuggestions, data.results || [], (result) => {
         streetInput.value = result.value || result.label || '';
@@ -97,8 +99,8 @@ export function createSearchController({ map, api, store, elements, selection })
         const houseNumber = houseInput.value.trim();
         if (!place) throw new Error('Bitte Ort eingeben.');
         if (!street && !houseNumber) results = (await api.suggestPlaces(place, searchRequest.signal)).results || [];
-        else if (street && !houseNumber) results = (await api.suggestStreets(place, street, searchRequest.signal)).results || [];
-        else results = (await api.searchAddress({ place, street, houseNumber }, searchRequest.signal)).results || [];
+        else if (street && !houseNumber) results = (await api.suggestStreets(place, street, selectedPlaceState, searchRequest.signal)).results || [];
+        else results = (await api.searchAddress({ place, street, houseNumber, state: selectedPlaceState }, searchRequest.signal)).results || [];
       }
       renderResults(results);
       setBusy(false, results.length ? '' : 'Keine Treffer');
@@ -118,6 +120,10 @@ export function createSearchController({ map, api, store, elements, selection })
     const center = centerFromResult(result);
     if (!center) return;
     const type = result.result_type || result.kind;
+    if (type === 'place') {
+      placeInput.value = result.value || result.label || placeInput.value;
+      selectedPlaceState = result.state || '';
+    }
     const zoom = type === 'place' ? Number(result.zoom || 12.5) : type === 'street' ? Math.max(Number(result.zoom || 17.4), 17.4) : Number(result.zoom || 18.5);
     map.flyTo({ center, zoom, duration: 1150, essential: true, curve: 1.25 });
     const featureType = result.kind === 'parcel' ? 'parcel' : result.kind === 'building' || result.kind === 'address' || result.result_type === 'address' ? 'building' : null;
@@ -130,7 +136,7 @@ export function createSearchController({ map, api, store, elements, selection })
   searchButton.addEventListener('click', () => setOpen(searchPanel.hidden));
   searchClose.addEventListener('click', () => setOpen(false));
   searchMode.addEventListener('change', () => setMode(searchMode.value));
-  placeInput.addEventListener('input', suggestPlaces);
+  placeInput.addEventListener('input', () => { selectedPlaceState = ''; suggestPlaces(); });
   streetInput.addEventListener('input', suggestStreets);
   houseInput.addEventListener('input', clearSuggestions);
   searchSubmit.addEventListener('click', submit);
@@ -138,6 +144,7 @@ export function createSearchController({ map, api, store, elements, selection })
   for (const button of document.querySelectorAll('[data-clear-target]')) button.addEventListener('click', () => {
     const target = document.getElementById(button.dataset.clearTarget);
     if (target) { target.value = ''; target.focus(); }
+    if (target === placeInput) selectedPlaceState = '';
     clearSuggestions();
   });
   document.addEventListener('click', (event) => { if (!event.target.closest('.search-control')) clearSuggestions(); });

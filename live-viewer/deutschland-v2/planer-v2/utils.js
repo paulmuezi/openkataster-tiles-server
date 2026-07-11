@@ -34,9 +34,16 @@ export function addressLabel(item) {
 export function resultLabel(result) {
   const label = String(result?.label || result?.value || 'Treffer').trim();
   if (result?.result_type === 'address' || result?.kind === 'address' || result?.kind === 'building') return label;
+  const resultType = String(result?.result_type || result?.kind || '').trim();
+  const subtitle = String(result?.subtitle || '').trim();
   const state = String(result?.state_label || result?.state || '').trim();
-  if (!state || label.toLocaleLowerCase('de-DE').includes(state.toLocaleLowerCase('de-DE'))) return label;
-  return `${label}, ${state}`;
+  const parts = [label];
+  if (['place', 'street'].includes(resultType) && subtitle && !['Ort', 'Straße'].includes(subtitle)) parts.push(subtitle);
+  if (state) parts.push(state);
+  return parts.filter((part, index, values) => {
+    const normalized = part.toLocaleLowerCase('de-DE');
+    return !values.slice(0, index).some((previous) => previous.toLocaleLowerCase('de-DE').includes(normalized));
+  }).join(', ');
 }
 
 export function centerFromResult(result) {

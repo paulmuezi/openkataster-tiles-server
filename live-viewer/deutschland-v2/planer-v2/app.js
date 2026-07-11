@@ -1,11 +1,11 @@
-import { createApi } from './api.js';
+import { createApi } from './api.js?v=20260711-search-context1';
 import { createExportController } from './export.js?v=20260711-export-contract1';
 import { createLayerController } from './layers.js';
 import { createLayout } from './layout.js?v=20260711-mobile-export1';
 import { createPlannerMap } from './map.js';
 import { createMeasureController } from './measure.js';
 import { createPersistence, readPersistedState } from './persistence.js';
-import { createSearchController } from './search.js';
+import { createSearchController } from './search.js?v=20260711-search-context1';
 import { createSelectionController } from './selection.js';
 import { createSourceController } from './sources.js';
 import { createStore } from './store.js';

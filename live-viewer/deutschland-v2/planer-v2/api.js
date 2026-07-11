@@ -24,6 +24,7 @@ export function createApi({ token = '', fresh = '' } = {}) {
     searchParcel: ({ gemarkung, flur, flurstueck, limit = 12 }, signal) => json(`${viewerUrl('/api/v1/search/parcel')}&gemarkung=${encodeURIComponent(gemarkung)}&flur=${encodeURIComponent(flur)}&flurstueck=${encodeURIComponent(flurstueck)}&limit=${limit}`, { signal }),
     suggestPlaces: (query, signal) => json(`/api/suggest/places/deutschland?key=y2Gi6D47jEClM12fnar_PaLGz9uHCK8Tu7yrbW0FiII&q=${encodeURIComponent(query)}&limit=8`, { signal }),
     suggestStreets: (place, query, state, signal) => json(`/api/suggest/streets/deutschland?key=y2Gi6D47jEClM12fnar_PaLGz9uHCK8Tu7yrbW0FiII&place=${encodeURIComponent(place)}&q=${encodeURIComponent(query)}&state=${encodeURIComponent(state || '')}&limit=8`, { signal }),
+    suggestGemarkungen: (query, signal) => json(`/api/suggest/gemarkungen/deutschland?key=y2Gi6D47jEClM12fnar_PaLGz9uHCK8Tu7yrbW0FiII&q=${encodeURIComponent(query)}&limit=8`, { signal }),
     createOrder: (payload) => json('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
     orderStatus: (orderId, guestToken) => json(`/api/orders/${encodeURIComponent(orderId)}/status${guestToken ? `?guest_token=${encodeURIComponent(guestToken)}` : ''}`)
   };

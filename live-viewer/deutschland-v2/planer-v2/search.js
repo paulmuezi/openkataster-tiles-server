@@ -4,11 +4,12 @@ export function createSearchController({ map, api, store, elements, selection })
   const {
     searchButton, searchPanel, searchClose, searchMode, addressFields, parcelFields,
     placeInput, streetInput, houseInput, gemarkungInput, flurInput, parcelInput,
-    placeSuggestions, streetSuggestions, searchSubmit, searchResults, searchStatus
+    placeSuggestions, streetSuggestions, gemarkungSuggestions, searchSubmit, searchResults, searchStatus
   } = elements;
   let searchRequest = null;
   let placeRequest = null;
   let streetRequest = null;
+  let gemarkungRequest = null;
   let selectedPlaceState = '';
 
   function setOpen(open) {
@@ -36,8 +37,10 @@ export function createSearchController({ map, api, store, elements, selection })
   function clearSuggestions() {
     placeSuggestions.hidden = true;
     streetSuggestions.hidden = true;
+    gemarkungSuggestions.hidden = true;
     placeSuggestions.replaceChildren();
     streetSuggestions.replaceChildren();
+    gemarkungSuggestions.replaceChildren();
   }
 
   function renderSuggestions(container, results, onPick) {
@@ -76,6 +79,26 @@ export function createSearchController({ map, api, store, elements, selection })
         streetInput.value = result.value || result.label || '';
         clearSuggestions();
         houseInput.focus();
+      });
+    } catch (error) { if (error.name !== 'AbortError') console.warn(error); }
+  }, 80);
+
+  const suggestGemarkungen = debounce(async () => {
+    const query = gemarkungInput.value.trim();
+    gemarkungRequest?.abort();
+    if (query.length < 2) { gemarkungSuggestions.hidden = true; return; }
+    gemarkungRequest = new AbortController();
+    try {
+      const data = await api.suggestGemarkungen(query, gemarkungRequest.signal);
+      if (document.activeElement !== gemarkungInput || gemarkungInput.value.trim() !== query) return;
+      renderSuggestions(gemarkungSuggestions, data.results || [], (result) => {
+        const label = String(result.label || result.gemarkung || '').trim();
+        const number = String(result.gemarkungsnummer || '').trim();
+        gemarkungInput.value = number && label.endsWith(` (${number})`)
+          ? label.slice(0, -(number.length + 3)).trim()
+          : label;
+        clearSuggestions();
+        flurInput.focus();
       });
     } catch (error) { if (error.name !== 'AbortError') console.warn(error); }
   }, 80);
@@ -140,6 +163,7 @@ export function createSearchController({ map, api, store, elements, selection })
   placeInput.addEventListener('input', () => { selectedPlaceState = ''; suggestPlaces(); });
   streetInput.addEventListener('input', suggestStreets);
   houseInput.addEventListener('input', clearSuggestions);
+  gemarkungInput.addEventListener('input', suggestGemarkungen);
   searchSubmit.addEventListener('click', submit);
   for (const input of [placeInput, streetInput, houseInput, gemarkungInput, flurInput, parcelInput]) input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); submit(); } });
   for (const button of document.querySelectorAll('[data-clear-target]')) button.addEventListener('click', () => {

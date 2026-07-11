@@ -6544,19 +6544,24 @@ def is_likely_street_name_query(query: str) -> bool:
     return any(token.endswith(suffix) for token in tokens for suffix in suffixes)
 
 
-def normalize_geocoder_text(value: str | None) -> str:
-    text = normalize_place_search_text(value)
+def _normalize_geocoder_tokens(text: str) -> str:
     text = text.replace("str.", "strasse")
     text = re.sub(r"\bstr\b", "strasse", text)
     return re.sub(r"[^a-z0-9]+", " ", text).strip()
 
 
+def normalize_geocoder_text(value: str | None) -> str:
+    return _normalize_geocoder_tokens(normalize_place_search_text(value))
+
+
 def normalize_geocoder_text_variants(value: str | None) -> tuple[str, ...]:
     variants: list[str] = []
-    for candidate in (
-        normalize_geocoder_text(value),
-        re.sub(r"[^a-z0-9]+", " ", plain_place_search_text(value)).strip(),
-    ):
+    normalized = normalize_geocoder_text(value)
+    plain = _normalize_geocoder_tokens(plain_place_search_text(value))
+    collapsed = normalized
+    for source, target in (("ae", "a"), ("oe", "o"), ("ue", "u")):
+        collapsed = collapsed.replace(source, target)
+    for candidate in (normalized, plain, collapsed):
         if candidate and candidate not in variants:
             variants.append(candidate)
     return tuple(variants)
@@ -6902,10 +6907,11 @@ def fast_parcel_lookup(
     states = [state for state in states_key if state]
     gemarkung = (gemarkung or "").strip()
     flur = (flur or "").strip()
-    flurstueck = normalize_parcel_number(flurstueck)
+    flurstueck = fast_compact_norm(flurstueck)
     if not any((gemarkung, flur, flurstueck)):
         return []
-    gemarkung_norm = normalize_geocoder_text(gemarkung)
+    gemarkung_norms = list(normalize_geocoder_text_variants(gemarkung))
+    gemarkung_norm = gemarkung_norms[0] if gemarkung_norms else ""
     flur_norm = fast_compact_norm(flur)
     state_clause = ""
     state_params: list[object] = []
@@ -6915,20 +6921,22 @@ def fast_parcel_lookup(
         state_params.extend(states)
 
     query_variants: list[tuple[str, list[object]]] = []
-    if gemarkung_norm and flur_norm and flurstueck:
+    if gemarkung_norms and flur_norm and flurstueck:
+        placeholders = ",".join("?" for _ in gemarkung_norms)
         query_variants.append((
-            f"gemarkung_norm = ? AND flur_norm = ? AND flurstueck_norm = ?{state_clause}",
-            [gemarkung_norm, flur_norm, flurstueck, *state_params],
+            f"gemarkung_norm IN ({placeholders}) AND flur_norm = ? AND flurstueck_norm = ?{state_clause}",
+            [*gemarkung_norms, flur_norm, flurstueck, *state_params],
         ))
     if gemarkung and flur_norm and flurstueck:
         query_variants.append((
             f"gemarkungsnummer = ? AND flur_norm = ? AND flurstueck_norm = ?{state_clause}",
             [gemarkung, flur_norm, flurstueck, *state_params],
         ))
-    if gemarkung_norm and flurstueck:
+    if gemarkung_norms and flurstueck:
+        placeholders = ",".join("?" for _ in gemarkung_norms)
         query_variants.append((
-            f"gemarkung_norm = ? AND flurstueck_norm = ?{state_clause}",
-            [gemarkung_norm, flurstueck, *state_params],
+            f"gemarkung_norm IN ({placeholders}) AND flurstueck_norm = ?{state_clause}",
+            [*gemarkung_norms, flurstueck, *state_params],
         ))
     if gemarkung and flurstueck:
         query_variants.append((
@@ -6938,7 +6946,7 @@ def fast_parcel_lookup(
     # In structured cadastre search, a supplied Gemarkung is a hard filter.
     # Falling back to only Flur/Flurstück produces many unrelated parcels with
     # identical parcel numbers across Germany.
-    if not gemarkung_norm and not gemarkung:
+    if not gemarkung_norms and not gemarkung:
         if flur_norm and flurstueck and states:
             query_variants.append((
                 f"flur_norm = ? AND flurstueck_norm = ?{state_clause}",
@@ -7242,21 +7250,24 @@ def search_sqlite_parcel_lookup(
     states = [state for state in states_key if state]
     gemarkung = (gemarkung or "").strip()
     flur = (flur or "").strip()
-    flurstueck = normalize_parcel_number(flurstueck)
+    flurstueck = fast_compact_norm(flurstueck)
     if not any((gemarkung, flur, flurstueck)):
         return []
-    gemarkung_norm = normalize_geocoder_text(gemarkung)
+    gemarkung_norms = list(normalize_geocoder_text_variants(gemarkung))
+    gemarkung_norm = gemarkung_norms[0] if gemarkung_norms else ""
     flur_norm = fast_compact_norm(flur)
     query_variants: list[tuple[str, list[object]]] = []
-    if gemarkung_norm and flur_norm and flurstueck:
-        query_variants.append(("gemarkung_norm = ? AND flur_norm = ? AND flurstueck_norm = ?", [gemarkung_norm, flur_norm, flurstueck]))
+    if gemarkung_norms and flur_norm and flurstueck:
+        placeholders = ",".join("?" for _ in gemarkung_norms)
+        query_variants.append((f"gemarkung_norm IN ({placeholders}) AND flur_norm = ? AND flurstueck_norm = ?", [*gemarkung_norms, flur_norm, flurstueck]))
     if gemarkung and flur_norm and flurstueck:
         query_variants.append(("gemarkungsnummer = ? AND flur_norm = ? AND flurstueck_norm = ?", [gemarkung, flur_norm, flurstueck]))
-    if gemarkung_norm and flurstueck:
-        query_variants.append(("gemarkung_norm = ? AND flurstueck_norm = ?", [gemarkung_norm, flurstueck]))
+    if gemarkung_norms and flurstueck:
+        placeholders = ",".join("?" for _ in gemarkung_norms)
+        query_variants.append((f"gemarkung_norm IN ({placeholders}) AND flurstueck_norm = ?", [*gemarkung_norms, flurstueck]))
     if gemarkung and flurstueck:
         query_variants.append(("gemarkungsnummer = ? AND flurstueck_norm = ?", [gemarkung, flurstueck]))
-    if not gemarkung_norm and not gemarkung:
+    if not gemarkung_norms and not gemarkung:
         if flur_norm and flurstueck:
             query_variants.append(("flur_norm = ? AND flurstueck_norm = ?", [flur_norm, flurstueck]))
         if flurstueck:
@@ -7316,10 +7327,9 @@ def search_sqlite_direct_lookup(
     results: list[dict] = []
     seen: set[tuple[str, str, str, str]] = set()
     for mode, street, house, city in geocoder_direct_candidates(query, allow_plain_street=allow_plain_street):
-        street_norm = normalize_geocoder_text(street)
-        city_norm = normalize_geocoder_text(city)
+        street_norms = list(normalize_geocoder_text_variants(street))
         city_norms = list(normalize_geocoder_text_variants(city))
-        if not street_norm:
+        if not street_norms:
             continue
         for entry in entries:
             try:
@@ -7333,18 +7343,19 @@ def search_sqlite_direct_lookup(
                         continue
                     city_clause = f" AND city_norm IN ({','.join('?' for _ in entry_city_norms)})" if entry_city_norms else ""
                     city_params = list(entry_city_norms)
+                    street_placeholders = ",".join("?" for _ in street_norms)
                     rows = con.execute(
                         f"""
                         SELECT *
                         FROM address_lookup
-                        WHERE street_norm = ?
+                        WHERE street_norm IN ({street_placeholders})
                           AND house_number_norm = ?
                           AND feature_kind = 'building'
                           {city_clause}
                         ORDER BY label
                         LIMIT ?
                         """,
-                        [street_norm, house_norm, *city_params, max(int(limit) * 3, 12)],
+                        [*street_norms, house_norm, *city_params, max(int(limit) * 3, 12)],
                     ).fetchall()
                     for row in rows:
                         result = search_address_result_from_row(row, entry.name, city)
@@ -7358,16 +7369,17 @@ def search_sqlite_direct_lookup(
                 elif mode == "street":
                     if not entry_city_norms:
                         continue
+                    street_placeholders = ",".join("?" for _ in street_norms)
                     rows = con.execute(
                         f"""
                         SELECT *
                         FROM street_lookup
-                        WHERE street_norm = ?
+                        WHERE street_norm IN ({street_placeholders})
                           AND city_norm IN ({','.join('?' for _ in entry_city_norms)})
                         ORDER BY address_count DESC, label
                         LIMIT ?
                         """,
-                        [street_norm, *entry_city_norms, int(limit)],
+                        [*street_norms, *entry_city_norms, int(limit)],
                     ).fetchall()
                     for row in rows:
                         result = search_street_result_from_row(row, entry.name, street, city)
@@ -7477,6 +7489,13 @@ def _rank_place_suggestion(entry: dict, query_norm: str, query_ascii: str, query
     return (match_rank, population_rank, class_rank, name.casefold()), payload
 
 
+def gn250_storage_state_key(value: str | None) -> str:
+    state = normalize_state_key(value)
+    return {
+        "baden-wurttemberg": "baden_wuerttemberg",
+    }.get(state, state.replace("-", "_"))
+
+
 def _search_place_suggestions_from_sqlite(query: str, allowed_states: set[str], limit: int) -> dict | None:
     fts_query = _place_fts_query(query)
     if not fts_query or not GN250_PLACES_DB.exists():
@@ -7485,7 +7504,7 @@ def _search_place_suggestions_from_sqlite(query: str, allowed_states: set[str], 
     query_ascii = compact_place_search_text(query)
     query_plain = plain_place_search_text(query)
     query_plain_ascii = compact_plain_place_search_text(query)
-    state_values = sorted(normalize_state_key(state) for state in allowed_states if normalize_state_key(state))
+    state_values = sorted({gn250_storage_state_key(state) for state in allowed_states if gn250_storage_state_key(state)})
     state_clause = ""
     params: list[object] = [fts_query]
     if state_values:
@@ -7666,8 +7685,10 @@ def search_street_suggestions_cached(
     if len(place) < 2 or len(query) < 2:
         return tuple()
     allowed_states = set(states_key)
-    place_context = requested_place_context(place, allowed_states)
+    place_context = exact_place_context(place, allowed_states)
     municipality = place_context_as_municipality(place_context)
+    inferred_states = states_for_place_context(place, allowed_states)
+    entry_states = tuple(sorted(inferred_states)) if len(inferred_states) == 1 else states_key
     city_names: list[str] = []
     for value in (place, str((municipality or {}).get("name") or "")):
         value = value.strip()
@@ -7678,7 +7699,7 @@ def search_street_suggestions_cached(
         return tuple()
     results: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
-    for entry in search_db_entries_for_states(states_key):
+    for entry in search_db_entries_for_states(entry_states):
         try:
             con = search_db_connection(entry.path)
             rows = []
@@ -7724,6 +7745,7 @@ def search_street_suggestions_cached(
                 "label": street_label,
                 "value": street_label,
                 "subtitle": city_label,
+                "kind": "street",
                 "state": entry.name,
                 "state_label": state_display_name(entry.name),
                 "address_count": int(row["address_count"] or 0),

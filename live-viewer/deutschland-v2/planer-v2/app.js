@@ -1,7 +1,7 @@
 import { createApi } from './api.js';
 import { createExportController } from './export.js?v=20260711-export-contract1';
 import { createLayerController } from './layers.js';
-import { createLayout } from './layout.js';
+import { createLayout } from './layout.js?v=20260711-mobile-export1';
 import { createPlannerMap } from './map.js';
 import { createMeasureController } from './measure.js';
 import { createPersistence, readPersistedState } from './persistence.js';
@@ -12,6 +12,7 @@ import { createStore } from './store.js';
 
 const params = new URLSearchParams(window.location.search);
 const saved = readPersistedState();
+const mobileBoot = window.matchMedia('(max-width: 760px)').matches;
 const app = document.getElementById('plannerApp');
 const map = createPlannerMap({ container: document.getElementById('map'), savedView: saved?.view });
 window.__openKatasterPlannerMap = map;
@@ -26,7 +27,7 @@ const store = createStore({
   access: { ready: false, pro: false, session: null },
   layout: {
     sidebarOpen: !!saved?.layout?.sidebarOpen,
-    tableOpen: !!saved?.layout?.tableOpen,
+    tableOpen: !!saved?.layout?.tableOpen && !(mobileBoot && saved?.layout?.sidebarOpen),
     tableHeight: Number(saved?.layout?.tableHeight || 260),
     mobileExportSettings: !!saved?.layout?.mobileExportSettings
   },
@@ -58,7 +59,7 @@ createPersistence({ map, store });
 elements.selectTool.addEventListener('click', () => requirePro('select'));
 elements.measureTool.addEventListener('click', () => requirePro('measure'));
 elements.exportTool.addEventListener('click', () => layout.setTool('export'));
-elements.exportClose.addEventListener('click', () => layout.setSidebar(false));
+elements.exportClose.addEventListener('click', layout.closeExportPanel);
 elements.mobileExportSettings.addEventListener('click', layout.toggleMobileExportSettings);
 elements.selectionClose.addEventListener('click', selection.clear);
 elements.selectionResize.addEventListener('pointerdown', layout.beginTableResize);

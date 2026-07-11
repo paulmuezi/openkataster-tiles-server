@@ -2,6 +2,10 @@ export function createLayout({ app, map, store, elements }) {
   const { exportSidebar, selectionDock, exportTool, selectTool, measureTool, mobileExportSettings } = elements;
   let resizing = false;
 
+  function isMobile() {
+    return window.matchMedia('(max-width: 760px)').matches;
+  }
+
   function render(state, reason) {
     const { layout, activeTool } = state;
     app.dataset.sidebarOpen = layout.sidebarOpen ? 'true' : 'false';
@@ -21,12 +25,15 @@ export function createLayout({ app, map, store, elements }) {
   function setTool(activeTool) {
     const current = store.getState();
     const nextTool = current.activeTool === activeTool ? 'none' : activeTool;
+    const mobile = isMobile();
+    const openingExport = nextTool === 'export';
     store.setState({
       activeTool: nextTool,
       layout: {
         ...current.layout,
-        sidebarOpen: nextTool === 'export' ? true : current.layout.sidebarOpen && activeTool !== 'export',
-        mobileExportSettings: nextTool === 'export' ? current.layout.mobileExportSettings : false
+        sidebarOpen: openingExport,
+        tableOpen: mobile && openingExport ? false : current.layout.tableOpen,
+        mobileExportSettings: mobile && openingExport ? false : openingExport && current.layout.mobileExportSettings
       }
     }, 'tool');
   }
@@ -41,14 +48,39 @@ export function createLayout({ app, map, store, elements }) {
 
   function toggleMobileExportSettings() {
     const state = store.getState();
+    if (!state.layout.sidebarOpen) return;
     store.setState({
-      layout: { ...state.layout, mobileExportSettings: !state.layout.mobileExportSettings }
+      layout: {
+        ...state.layout,
+        tableOpen: isMobile() ? false : state.layout.tableOpen,
+        mobileExportSettings: !state.layout.mobileExportSettings
+      }
     }, 'sidebar');
+  }
+
+  function closeExportPanel() {
+    const state = store.getState();
+    if (isMobile() && state.layout.mobileExportSettings) {
+      store.setState({
+        layout: { ...state.layout, mobileExportSettings: false }
+      }, 'sidebar');
+      return;
+    }
+    setSidebar(false);
   }
 
   function setTable(open) {
     const state = store.getState();
-    store.setState({ layout: { ...state.layout, tableOpen: open } }, 'table');
+    const mobile = isMobile();
+    store.setState({
+      activeTool: mobile && open && state.activeTool === 'export' ? 'none' : state.activeTool,
+      layout: {
+        ...state.layout,
+        tableOpen: open,
+        sidebarOpen: mobile && open ? false : state.layout.sidebarOpen,
+        mobileExportSettings: mobile && open ? false : state.layout.mobileExportSettings
+      }
+    }, 'table');
   }
 
   function beginTableResize(event) {
@@ -82,5 +114,5 @@ export function createLayout({ app, map, store, elements }) {
 
   store.subscribe(render);
   render(store.getState(), 'boot');
-  return { setTool, setSidebar, setTable, toggleMobileExportSettings, beginTableResize };
+  return { setTool, setSidebar, setTable, toggleMobileExportSettings, closeExportPanel, beginTableResize };
 }

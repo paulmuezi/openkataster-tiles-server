@@ -283,6 +283,7 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
   .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"] .source-control,
   .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"] .brand-mark { bottom: calc(var(--mobile-export-bar-height) + env(safe-area-inset-bottom, 0px)); }
   .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"] .zoom-badge { bottom: calc(var(--mobile-export-bar-height) + 10px + env(safe-area-inset-bottom, 0px)); }
+  .planner-app[data-sidebar-open="true"][data-table-open="true"] .selection-content { padding-bottom: var(--mobile-export-bar-height); }
   .maplibregl-ctrl-bottom-left, .source-control, .brand-mark, .zoom-badge { transition: bottom 220ms var(--motion-easing); }
   .search-panel { max-height: calc(100vh - 24px); overflow: auto; }
   .measure-panel { left: 65px; right: 13px; min-width: 0; }

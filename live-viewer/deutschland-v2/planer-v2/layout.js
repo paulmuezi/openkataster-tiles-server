@@ -27,7 +27,7 @@ export function createLayout({ app, map, store, elements }) {
     app.style.setProperty('--table-height-open', `${layout.tableHeight}px`);
     exportSidebar.setAttribute('aria-hidden', layout.sidebarOpen ? 'false' : 'true');
     selectionDock.setAttribute('aria-hidden', layout.tableOpen ? 'false' : 'true');
-    exportTool.classList.toggle('is-active', activeTool === 'export');
+    exportTool.classList.toggle('is-active', layout.sidebarOpen);
     selectTool.classList.toggle('is-active', activeTool === 'select');
     measureTool.classList.toggle('is-active', activeTool === 'measure');
     mobileExportSettings.setAttribute('aria-pressed', layout.mobileExportSettings ? 'true' : 'false');
@@ -36,16 +36,29 @@ export function createLayout({ app, map, store, elements }) {
 
   function setTool(activeTool) {
     const current = store.getState();
-    const nextTool = current.activeTool === activeTool ? 'none' : activeTool;
     const mobile = isMobile();
-    const openingExport = nextTool === 'export';
+    let nextTool;
+    let sidebarOpen = current.layout.sidebarOpen;
+    if (activeTool === 'export') {
+      if (!sidebarOpen) {
+        sidebarOpen = true;
+        nextTool = 'export';
+      } else if (current.activeTool !== 'export') {
+        nextTool = 'export';
+      } else {
+        sidebarOpen = false;
+        nextTool = 'none';
+      }
+    } else {
+      nextTool = current.activeTool === activeTool ? 'none' : activeTool;
+    }
     store.setState({
       activeTool: nextTool,
       layout: {
         ...current.layout,
-        sidebarOpen: openingExport,
-        tableOpen: mobile && openingExport ? false : current.layout.tableOpen,
-        mobileExportSettings: mobile && openingExport ? false : openingExport && current.layout.mobileExportSettings
+        sidebarOpen,
+        tableOpen: mobile && activeTool === 'export' && sidebarOpen ? false : current.layout.tableOpen,
+        mobileExportSettings: mobile && activeTool !== 'export' ? false : sidebarOpen && current.layout.mobileExportSettings
       }
     }, 'tool');
   }
@@ -93,11 +106,11 @@ export function createLayout({ app, map, store, elements }) {
     const state = store.getState();
     const mobile = isMobile();
     store.setState({
-      activeTool: mobile && open && state.activeTool === 'export' ? 'none' : state.activeTool,
+      activeTool: state.activeTool,
       layout: {
         ...state.layout,
         tableOpen: open,
-        sidebarOpen: mobile && open ? false : state.layout.sidebarOpen,
+        sidebarOpen: state.layout.sidebarOpen,
         mobileExportSettings: mobile && open ? false : state.layout.mobileExportSettings
       }
     }, 'table');

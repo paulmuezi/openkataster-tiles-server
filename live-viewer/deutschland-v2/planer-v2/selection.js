@@ -25,6 +25,73 @@ export function createSelectionController({ map, api, store, layout, elements })
     return { type: 'FeatureCollection', features: items.filter((item) => item.geometry).map((item) => ({ type: 'Feature', properties: { id: featureKey(item) }, geometry: item.geometry })) };
   }
 
+  function collectRings(geometry, target = []) {
+    if (!geometry) return target;
+    if (geometry.type === 'Polygon') geometry.coordinates.forEach((ring) => target.push(ring));
+    else if (geometry.type === 'MultiPolygon') geometry.coordinates.forEach((polygon) => polygon.forEach((ring) => target.push(ring)));
+    else if (geometry.type === 'GeometryCollection') (geometry.geometries || []).forEach((part) => collectRings(part, target));
+    return target;
+  }
+
+  function coordinateKey(coordinate) {
+    return `${Number(coordinate[0]).toFixed(8)},${Number(coordinate[1]).toFixed(8)}`;
+  }
+
+  function selectionOutlineCollection(items) {
+    const edges = new Map();
+    for (const item of items) {
+      for (const ring of collectRings(item.geometry)) {
+        for (let index = 1; index < ring.length; index += 1) {
+          const start = ring[index - 1];
+          const end = ring[index];
+          if (!Array.isArray(start) || !Array.isArray(end)) continue;
+          const startKey = coordinateKey(start);
+          const endKey = coordinateKey(end);
+          if (startKey === endKey) continue;
+          const key = startKey < endKey ? `${startKey}|${endKey}` : `${endKey}|${startKey}`;
+          const edge = edges.get(key);
+          if (edge) edge.count += 1;
+          else edges.set(key, { count: 1, start, end, startKey, endKey });
+        }
+      }
+    }
+
+    const segments = [...edges.values()].filter((edge) => edge.count % 2 === 1);
+    const connections = new Map();
+    segments.forEach((segment, index) => {
+      for (const key of [segment.startKey, segment.endKey]) {
+        if (!connections.has(key)) connections.set(key, []);
+        connections.get(key).push(index);
+      }
+    });
+
+    const used = new Set();
+    const lines = [];
+    for (let index = 0; index < segments.length; index += 1) {
+      if (used.has(index)) continue;
+      const first = segments[index];
+      const line = [first.start, first.end];
+      const startKey = first.startKey;
+      let currentKey = first.endKey;
+      used.add(index);
+      while (currentKey !== startKey) {
+        const nextIndex = (connections.get(currentKey) || []).find((candidate) => !used.has(candidate));
+        if (nextIndex === undefined) break;
+        const next = segments[nextIndex];
+        const forward = next.startKey === currentKey;
+        line.push(forward ? next.end : next.start);
+        currentKey = forward ? next.endKey : next.startKey;
+        used.add(nextIndex);
+      }
+      if (line.length >= 2) lines.push(line);
+    }
+
+    return {
+      type: 'FeatureCollection',
+      features: lines.map((coordinates) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates } }))
+    };
+  }
+
   function addLayers() {
     if (map.getSource('selected-parcels-v2')) return;
     map.addSource('selected-parcels-v2', { type: 'geojson', data: featureCollection([]) });
@@ -39,8 +106,8 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function updateSources() {
     const selection = store.getState().selection;
-    map.getSource('selected-parcels-v2')?.setData(featureCollection(selection.parcels));
-    map.getSource('selected-buildings-v2')?.setData(featureCollection(selection.buildings));
+    map.getSource('selected-parcels-v2')?.setData(selectionOutlineCollection(selection.parcels));
+    map.getSource('selected-buildings-v2')?.setData(selectionOutlineCollection(selection.buildings));
   }
 
   function render(state = store.getState()) {

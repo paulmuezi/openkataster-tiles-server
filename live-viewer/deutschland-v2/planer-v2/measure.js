@@ -384,7 +384,6 @@ export function createMeasureController({ map, store, elements, finish }) {
   store.subscribe((state, reason) => {
     if (reason !== 'tool') return;
     const active = state.activeTool === 'measure';
-    map.getCanvas().style.cursor = active ? 'crosshair' : '';
     if (active) {
       map.doubleClickZoom.disable();
       render();

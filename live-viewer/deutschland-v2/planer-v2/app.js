@@ -3,10 +3,10 @@ import { createExportController } from './export.js?v=20260711-layout-stability1
 import { createLayerController } from './layers.js?v=20260711-zoom-table-tunnel1';
 import { createLayout } from './layout.js?v=20260711-independent-export1';
 import { createPlannerMap } from './map.js?v=20260711-north-up1';
-import { createMeasureController } from './measure.js?v=20260711-measure-crossing1';
+import { createMeasureController } from './measure.js?v=20260711-selection-outline1';
 import { createPersistence, readPersistedState } from './persistence.js';
 import { createSearchController } from './search.js?v=20260711-search-highlight1';
-import { createSelectionController } from './selection.js?v=20260711-zoom-table-tunnel1';
+import { createSelectionController } from './selection.js?v=20260711-selection-outline1';
 import { createSourceController } from './sources.js?v=20260711-inline-sources1';
 import { createStore } from './store.js';
 
@@ -77,6 +77,8 @@ store.subscribe((state, reason) => {
   elements.measureTool.setAttribute('aria-pressed', state.activeTool === 'measure' ? 'true' : 'false');
   elements.exportTool.setAttribute('aria-pressed', state.layout.sidebarOpen ? 'true' : 'false');
   document.body.dataset.access = state.access.pro ? 'pro' : 'free';
+  const mapCursor = state.activeTool === 'measure' || state.activeTool === 'select' ? 'crosshair' : '';
+  if (map.getCanvas().style.cursor !== mapCursor) map.getCanvas().style.cursor = mapCursor;
   if (reason === 'notice') {
     elements.noticePanel.hidden = !state.notice;
     if (state.notice) { elements.noticeTitle.textContent = state.notice.title; elements.noticeText.textContent = state.notice.text; }

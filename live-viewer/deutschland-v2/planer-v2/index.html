@@ -6,7 +6,7 @@
   <title>OpenKataster Planer</title>
   <link rel="icon" href="/viewer-assets/deutschland-v2/openkataster-logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.css">
-  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/planer-v2/styles.css?v=20260711-measure-snap2">
+  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/planer-v2/styles.css?v=20260711-layer-icons1">
   <script>document.documentElement.dataset.embed = new URLSearchParams(location.search).has('iframe') ? 'true' : 'false';</script>
 </head>
 <body>
@@ -87,17 +87,17 @@
                 <label><input type="checkbox" data-layer="streetNames"><span class="swatch text bold"></span>Straßennamen</label>
                 <details open><summary><label><input type="checkbox" data-layer="extended"><span class="swatch fill"></span>Erweitert</label></summary>
                   <div class="layer-subtree nested">
-                    <label><input type="checkbox" data-layer="parcelLabels"><span class="swatch text"></span>Flurstücksnummern</label>
+                    <label><input type="checkbox" data-layer="parcelLabels"><span class="swatch parcel-number" aria-hidden="true"></span>Flurstücksnummern</label>
                     <label><input type="checkbox" data-layer="surfaces"><span class="swatch fill"></span>Flächennutzung</label>
                     <label><input type="checkbox" data-layer="buildingUsage"><span class="swatch building-use"></span>Gebäudenutzung</label>
-                    <label><input type="checkbox" data-layer="buildingLabels"><span class="swatch text light"></span>Gebäudedetails</label>
+                    <label><input type="checkbox" data-layer="buildingLabels"><span class="swatch building-detail" aria-hidden="true">II</span>Gebäudedetails</label>
                     <label><input type="checkbox" data-layer="boundaryPoints"><span class="swatch point"></span>Grenzpunkte</label>
-                    <label><input type="checkbox" data-layer="symbols"><span class="swatch symbol"></span>Symbole</label>
+                    <label><input type="checkbox" data-layer="symbols"><span class="swatch monument-symbol" aria-hidden="true"></span>Symbole</label>
                   </div>
                 </details>
               </div>
             </details>
-            <label class="layer-single"><input type="checkbox" data-layer="aerial"><span class="swatch aerial"></span>Luftbild</label>
+            <label class="layer-single"><input type="checkbox" data-layer="aerial"><span class="swatch aerial" aria-hidden="true"><span></span></span>Luftbild</label>
           </section>
         </div>
 

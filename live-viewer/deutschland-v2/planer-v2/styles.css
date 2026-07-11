@@ -152,12 +152,21 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .swatch.text::after { content: "12"; position: absolute; inset: -3px 0 0; color: #333; font-size: 9px; }
 .swatch.text.bold::after { content: "Aa"; font-weight: 700; }
 .swatch.text.light::after { color: #777; }
+.swatch.parcel-number { position: relative; width: 16px; height: 16px; border: 0; background: transparent; color: #34383e; }
+.swatch.parcel-number::before,
+.swatch.parcel-number::after { position: absolute; font-size: 7px; line-height: 1; font-weight: 500; }
+.swatch.parcel-number::before { content: "12"; left: 1px; top: 0; }
+.swatch.parcel-number::after { content: "3"; right: 1px; bottom: 0; }
+.swatch.parcel-number { background: linear-gradient(153deg, transparent 46%, #34383e 47%, #34383e 53%, transparent 54%); }
+.swatch.building-detail { height: 16px; border: 0; background: transparent; color: #555b63; font: 500 10px/16px var(--ok-font); text-align: center; }
 .swatch.fill { background: #f7e9ef; border-color: #cabdc2; }
 .swatch.building-use { background: #ef8989; border-color: #883b3b; }
 .swatch.point { width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid #111; margin-left: 2px; margin-right: 3px; }
-.swatch.symbol { border: 0; background: transparent; position: relative; }
-.swatch.symbol::after { content: "P"; position: absolute; inset: -2px 0 0; border: 1px solid #111; font-size: 8px; text-align: center; }
-.swatch.aerial { background: linear-gradient(135deg,#8cb37b,#88b9d0); border-color: #718973; }
+.swatch.monument-symbol { width: 13px; height: 17px; margin: 0 2px 0 1px; border: 0; background: transparent url("/viewer-assets/deutschland-v2/alkis-symbol-denkmal.svg?v=20260704") center / contain no-repeat; }
+.swatch.aerial { position: relative; width: 16px; height: 14px; overflow: hidden; border-color: #626870; border-radius: 2px; background: #fff; }
+.swatch.aerial::before { content: ""; position: absolute; top: 2px; right: 2px; width: 3px; height: 3px; border: 1px solid #626870; border-radius: 50%; }
+.swatch.aerial::after { content: ""; position: absolute; left: 1px; right: 1px; bottom: 1px; height: 7px; background: #737982; clip-path: polygon(0 100%, 0 76%, 31% 27%, 50% 60%, 67% 39%, 100% 82%, 100% 100%); }
+.swatch.aerial > span { position: absolute; z-index: 1; left: 4px; bottom: 1px; width: 1px; height: 6px; background: #fff; transform: rotate(-36deg); transform-origin: bottom; }
 
 .zoom-badge { position: absolute; z-index: 15; left: 50%; bottom: 10px; transform: translateX(-50%); padding: 6px 11px; border-radius: 999px; background: rgba(255,255,255,.95); box-shadow: 0 3px 12px rgba(24,30,39,.1); font-size: 12px; font-weight: 450; pointer-events: none; }
 .source-control { position: absolute; z-index: 25; right: 0; bottom: 0; }

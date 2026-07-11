@@ -112,13 +112,23 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function render(state = store.getState()) {
     const { parcels, buildings, loading } = state.selection;
-    const html = [buildings.length ? buildingTable(buildings) : '', parcels.length ? parcelTable(parcels) : ''].join('');
+    const html = state.access.pro
+      ? [buildings.length ? buildingTable(buildings) : '', parcels.length ? parcelTable(parcels) : ''].join('')
+      : freePreviewTable(buildings, parcels);
     if (selectionContent.innerHTML !== html) selectionContent.innerHTML = html;
     const count = parcels.length + buildings.length;
     selectionCount.textContent = loading && !count ? 'Auswahl wird geladen' : count === 1 ? '1 Objekt ausgewählt' : `${count} Objekte ausgewählt`;
     updateSources();
     if (count && !state.layout.tableOpen) layout.setTable(true);
     selectionDock.classList.toggle('is-loading', loading);
+  }
+
+  function freePreviewTable(buildings, parcels) {
+    const sections = [];
+    if (buildings.length) sections.push('<section class="selection-section"><div class="selection-section-title">Gebäude</div></section>');
+    if (parcels.length) sections.push('<section class="selection-section"><div class="selection-section-title">Flurstücke</div></section>');
+    if (!sections.length) return '';
+    return `${sections.join('')}<div class="selection-pro-lock"><span>Objektinformationen sind in Pro verfügbar.</span><a href="/pro" target="_top">Pro buchen</a></div>`;
   }
 
   function display(value) {
@@ -287,16 +297,12 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   async function selectAt(lngLat, additive = false, preferredKind = null) {
     const state = store.getState();
-    if (!state.access.pro) {
-      store.setState({ notice: { title: 'OpenKataster Pro', text: 'Objektinformationen sind in Pro verfügbar.' } }, 'notice');
-      return;
-    }
     request?.abort();
     request = new AbortController();
     selectTool.classList.add('is-loading');
     store.setState({ selection: { ...state.selection, loading: true } }, 'selection-loading');
     try {
-      const data = await api.featureAt(lngLat.lng, lngLat.lat, request.signal);
+      const data = await (state.access.pro ? api.featureAt : api.featurePreviewAt)(lngLat.lng, lngLat.lat, request.signal);
       const buildings = data.buildings || [];
       const parcels = data.parcels || [];
       const kind = preferredKind || (buildings.length ? 'building' : parcels.length ? 'parcel' : null);

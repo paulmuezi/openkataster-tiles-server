@@ -7,7 +7,7 @@ const SNAP_LAYERS = [
 
 export function createMeasureController({ map, store, elements, finish }) {
   const {
-    measurePanel, measureDistance, measureAngle, measureCumulative, measureArea
+    measurePanel, measureValues, measureLocked, measureDistance, measureAngle, measureCumulative, measureArea
   } = elements;
   let points = [];
   let draft = null;
@@ -250,6 +250,8 @@ export function createMeasureController({ map, store, elements, finish }) {
   function render() {
     const active = store.getState().activeTool === 'measure';
     measurePanel.hidden = !active || !points.length;
+    measureValues.hidden = !store.getState().access.pro;
+    measureLocked.hidden = store.getState().access.pro;
     if (!map.getSource('measure-v2')) return;
     const working = workingPoints();
     const line = lineCoordinates();

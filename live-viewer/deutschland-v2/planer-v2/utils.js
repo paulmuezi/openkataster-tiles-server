@@ -13,7 +13,7 @@ export function debounce(callback, delay = 100) {
 }
 
 export function featureKey(item) {
-  return `${item?.source_db || ''}:${item?.gml_id || item?.flurstueckskennzeichen || item?.id || ''}`;
+  return item?.preview_id || `${item?.source_db || ''}:${item?.gml_id || item?.flurstueckskennzeichen || item?.id || ''}`;
 }
 
 export function deepCopy(value) {

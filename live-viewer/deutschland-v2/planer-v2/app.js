@@ -1,12 +1,12 @@
-import { createApi } from './api.js?v=20260711-search-highlight1';
+import { createApi } from './api.js?v=20260711-free-preview1';
 import { createExportController } from './export.js?v=20260711-layout-stability1';
 import { createLayerController } from './layers.js?v=20260711-parcel-spacing1';
 import { createLayout } from './layout.js?v=20260711-independent-export1';
 import { createPlannerMap } from './map.js?v=20260711-north-up1';
-import { createMeasureController } from './measure.js?v=20260711-area-summary1';
+import { createMeasureController } from './measure.js?v=20260711-free-preview1';
 import { createPersistence, readPersistedState } from './persistence.js';
 import { createSearchController } from './search.js?v=20260711-search-highlight1';
-import { createSelectionController } from './selection.js?v=20260711-table-widths1';
+import { createSelectionController } from './selection.js?v=20260711-free-preview1';
 import { createSourceController } from './sources.js?v=20260711-inline-sources1';
 import { createStore } from './store.js';
 
@@ -42,7 +42,7 @@ const api = createApi({ token: params.get('token') || '', fresh: params.get('fre
 const elements = Object.fromEntries([
   'exportSidebar','selectionDock','exportTool','selectTool','measureTool','selectionResize','selectionClose','selectionContent','selectionCount',
   'layerButton','layerMenu','layerZoomNote','searchButton','searchPanel','searchClose','searchMode','addressFields','parcelFields','placeInput','streetInput','houseInput','gemarkungInput','flurInput','parcelInput','placeSuggestions','streetSuggestions','searchSubmit','searchResults','searchStatus',
-  'measurePanel','measureDistance','measureAngle','measureCumulative','measureArea','sourceButton','sourcePanel','sourceList',
+  'measurePanel','measureValues','measureLocked','measureDistance','measureAngle','measureCumulative','measureArea','sourceButton','sourcePanel','sourceList',
   'exportFrame','exportFrameBox','exportCenterMarker','exportPaper','exportOrientation','exportScale','exportPdf','exportDxf','exportAerial','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings','mobileExportBackdrop',
   'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge'
 ].map((id) => [id, document.getElementById(id)]));
@@ -57,8 +57,8 @@ const exportController = createExportController({ map, api, store, elements });
 const sources = createSourceController({ map, api, store, elements, layerController: layers });
 createPersistence({ map, store });
 
-elements.selectTool.addEventListener('click', () => requirePro('select'));
-elements.measureTool.addEventListener('click', () => requirePro('measure'));
+elements.selectTool.addEventListener('click', () => layout.setTool('select'));
+elements.measureTool.addEventListener('click', () => layout.setTool('measure'));
 elements.exportTool.addEventListener('click', () => layout.setTool('export'));
 elements.exportClose.addEventListener('click', layout.closeExportPanel);
 elements.mobileExportSettings.addEventListener('click', layout.toggleMobileExportSettings);
@@ -66,11 +66,6 @@ elements.mobileExportBackdrop.addEventListener('click', layout.closeMobileExport
 elements.selectionClose.addEventListener('click', selection.clear);
 elements.selectionResize.addEventListener('pointerdown', layout.beginTableResize);
 elements.noticeClose.addEventListener('click', () => store.setState({ notice: null }, 'notice'));
-
-function requirePro(tool) {
-  if (store.getState().access.pro) layout.setTool(tool);
-  else store.setState({ notice: { title: 'OpenKataster Pro', text: tool === 'measure' ? 'Messwerkzeuge sind in Pro verfügbar.' : 'Objektinformationen sind in Pro verfügbar.' } }, 'notice');
-}
 
 store.subscribe((state, reason) => {
   elements.selectTool.setAttribute('aria-pressed', state.activeTool === 'select' ? 'true' : 'false');

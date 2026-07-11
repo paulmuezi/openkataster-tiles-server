@@ -22,12 +22,16 @@ export function createSourceController({ map, api, store, elements, layerControl
   function render() {
     const slug = layerController.currentStateSlug();
     const state = metadata?.states?.find((item) => item.slug === slug);
-    const detail = map.getZoom() >= 16.7;
+    const detail = map.getZoom() >= 17;
     const bkgVisible = layerController.isBasemapVisible();
     sourceList.replaceChildren();
-    appendRow([{ text: '© MapLibre', href: 'https://maplibre.org/' }]);
+    const parts = [{ text: '© MapLibre', href: 'https://maplibre.org/' }];
+    const appendSource = (sourceParts) => {
+      if (!sourceParts?.length) return;
+      parts.push({ text: ' · ' }, ...sourceParts);
+    };
     if (bkgVisible) {
-      appendRow([
+      appendSource([
         { text: '© GeoBasis-DE / ' },
         { text: 'BKG', href: 'https://www.bkg.bund.de/' },
         { text: ' 2026 ' },
@@ -35,13 +39,14 @@ export function createSourceController({ map, api, store, elements, layerControl
       ]);
     }
     if (detail && !bkgVisible && state?.quellenvermerk) {
-      appendRow([{ text: `${state.quellenvermerk}${state.datenstand ? ` · Stand ${state.datenstand}` : ''}` }]);
+      appendSource([{ text: state.quellenvermerk }]);
     }
-    appendRow([
+    appendSource([
       { text: '© OpenPLZ', href: 'https://www.openplzapi.org/' },
       { text: ', ' },
       { text: 'ODbL 1.0', href: 'https://opendatacommons.org/licenses/odbl/1-0/' }
     ]);
+    appendRow(parts);
   }
 
   sourceButton.addEventListener('click', () => {

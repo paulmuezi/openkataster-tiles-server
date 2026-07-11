@@ -7,7 +7,7 @@ import { createMeasureController } from './measure.js?v=20260711-layer-parity1';
 import { createPersistence, readPersistedState } from './persistence.js';
 import { createSearchController } from './search.js?v=20260711-search-highlight1';
 import { createSelectionController } from './selection.js?v=20260711-zoom-table-tunnel1';
-import { createSourceController } from './sources.js?v=20260711-layer-parity1';
+import { createSourceController } from './sources.js?v=20260711-inline-sources1';
 import { createStore } from './store.js';
 
 const params = new URLSearchParams(window.location.search);

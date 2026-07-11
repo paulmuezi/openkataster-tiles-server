@@ -1,7 +1,7 @@
 import { pointInGeometry } from './utils.js';
 
 const SOURCE_ID = 'alkis-v2';
-const DETAIL_ZOOM = 16.7;
+const DETAIL_ZOOM = 17;
 const BKG_SOURCES = new Set(['smarttiles_de', 'germany_geojson', 'states_geojson', 'state_labels_source', 'world_countries_geojson', 'europe_countries_geojson']);
 const AERIAL_STATES = new Set(['baden-wurttemberg', 'berlin', 'brandenburg', 'bremen', 'hamburg', 'hessen', 'mecklenburg-vorpommern', 'niedersachsen', 'nordrhein-westfalen', 'rheinland-pfalz', 'saarland', 'sachsen', 'schleswig-holstein', 'thueringen', 'thuringen']);
 
@@ -68,7 +68,8 @@ export function createLayerController({ map, store, elements }) {
       filter: ['all', ['==', ['get', 'thema'], 'Verkehr'], ['any', ['!', ['has', 'z_index']], ['<', ['to-number', ['get', 'z_index']], 400]]],
       paint: { 'fill-color': '#ffffff', 'fill-opacity': 1 } });
     add({ id: 'alkis-surface-lines', type: 'line', source: SOURCE_ID, 'source-layer': 'lines', minzoom: DETAIL_ZOOM,
-      paint: { 'line-color': ['coalesce', ['get', 'stroke_color'], '#888888'], 'line-width': ['interpolate', ['linear'], ['zoom'], 17, .35, 20, 1.15], 'line-opacity': .72 } });
+      paint: { 'line-color': ['coalesce', ['get', 'stroke_color'], '#888888'], 'line-width': ['interpolate', ['linear'], ['zoom'], 17, .35, 20, 1.15], 'line-opacity': .72,
+        'line-dasharray': ['case', ['==', ['get', 'render_pattern_kind'], 'dash'], ['literal', [3, 1.6]], ['literal', [1, 0]]] } });
     add({ id: 'alkis-building-fills', type: 'fill', source: SOURCE_ID, 'source-layer': 'building_fills', minzoom: DETAIL_ZOOM,
       filter: ['!=', ['get', 'render_fill_role'], 'underground'],
       paint: { 'fill-color': ['coalesce', ['get', 'fill_color'], '#CCCCCC'], 'fill-opacity': 1 } });
@@ -104,8 +105,8 @@ export function createLayerController({ map, store, elements }) {
           'bottom-left', 'bottom-left', 'bottom-right', 'bottom-right', 'center'],
         'text-justify': ['match', ['get', 'render_justify'], 'left', 'left', 'right', 'right', 'center'],
         'text-offset': ['case',
-          ['all', ['==', ['get', 'signaturnummer'], '4115'], ['==', ['get', 'render_anchor'], 'bottom']], ['literal', [0, -0.22]],
-          ['all', ['==', ['get', 'signaturnummer'], '4115'], ['==', ['get', 'render_anchor'], 'top']], ['literal', [0, 0.22]],
+          ['all', ['==', ['get', 'signaturnummer'], '4115'], ['==', ['get', 'render_anchor'], 'bottom']], ['literal', [0, -0.08]],
+          ['all', ['==', ['get', 'signaturnummer'], '4115'], ['==', ['get', 'render_anchor'], 'top']], ['literal', [0, 0.08]],
           ['literal', [0, 0]]],
         'text-allow-overlap': true,
         'text-ignore-placement': true

@@ -2,6 +2,7 @@ import { addressLabel, escapeHtml, featureKey, formatArea, polygonAreaMeters } f
 
 const HIDDEN_DYNAMIC_FIELDS = new Set([
   'source_db', 'gml_id', 'id', 'geometry', 'bbox', 'center', 'addresses', 'address',
+  'flurstueckskennzeichen',
   'zaehler', 'nenner', 'nutzungen', 'nutzung_haupt',
   'gemeinde', 'gemeindenummer', 'kreis', 'kreisnummer', 'land', 'landnummer', 'regierungsbezirk'
 ]);
@@ -187,20 +188,19 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function parcelTable(parcels) {
     const columns = [
+      { label: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'] },
+      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], value: (item) => item.gemarkung && item.gemarkungsnummer ? `${item.gemarkung} (${item.gemarkungsnummer})` : item.gemarkung || item.gemarkungsnummer },
       { label: 'Flur', keys: ['flur'] },
       { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], value: (item) => item.flurstueck || [item.zaehler, item.nenner].filter(Boolean).join('/'), strong: true },
-      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], value: (item) => item.gemarkung && item.gemarkungsnummer ? `${item.gemarkung} (${item.gemarkungsnummer})` : item.gemarkung || item.gemarkungsnummer },
-      { label: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'] },
-      { label: 'Flurstückskennzeichen', keys: ['flurstueckskennzeichen'] },
-      { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'], value: parcelUsage },
       { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'], format: 'area' },
+      { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'], value: parcelUsage },
       { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
-      { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], format: 'date' },
       { label: 'Flurstücksfolge', keys: ['flurstuecksfolge'] },
       { label: 'Abweichender Rechtszustand', keys: ['abweichender_rechtszustand'], format: 'boolean' },
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'], format: 'boolean' },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'], format: 'boolean' },
-      { label: 'Adressen', keys: ['addresses', 'address'], value: addressLabels, html: (item) => addressChips(item) }
+      { label: 'Adressen', keys: ['addresses', 'address'], value: addressLabels, html: (item) => addressChips(item) },
+      { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], format: 'date' }
     ];
     return dynamicTable('Flurstücke', parcels, columns);
   }

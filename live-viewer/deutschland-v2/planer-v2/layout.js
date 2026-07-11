@@ -111,7 +111,8 @@ export function createLayout({ app, map, store, elements }) {
     const startY = event.clientY;
     const startHeight = store.getState().layout.tableHeight;
     const pointerId = event.pointerId;
-    event.currentTarget.setPointerCapture(pointerId);
+    const handle = event.currentTarget;
+    handle.setPointerCapture(pointerId);
 
     const move = (moveEvent) => {
       if (!resizing) return;
@@ -123,14 +124,14 @@ export function createLayout({ app, map, store, elements }) {
     const finish = () => {
       resizing = false;
       app.dataset.resizing = 'false';
-      event.currentTarget.removeEventListener('pointermove', move);
-      event.currentTarget.removeEventListener('pointerup', finish);
-      event.currentTarget.removeEventListener('pointercancel', finish);
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', finish);
+      handle.removeEventListener('pointercancel', finish);
       window.requestAnimationFrame(() => map.resize());
     };
-    event.currentTarget.addEventListener('pointermove', move);
-    event.currentTarget.addEventListener('pointerup', finish);
-    event.currentTarget.addEventListener('pointercancel', finish);
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
   }
 
   store.subscribe(render);

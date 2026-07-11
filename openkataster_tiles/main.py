@@ -6054,10 +6054,27 @@ def feature_preview_item(item: dict, kind: str) -> dict | None:
     )
     if not identity.replace("|", ""):
         identity = json.dumps(geometry, sort_keys=True, separators=(",", ":"))
+    hidden_fields = {
+        "geometry", "bbox", "center", "source_db", "gml_id", "id",
+        "flurstueckskennzeichen", "zaehler", "nenner",
+    }
+    available_fields = sorted(
+        key for key, value in item.items()
+        if key not in hidden_fields
+        and value is not None
+        and value != ""
+        and value != []
+        and value != {}
+    )
+    if kind == "building" and "geometrische_flaeche_m2" not in available_fields:
+        available_fields.append("geometrische_flaeche_m2")
+    if kind == "parcel" and (item.get("zaehler") or item.get("nenner")) and "flurstueck" not in available_fields:
+        available_fields.append("flurstueck")
     return {
         "preview_id": hashlib.sha256(f"{kind}|{identity}".encode("utf-8")).hexdigest()[:20],
         "kind": kind,
         "geometry": geometry,
+        "available_fields": available_fields,
     }
 
 

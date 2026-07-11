@@ -54,25 +54,29 @@ export function createExportController({ map, api, store, elements }) {
     return pageSizeMillimeters();
   }
 
-  function paperSizeMeters() {
+  function sizeMeters(dimensions) {
     const scale = Number(exportScale.value || 1000);
-    const dimensions = mapSizeMillimeters();
     return { width: dimensions.width * scale / 1000, height: dimensions.height * scale / 1000 };
   }
+
+  function mapSizeMeters() { return sizeMeters(mapSizeMillimeters()); }
+  function pageSizeMeters() { return sizeMeters(pageSizeMillimeters()); }
 
   function center() {
     const value = store.getState().export.center;
     return value || map.getCenter();
   }
 
-  function bounds() {
+  function boundsForSize(size) {
     const value = center();
-    const size = paperSizeMeters();
     const metersPerLng = Math.max(1, 111320 * Math.cos(value.lat * Math.PI / 180));
     const halfLng = size.width / 2 / metersPerLng;
     const halfLat = size.height / 2 / 111320;
     return { center: value, size, west: value.lng - halfLng, east: value.lng + halfLng, south: value.lat - halfLat, north: value.lat + halfLat };
   }
+
+  function bounds() { return boundsForSize(mapSizeMeters()); }
+  function pageBounds() { return boundsForSize(pageSizeMeters()); }
 
   function setCenter(lngLat) {
     const state = store.getState();
@@ -101,10 +105,11 @@ export function createExportController({ map, api, store, elements }) {
     const open = state.layout.sidebarOpen;
     exportFrame.hidden = !open;
     if (!open) return;
-    const frameBounds = bounds();
-    const nw = map.project([frameBounds.west, frameBounds.north]);
-    const se = map.project([frameBounds.east, frameBounds.south]);
-    const centerPoint = map.project([frameBounds.center.lng, frameBounds.center.lat]);
+    const mapBounds = bounds();
+    const outerBounds = exportLayout.checked && isDocumentFormat() ? pageBounds() : mapBounds;
+    const nw = map.project([outerBounds.west, outerBounds.north]);
+    const se = map.project([outerBounds.east, outerBounds.south]);
+    const centerPoint = map.project([outerBounds.center.lng, outerBounds.center.lat]);
     const width = Math.abs(se.x - nw.x);
     const height = Math.abs(se.y - nw.y);
     Object.assign(exportCenterMarker.style, { left: `${centerPoint.x}px`, top: `${centerPoint.y}px` });
@@ -112,17 +117,16 @@ export function createExportController({ map, api, store, elements }) {
     const frameLeft = Math.min(nw.x, se.x);
     const frameTop = Math.min(nw.y, se.y);
     if (!exportFrameBox.hidden) Object.assign(exportFrameBox.style, { left: `${frameLeft}px`, top: `${frameTop}px`, width: `${width}px`, height: `${height}px` });
-    const showPage = exportLayout.checked && isDocumentFormat() && !exportFrameBox.hidden;
-    exportPageBox.hidden = !showPage;
-    if (showPage) {
-      const metrics = layoutMetrics();
-      const pxPerInchX = width / metrics.mapWidth;
-      const pxPerInchY = height / metrics.mapHeight;
+    const showMapFrame = exportLayout.checked && isDocumentFormat() && !exportFrameBox.hidden;
+    exportPageBox.hidden = !showMapFrame;
+    if (showMapFrame) {
+      const mapNw = map.project([mapBounds.west, mapBounds.north]);
+      const mapSe = map.project([mapBounds.east, mapBounds.south]);
       Object.assign(exportPageBox.style, {
-        left: `${frameLeft - metrics.marginLeft * pxPerInchX}px`,
-        top: `${frameTop - (metrics.marginTop + metrics.headerHeight + metrics.padding) * pxPerInchY}px`,
-        width: `${metrics.pageWidth * pxPerInchX}px`,
-        height: `${metrics.pageHeight * pxPerInchY}px`
+        left: `${Math.min(mapNw.x, mapSe.x)}px`,
+        top: `${Math.min(mapNw.y, mapSe.y)}px`,
+        width: `${Math.abs(mapSe.x - mapNw.x)}px`,
+        height: `${Math.abs(mapSe.y - mapNw.y)}px`
       });
     }
     exportFrameBox.style.pointerEvents = state.activeTool === 'export' ? 'auto' : 'none';

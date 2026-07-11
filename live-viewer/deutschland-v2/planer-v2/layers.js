@@ -6,7 +6,7 @@ const BKG_SOURCES = new Set(['smarttiles_de', 'germany_geojson', 'states_geojson
 const AERIAL_STATES = new Set(['baden-wurttemberg', 'berlin', 'brandenburg', 'bremen', 'hamburg', 'hessen', 'mecklenburg-vorpommern', 'niedersachsen', 'nordrhein-westfalen', 'rheinland-pfalz', 'saarland', 'sachsen', 'schleswig-holstein', 'thueringen', 'thuringen']);
 
 const GROUPS = {
-  surfaces: ['alkis-surface-fills'],
+  surfaces: ['alkis-surface-fills', 'alkis-traffic-surface-fills'],
   surfaceOutlines: ['alkis-surface-lines'],
   buildings: ['alkis-building-fills', 'alkis-building-lines'],
   parcelLines: ['alkis-parcel-lines'],
@@ -20,9 +20,10 @@ const GROUPS = {
 
 export function createLayerController({ map, store, elements }) {
   const { layerButton, layerMenu, layerInputs, layerZoomNote } = elements;
-  const basePaint = new Map();
+  const baseVisibility = new Map();
   let stateFeatures = [];
   let activeAerial = '';
+  let basemapVisible = true;
 
   async function loadStateFeatures() {
     try {
@@ -54,10 +55,15 @@ export function createLayerController({ map, store, elements }) {
     const before = firstToolLayer();
     const add = (layer) => map.addLayer(layer, before);
     add({ id: 'alkis-surface-fills', type: 'fill', source: SOURCE_ID, 'source-layer': 'surfaces', minzoom: DETAIL_ZOOM,
-      paint: { 'fill-color': ['case', ['==', ['get', 'thema'], 'Verkehr'], '#ffffff', ['coalesce', ['get', 'fill_color'], '#ffffff']], 'fill-opacity': 1 } });
+      filter: ['all', ['!=', ['get', 'theme_index'], 0], ['!=', ['get', 'thema'], 'Verkehr']],
+      paint: { 'fill-color': ['coalesce', ['get', 'fill_color'], 'rgba(0,0,0,0)'], 'fill-opacity': 1 } });
+    add({ id: 'alkis-traffic-surface-fills', type: 'fill', source: SOURCE_ID, 'source-layer': 'surfaces', minzoom: DETAIL_ZOOM,
+      filter: ['all', ['==', ['get', 'thema'], 'Verkehr'], ['any', ['!', ['has', 'z_index']], ['<', ['to-number', ['get', 'z_index']], 400]]],
+      paint: { 'fill-color': '#ffffff', 'fill-opacity': 1 } });
     add({ id: 'alkis-surface-lines', type: 'line', source: SOURCE_ID, 'source-layer': 'lines', minzoom: DETAIL_ZOOM,
       paint: { 'line-color': ['coalesce', ['get', 'stroke_color'], '#888888'], 'line-width': ['interpolate', ['linear'], ['zoom'], 17, .35, 20, 1.15], 'line-opacity': .72 } });
     add({ id: 'alkis-building-fills', type: 'fill', source: SOURCE_ID, 'source-layer': 'building_fills', minzoom: DETAIL_ZOOM,
+      filter: ['!=', ['get', 'render_fill_role'], 'underground'],
       paint: { 'fill-color': ['coalesce', ['get', 'fill_color'], '#a7a7a7'], 'fill-opacity': 1 } });
     add({ id: 'alkis-parcel-lines', type: 'line', source: SOURCE_ID, 'source-layer': 'parcel_outline_lines', minzoom: DETAIL_ZOOM,
       paint: { 'line-color': '#36383c', 'line-width': ['interpolate', ['linear'], ['zoom'], 17, .5, 20, 1.15], 'line-opacity': .82 } });
@@ -110,13 +116,9 @@ export function createLayerController({ map, store, elements }) {
     activeAerial = slug;
   }
 
-  function cacheBasePaint(layer, property) {
-    const key = `${layer.id}:${property}`;
-    if (!basePaint.has(key)) basePaint.set(key, map.getPaintProperty(layer.id, property) ?? 1);
-    return basePaint.get(key);
-  }
-
   function setBasemapVisible(visible) {
+    if (basemapVisible === visible) return;
+    basemapVisible = visible;
     for (const layer of map.getStyle().layers || []) {
       if (!layer.id || (!BKG_SOURCES.has(String(layer.source || '')) && layer.id !== 'background')) continue;
       if (!map.getLayer(layer.id)) continue;
@@ -124,9 +126,15 @@ export function createLayerController({ map, store, elements }) {
         map.setPaintProperty(layer.id, 'background-color', '#ffffff');
         continue;
       }
-      const properties = layer.type === 'symbol' ? ['text-opacity', 'icon-opacity'] : ({ fill: ['fill-opacity'], line: ['line-opacity'], circle: ['circle-opacity'], raster: ['raster-opacity'] }[layer.type] || []);
-      for (const property of properties) map.setPaintProperty(layer.id, property, visible ? cacheBasePaint(layer, property) : 0);
+      if (!baseVisibility.has(layer.id)) baseVisibility.set(layer.id, map.getLayoutProperty(layer.id, 'visibility') || 'visible');
+      map.setLayoutProperty(layer.id, 'visibility', visible ? baseVisibility.get(layer.id) : 'none');
     }
+  }
+
+  function sourceReady(sourceId) {
+    if (!sourceId || !map.getSource(sourceId)) return false;
+    if (typeof map.isSourceLoaded !== 'function') return true;
+    try { return map.isSourceLoaded(sourceId); } catch (_) { return false; }
   }
 
   function apply(state = store.getState()) {
@@ -143,9 +151,11 @@ export function createLayerController({ map, store, elements }) {
       map.setPaintProperty('alkis-building-fills', 'fill-color', layers.buildingUsage ? ['coalesce', ['get', 'fill_color'], '#a7a7a7'] : '#a7a7a7');
       map.setPaintProperty('alkis-building-fills', 'fill-opacity', detail && layers.aerial ? .36 : 1);
     }
-    if (map.getLayer('alkis-surface-fills')) map.setPaintProperty('alkis-surface-fills', 'fill-opacity', detail && layers.aerial ? .18 : 1);
+    for (const id of ['alkis-surface-fills', 'alkis-traffic-surface-fills']) {
+      if (map.getLayer(id)) map.setPaintProperty(id, 'fill-opacity', detail && layers.aerial ? .18 : 1);
+    }
     updateAerial(detail && layers.aerial);
-    const detailBackground = detail && (layers.alkis || (layers.aerial && activeAerial));
+    const detailBackground = detail && ((layers.alkis && sourceReady(SOURCE_ID)) || (layers.aerial && sourceReady(activeAerial)));
     setBasemapVisible(!detailBackground);
     for (const input of layerInputs) {
       input.checked = !!layers[input.dataset.layer];
@@ -175,6 +185,9 @@ export function createLayerController({ map, store, elements }) {
   map.on('load', async () => { await loadStateFeatures(); addAlkisLayers(); apply(); });
   map.on('zoom', () => apply());
   map.on('moveend', () => apply());
+  map.on('sourcedata', (event) => {
+    if (event.sourceId === SOURCE_ID || event.sourceId === activeAerial) apply();
+  });
   store.subscribe((state, reason) => { if (reason === 'layers' || reason === 'restore') apply(state); });
-  return { apply, currentStateSlug };
+  return { apply, currentStateSlug, isBasemapVisible: () => basemapVisible };
 }

@@ -1,5 +1,17 @@
 import { addressLabel, escapeHtml, featureKey, formatArea, polygonAreaMeters } from './utils.js';
 
+const HIDDEN_DYNAMIC_FIELDS = new Set([
+  'source_db', 'gml_id', 'id', 'geometry', 'bbox', 'center', 'addresses', 'address',
+  'zaehler', 'nenner', 'nutzungen', 'nutzung_haupt',
+  'gemeinde', 'gemeindenummer', 'kreis', 'kreisnummer', 'land', 'landnummer', 'regierungsbezirk'
+]);
+
+const FIELD_LABELS = {
+  gemeindeteil: 'Gemeindeteil',
+  gebaeudekennzeichen: 'Gebäudekennzeichen',
+  flurstuecksfolge: 'Flurstücksfolge'
+};
+
 export function createSelectionController({ map, api, store, layout, elements }) {
   const { selectionContent, selectionCount, selectTool, selectionDock } = elements;
   let request = null;
@@ -45,10 +57,21 @@ export function createSelectionController({ map, api, store, layout, elements })
     return value === null || value === undefined || value === '' ? '–' : escapeHtml(value);
   }
 
-  function addressChips(item) {
-    const labels = Array.isArray(item.addresses) && item.addresses.length
+  function hasValue(value) {
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim() !== '';
+    if (Array.isArray(value)) return value.length > 0;
+    return typeof value !== 'object' || Object.keys(value).length > 0;
+  }
+
+  function addressLabels(item) {
+    return Array.isArray(item.addresses) && item.addresses.length
       ? item.addresses.map((address) => address?.label || [address?.street, address?.house_number].filter(Boolean).join(' ')).filter(Boolean)
       : [addressLabel(item)].filter((label) => label && label !== '–');
+  }
+
+  function addressChips(item) {
+    const labels = addressLabels(item);
     return labels.length ? labels.map((label) => `<span class="address-chip">${escapeHtml(label)}</span>`).join('') : '–';
   }
 
@@ -60,14 +83,6 @@ export function createSelectionController({ map, api, store, layout, elements })
       return Number.isFinite(share) && share > 0 ? `${name} ${Math.round(share * 100)}%` : name;
     }).join(', ');
     return item.nutzung_haupt || item.nutzung || item.tatsaechliche_nutzung || item.thema || '';
-  }
-
-  function buildingTable(buildings) {
-    const rows = buildings.map((item) => {
-      const footprint = Number(item.grundflaeche_m2) || geometryArea(item.geometry);
-      return `<tr><td class="strong">${display(item.gebaeudefunktion_text || item.name || 'Gebäude')}</td><td>${display(item.geschosse_oberirdisch)}</td><td>${display(item.dachform_text)}</td><td>${footprint > 0 ? formatArea(footprint) : '–'}</td><td>${display(item.baujahr)}</td><td>${addressChips(item)}</td></tr>`;
-    }).join('');
-    return `<section class="selection-section"><div class="selection-section-title">Gebäude</div><div class="selection-table-wrap"><table><thead><tr><th>Nutzungsart</th><th>Geschosse</th><th>Dachform</th><th>Grundfl.</th><th>Baujahr</th><th>Adressen</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
   }
 
   function geometryArea(geometry) {
@@ -83,13 +98,111 @@ export function createSelectionController({ map, api, store, layout, elements })
     return 0;
   }
 
+  function pick(item, keys) {
+    for (const key of keys || []) if (hasValue(item[key])) return item[key];
+    return null;
+  }
+
+  function columnValue(column, item) {
+    return column.value ? column.value(item) : pick(item, column.keys);
+  }
+
+  function formatCell(value, format) {
+    if (!hasValue(value)) return '–';
+    if (format === 'area') return formatArea(value);
+    if (format === 'length') return `${Number(value).toLocaleString('de-DE', { maximumFractionDigits: 2 })} m`;
+    if (format === 'volume') return `${Number(value).toLocaleString('de-DE', { maximumFractionDigits: 2 })} m³`;
+    if (format === 'boolean') {
+      if (value === true || value === 1 || String(value).toLowerCase() === 'true') return 'Ja';
+      if (value === false || value === 0 || String(value).toLowerCase() === 'false') return 'Nein';
+    }
+    if (format === 'date' && /^\d{4}-\d{2}-\d{2}/.test(String(value))) {
+      const [year, month, day] = String(value).slice(0, 10).split('-');
+      return `${day}.${month}.${year}`;
+    }
+    if (typeof value === 'number') return value.toLocaleString('de-DE', { maximumFractionDigits: 2 });
+    return display(value);
+  }
+
+  function humanizeField(key) {
+    if (FIELD_LABELS[key]) return FIELD_LABELS[key];
+    return key
+      .replace(/_m2$/, ' (m²)')
+      .replace(/_m3$/, ' (m³)')
+      .replace(/_m$/, ' (m)')
+      .replaceAll('_', ' ')
+      .replace(/^./, (character) => character.toLocaleUpperCase('de-DE'));
+  }
+
+  function extraColumns(items, definitions) {
+    const handled = new Set(definitions.flatMap((column) => column.keys || []));
+    const keys = new Set(items.flatMap((item) => Object.keys(item || {})));
+    return [...keys].filter((key) => {
+      if (handled.has(key) || HIDDEN_DYNAMIC_FIELDS.has(key)) return false;
+      const values = items.map((item) => item[key]).filter(hasValue);
+      if (!values.length || values.some((value) => typeof value === 'object')) return false;
+      if (!key.endsWith('_text')) {
+        const textKey = `${key}_text`;
+        if (keys.has(textKey) && items.some((item) => hasValue(item[textKey]))) return false;
+      }
+      return true;
+    }).sort((a, b) => humanizeField(a).localeCompare(humanizeField(b), 'de')).map((key) => ({ label: humanizeField(key), keys: [key] }));
+  }
+
+  function dynamicTable(title, items, definitions) {
+    const columns = [...definitions, ...extraColumns(items, definitions)].filter((column) => items.some((item) => hasValue(columnValue(column, item))));
+    const headers = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('');
+    const rows = items.map((item) => `<tr>${columns.map((column) => {
+      const value = columnValue(column, item);
+      const content = column.html ? column.html(item, value) : formatCell(value, column.format);
+      return `<td${column.strong ? ' class="strong"' : ''}>${content}</td>`;
+    }).join('')}</tr>`).join('');
+    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  }
+
+  function buildingTable(buildings) {
+    const columns = [
+      { label: 'Gebäudefunktion', keys: ['gebaeudefunktion_text', 'gebaeudefunktion'], strong: true },
+      { label: 'Name', keys: ['name'] },
+      { label: 'Vollgeschosse', keys: ['geschosse_oberirdisch'] },
+      { label: 'Unterirdische Geschosse', keys: ['geschosse_unterirdisch'] },
+      { label: 'Dachform', keys: ['dachform_text', 'dachform'] },
+      { label: 'Dachart', keys: ['dachart'] },
+      { label: 'Dachgeschossausbau', keys: ['dachgeschossausbau_text', 'dachgeschossausbau'] },
+      { label: 'Bauweise', keys: ['bauweise_text', 'bauweise'] },
+      { label: 'Baujahr', keys: ['baujahr'] },
+      { label: 'Grundfläche', keys: ['grundflaeche_m2'], format: 'area' },
+      { label: 'Geschossfläche', keys: ['geschossflaeche_m2'], format: 'area' },
+      { label: 'Geometrische Fläche', keys: ['geometrische_flaeche_m2'], value: (item) => item.geometrische_flaeche_m2 || geometryArea(item.geometry), format: 'area' },
+      { label: 'Umbauter Raum', keys: ['umbauter_raum_m3'], format: 'volume' },
+      { label: 'Objekthöhe', keys: ['objekthoehe_m'], format: 'length' },
+      { label: 'Lage', keys: ['lage_zur_erdoberflaeche_text', 'lage_zur_erdoberflaeche'] },
+      { label: 'Hochhaus', keys: ['hochhaus'], format: 'boolean' },
+      { label: 'Weitere Gebäudefunktion', keys: ['weitere_gebaeudefunktion_text', 'weitere_gebaeudefunktion'] },
+      { label: 'Zustand', keys: ['zustand_text', 'zustand'] },
+      { label: 'Adressen', keys: ['addresses', 'address'], value: addressLabels, html: (item) => addressChips(item) }
+    ];
+    return dynamicTable('Gebäude', buildings, columns);
+  }
+
   function parcelTable(parcels) {
-    const rows = parcels.map((item) => {
-      const number = item.flurstueck || [item.zaehler, item.nenner].filter(Boolean).join('/');
-      const key = item.gemarkung_nummer || item.gemarkungsnummer || item.gemarkungsschluessel || item.gemarkung_key || '';
-      return `<tr><td>${display(item.flur)}</td><td class="strong">${display(number)}</td><td>${display(item.gemarkung)}</td><td>${display(key)}</td><td>${display(parcelUsage(item))}</td><td>${formatArea(item.amtliche_flaeche_m2)}</td><td>${addressChips(item)}</td></tr>`;
-    }).join('');
-    return `<section class="selection-section"><div class="selection-section-title">Flurstücke</div><div class="selection-table-wrap"><table><thead><tr><th>Flur</th><th>Flurstück</th><th>Gemarkung</th><th>Schlüssel</th><th>Nutzung</th><th>Größe</th><th>Adressen</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+    const columns = [
+      { label: 'Flur', keys: ['flur'] },
+      { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], value: (item) => item.flurstueck || [item.zaehler, item.nenner].filter(Boolean).join('/'), strong: true },
+      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], value: (item) => item.gemarkung && item.gemarkungsnummer ? `${item.gemarkung} (${item.gemarkungsnummer})` : item.gemarkung || item.gemarkungsnummer },
+      { label: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'] },
+      { label: 'Flurstückskennzeichen', keys: ['flurstueckskennzeichen'] },
+      { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'], value: parcelUsage },
+      { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'], format: 'area' },
+      { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
+      { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], format: 'date' },
+      { label: 'Flurstücksfolge', keys: ['flurstuecksfolge'] },
+      { label: 'Abweichender Rechtszustand', keys: ['abweichender_rechtszustand'], format: 'boolean' },
+      { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'], format: 'boolean' },
+      { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'], format: 'boolean' },
+      { label: 'Adressen', keys: ['addresses', 'address'], value: addressLabels, html: (item) => addressChips(item) }
+    ];
+    return dynamicTable('Flurstücke', parcels, columns);
   }
 
   async function selectAt(lngLat, additive = false, preferredKind = null) {

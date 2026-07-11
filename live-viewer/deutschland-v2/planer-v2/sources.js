@@ -2,22 +2,46 @@ export function createSourceController({ map, api, store, elements, layerControl
   const { sourceButton, sourcePanel, sourceList } = elements;
   let metadata = null;
 
-  function sourceLine(text, href, suffix = '') {
-    const link = href ? `<a href="${href}" target="_blank" rel="noopener">${text}</a>` : text;
-    return `<li>${link}${suffix}</li>`;
+  function appendRow(parts) {
+    const row = document.createElement('li');
+    for (const part of parts) {
+      if (part.href) {
+        const link = document.createElement('a');
+        link.href = part.href;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = part.text;
+        row.append(link);
+      } else {
+        row.append(document.createTextNode(part.text));
+      }
+    }
+    sourceList.append(row);
   }
 
   function render() {
     const slug = layerController.currentStateSlug();
     const state = metadata?.states?.find((item) => item.slug === slug);
     const detail = map.getZoom() >= 16.7;
-    const layers = store.getState().layers;
-    const bkgVisible = !detail || (!layers.alkis && !layers.aerial);
-    const rows = [sourceLine('© MapLibre', 'https://maplibre.org/')];
-    if (bkgVisible) rows.push(sourceLine('© GeoBasis-DE / BKG', 'https://www.bkg.bund.de/', ' 2026 · CC BY 4.0'));
-    if (detail && !bkgVisible && state?.quellenvermerk) rows.push(sourceLine(state.quellenvermerk, null, state.datenstand ? ` · Stand ${state.datenstand}` : ''));
-    rows.push(sourceLine('© OpenPLZ', 'https://www.openplzapi.org/', ' · ODbL 1.0'));
-    sourceList.innerHTML = rows.join('');
+    const bkgVisible = layerController.isBasemapVisible();
+    sourceList.replaceChildren();
+    appendRow([{ text: '© MapLibre', href: 'https://maplibre.org/' }]);
+    if (bkgVisible) {
+      appendRow([
+        { text: '© GeoBasis-DE / ' },
+        { text: 'BKG', href: 'https://www.bkg.bund.de/' },
+        { text: ' 2026 ' },
+        { text: 'CC BY 4.0', href: 'https://creativecommons.org/licenses/by/4.0/' }
+      ]);
+    }
+    if (detail && !bkgVisible && state?.quellenvermerk) {
+      appendRow([{ text: `${state.quellenvermerk}${state.datenstand ? ` · Stand ${state.datenstand}` : ''}` }]);
+    }
+    appendRow([
+      { text: '© OpenPLZ', href: 'https://www.openplzapi.org/' },
+      { text: ', ' },
+      { text: 'ODbL 1.0', href: 'https://opendatacommons.org/licenses/odbl/1-0/' }
+    ]);
   }
 
   sourceButton.addEventListener('click', () => {
@@ -26,6 +50,7 @@ export function createSourceController({ map, api, store, elements, layerControl
     sourceButton.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
   map.on('moveend', render);
+  map.on('idle', render);
   store.subscribe((_state, reason) => { if (reason === 'layers') render(); });
   api.sources().then((data) => { metadata = data; render(); }).catch((error) => console.warn(error));
   return { render };

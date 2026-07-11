@@ -1,9 +1,21 @@
 export function createLayout({ app, map, store, elements }) {
   const { exportSidebar, selectionDock, exportTool, selectTool, measureTool, mobileExportSettings } = elements;
   let resizing = false;
+  let layoutTransitionTimer = 0;
 
   function isMobile() {
     return window.matchMedia('(max-width: 760px)').matches;
+  }
+
+  function scheduleMapResize(reason) {
+    const geometryChanges = reason === 'table' || (!isMobile() && ['tool', 'sidebar'].includes(reason));
+    if (!geometryChanges) return;
+    app.dataset.layoutTransitioning = 'true';
+    window.clearTimeout(layoutTransitionTimer);
+    layoutTransitionTimer = window.setTimeout(() => {
+      app.dataset.layoutTransitioning = 'false';
+      map.resize();
+    }, reason === 'table' ? 320 : 400);
   }
 
   function render(state, reason) {
@@ -19,8 +31,7 @@ export function createLayout({ app, map, store, elements }) {
     selectTool.classList.toggle('is-active', activeTool === 'select');
     measureTool.classList.toggle('is-active', activeTool === 'measure');
     mobileExportSettings.setAttribute('aria-pressed', layout.mobileExportSettings ? 'true' : 'false');
-    const mobileMapGeometryChanged = ['table', 'resize', 'restore'].includes(reason);
-    if (reason !== 'boot' && (!isMobile() || mobileMapGeometryChanged)) requestAnimationFrame(() => map.resize());
+    if (reason !== 'boot') scheduleMapResize(reason);
   }
 
   function setTool(activeTool) {
@@ -115,6 +126,7 @@ export function createLayout({ app, map, store, elements }) {
       event.currentTarget.removeEventListener('pointermove', move);
       event.currentTarget.removeEventListener('pointerup', finish);
       event.currentTarget.removeEventListener('pointercancel', finish);
+      window.requestAnimationFrame(() => map.resize());
     };
     event.currentTarget.addEventListener('pointermove', move);
     event.currentTarget.addEventListener('pointerup', finish);

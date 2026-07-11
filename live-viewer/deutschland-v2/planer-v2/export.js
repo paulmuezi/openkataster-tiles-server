@@ -76,6 +76,27 @@ export function createExportController({ map, api, store, elements }) {
     exportFrameBox.classList.remove('is-dragging');
   }
 
+  function forwardWheelToMap(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    map.getCanvas().dispatchEvent(new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      screenX: event.screenX,
+      screenY: event.screenY,
+      deltaX: event.deltaX,
+      deltaY: event.deltaY,
+      deltaZ: event.deltaZ,
+      deltaMode: event.deltaMode,
+      ctrlKey: event.ctrlKey,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+      metaKey: event.metaKey
+    }));
+  }
+
   function plannerRender() {
     const state = store.getState();
     return {
@@ -167,6 +188,7 @@ export function createExportController({ map, api, store, elements }) {
   exportFrameBox.addEventListener('pointermove', moveDrag);
   exportFrameBox.addEventListener('pointerup', endDrag);
   exportFrameBox.addEventListener('pointercancel', endDrag);
+  exportFrameBox.addEventListener('wheel', forwardWheelToMap, { passive: false });
   for (const control of [exportPaper, exportOrientation, exportScale, exportPdf, exportDxf, exportAerial]) control.addEventListener('change', render);
   exportPreview.addEventListener('click', preview);
   return { render, setCenter, preview };

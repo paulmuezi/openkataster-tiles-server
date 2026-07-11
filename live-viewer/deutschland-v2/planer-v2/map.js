@@ -18,7 +18,13 @@ export function createPlannerMap({ container, savedView }) {
   map.dragRotate.disable();
   map.touchZoomRotate.disableRotation();
   map.scrollZoom.enable();
-  const observer = new ResizeObserver(() => map.resize());
+  let resizeFrame = 0;
+  const observer = new ResizeObserver(() => {
+    const app = container.closest('.planner-app');
+    if (app?.dataset.resizing === 'true' || app?.dataset.layoutTransitioning === 'true') return;
+    window.cancelAnimationFrame(resizeFrame);
+    resizeFrame = window.requestAnimationFrame(() => map.resize());
+  });
   observer.observe(container);
   return map;
 }

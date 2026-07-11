@@ -9,7 +9,7 @@ export function createMeasureController({ map, store, elements }) {
     const empty = { type: 'FeatureCollection', features: [] };
     map.addSource('measure-v2', { type: 'geojson', data: empty });
     map.addLayer({ id: 'measure-v2-fill', type: 'fill', source: 'measure-v2', filter: ['==', '$type', 'Polygon'], paint: { 'fill-color': '#f86d14', 'fill-opacity': .14 } });
-    map.addLayer({ id: 'measure-v2-line', type: 'line', source: 'measure-v2', paint: { 'line-color': '#f86d14', 'line-width': 2.2, 'line-dasharray': [2.5, 1.6] } });
+    map.addLayer({ id: 'measure-v2-line', type: 'line', source: 'measure-v2', filter: ['==', '$type', 'LineString'], paint: { 'line-color': '#f86d14', 'line-width': 2.2, 'line-dasharray': [2.5, 1.6] } });
     map.addLayer({ id: 'measure-v2-points', type: 'circle', source: 'measure-v2', filter: ['==', '$type', 'Point'], paint: { 'circle-radius': 4, 'circle-color': '#fff', 'circle-stroke-color': '#f86d14', 'circle-stroke-width': 2 } });
   }
 

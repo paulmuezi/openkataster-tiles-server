@@ -20,10 +20,21 @@ const GROUPS = {
 
 export function createLayerController({ map, store, elements }) {
   const { layerButton, layerMenu, layerInputs, layerZoomNote } = elements;
+  const layerControl = layerMenu?.closest('.layer-control');
   const baseVisibility = new Map();
   let stateFeatures = [];
   let activeAerial = '';
   let basemapVisible = true;
+
+  function updateLayerOverflowHint() {
+    if (!layerControl || !layerMenu || layerMenu.hidden) {
+      layerControl?.removeAttribute('data-layer-overflow');
+      return;
+    }
+    const hasOverflow = layerMenu.scrollHeight > layerMenu.clientHeight + 4;
+    const atEnd = layerMenu.scrollTop + layerMenu.clientHeight >= layerMenu.scrollHeight - 4;
+    layerControl.dataset.layerOverflow = hasOverflow && !atEnd ? 'true' : 'false';
+  }
 
   async function loadStateFeatures() {
     try {
@@ -185,13 +196,17 @@ export function createLayerController({ map, store, elements }) {
     const open = layerMenu.hidden;
     layerMenu.hidden = !open;
     layerButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+    window.requestAnimationFrame(updateLayerOverflowHint);
   });
   document.addEventListener('click', (event) => {
     if (!event.target.closest('.layer-control')) {
       layerMenu.hidden = true;
       layerButton.setAttribute('aria-expanded', 'false');
+      updateLayerOverflowHint();
     }
   });
+  layerMenu.addEventListener('scroll', updateLayerOverflowHint, { passive: true });
+  window.addEventListener('resize', updateLayerOverflowHint, { passive: true });
   for (const input of layerInputs) input.addEventListener('change', () => {
     const state = store.getState();
     const layers = { ...state.layers, [input.dataset.layer]: input.checked };

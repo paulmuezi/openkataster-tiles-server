@@ -142,7 +142,9 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .preview-table td { height: 34px; color: #a0a6ae; }
 .locked-cell { font-weight: 500; }
 .layer-control { position: absolute; z-index: 25; right: 13px; top: 13px; display: grid; justify-items: end; gap: 8px; }
-.layer-menu { width: 226px; max-height: calc(100vh - 84px); overflow: auto; padding: 12px; }
+.layer-menu { width: 226px; max-height: calc(100vh - 84px); overflow: auto; padding: 12px; scrollbar-width: thin; scrollbar-color: rgba(89,97,108,.54) transparent; }
+.layer-menu::-webkit-scrollbar { width: 7px; }
+.layer-menu::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 99px; background: rgba(89,97,108,.54); background-clip: padding-box; }
 .layer-menu > strong { display: block; margin-bottom: 5px; font-weight: 600; }
 .layer-zoom-note { margin: 0 0 8px; color: var(--ok-muted); font-size: 11px; }
 .layer-menu details { margin: 0; }
@@ -329,6 +331,21 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
   .search-panel select { font-size: 16px; }
   .measure-panel { left: 65px; right: 13px; width: auto; min-width: 0; }
   .layer-menu { max-height: 62vh; }
+  .layer-control[data-layer-overflow="true"]::after {
+    content: "Weitere Ebenen ↓";
+    position: absolute;
+    z-index: 2;
+    right: 0;
+    bottom: 0;
+    width: 226px;
+    padding: 14px 10px 7px;
+    background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,.97) 45%);
+    color: #707780;
+    font-size: 10px;
+    line-height: 14px;
+    text-align: center;
+    pointer-events: none;
+  }
   .selection-head > div { display: grid; gap: 1px; }
   th, td { padding: 7px 10px; }
   .selection-resize { cursor: default; }

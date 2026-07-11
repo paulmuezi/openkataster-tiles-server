@@ -96,7 +96,8 @@ body[data-access="pro"] .site-pro { display: none; }
 .pro-badge { position: absolute; right: -5px; top: -4px; padding: 1px 4px; border-radius: 3px; background: var(--ok-orange); color: #fff; font-size: 8px; line-height: 1.3; }
 body[data-access="pro"] .pro-badge { display: none; }
 
-.search-control { position: absolute; z-index: 30; left: 13px; top: 13px; display: flex; align-items: flex-start; gap: 9px; }
+.search-control { position: absolute; z-index: 30; left: 13px; top: 13px; display: flex; align-items: flex-start; gap: 9px; pointer-events: none; }
+.search-control > * { pointer-events: auto; }
 .search-panel { width: min(318px, calc(100vw - 80px)); padding: 11px; }
 .panel-head { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .panel-head strong { font-size: 13px; font-weight: 600; }

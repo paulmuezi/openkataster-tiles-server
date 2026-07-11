@@ -221,7 +221,8 @@ export function createExportController({ map, api, store, elements }) {
       const downloads = [];
       if (wantsPng) downloads.push(await exportPng());
       if (wantsPdf || wantsDxf) downloads.push(...await exportVectorFiles({ pdf: wantsPdf, dxf: wantsDxf }));
-      showDownloads(downloads);
+      await triggerDownloads(downloads);
+      exportStatus.textContent = downloads.length > 1 ? 'Downloads wurden gestartet.' : 'Download wurde gestartet.';
     } catch (error) {
       console.error(error);
       exportStatus.textContent = error.message || 'Export fehlgeschlagen.';
@@ -251,8 +252,8 @@ export function createExportController({ map, api, store, elements }) {
       const outputs = status.outputs || {};
       if ((!options.pdf || outputs.pdf_url) && (!options.dxf || outputs.dxf_url)) {
         return [
-          options.pdf && { label: 'PDF herunterladen', href: downloadUrl(order.order_id, order.guest_token, 'pdf') },
-          options.dxf && { label: 'DXF herunterladen', href: downloadUrl(order.order_id, order.guest_token, 'dxf') }
+          options.pdf && { href: downloadUrl(order.order_id, order.guest_token, 'pdf'), filename: `openkataster-${exportPaper.value}.pdf` },
+          options.dxf && { href: downloadUrl(order.order_id, order.guest_token, 'dxf'), filename: 'openkataster.dxf' }
         ].filter(Boolean);
       }
     }
@@ -268,21 +269,21 @@ export function createExportController({ map, api, store, elements }) {
     activeObjectUrls = [];
   }
 
-  function showDownloads(downloads) {
-    exportStatus.replaceChildren();
-    const title = document.createElement('span');
-    title.textContent = 'Export ist fertig.';
-    const actions = document.createElement('div');
-    actions.className = 'export-downloads';
-    for (const download of downloads) {
+  async function triggerDownloads(downloads) {
+    for (const [index, download] of downloads.entries()) {
+      const response = await fetch(download.href, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error('Download konnte nicht geladen werden.');
+      const href = URL.createObjectURL(await response.blob());
       const link = document.createElement('a');
-      link.className = 'export-download-link';
-      link.href = download.href;
-      link.textContent = download.label;
-      if (download.filename) link.download = download.filename;
-      actions.append(link);
+      link.href = href;
+      link.download = download.filename || 'openkataster-export';
+      link.hidden = true;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(href), 30000);
+      if (index < downloads.length - 1) await new Promise((resolve) => window.setTimeout(resolve, 250));
     }
-    exportStatus.append(title, actions);
   }
 
   function outputPixelSize() {
@@ -365,7 +366,7 @@ export function createExportController({ map, api, store, elements }) {
       if (!blob) throw new Error('PNG konnte nicht erstellt werden.');
       const href = URL.createObjectURL(blob);
       activeObjectUrls.push(href);
-      return { label: 'PNG herunterladen', href, filename: `openkataster-${exportPaper.value}-${Date.now()}.png` };
+      return { href, filename: `openkataster-${exportPaper.value}-${Date.now()}.png` };
     } finally { printMap.remove(); container.remove(); }
   }
 

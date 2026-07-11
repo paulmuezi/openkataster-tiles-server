@@ -5,16 +5,17 @@ const SNAP_LAYERS = [
   'selected-buildings-v2', 'selected-parcels-v2'
 ];
 
-export function createMeasureController({ map, store, elements }) {
+export function createMeasureController({ map, store, elements, finish }) {
   const {
-    measurePanel, measureDistance, measureAngle, measureCumulative, measureArea,
-    measureUndo, measureClear
+    measurePanel, measureDistance, measureAngle, measureCumulative, measureArea
   } = elements;
   let points = [];
+  let completedMeasurements = [];
   let draft = null;
-  let closed = false;
+  let completedMetrics = null;
   let cursorPoint = null;
   let snapped = false;
+  let clickRevision = 0;
 
   function featureCollection(features = []) {
     return { type: 'FeatureCollection', features };
@@ -27,7 +28,12 @@ export function createMeasureController({ map, store, elements }) {
     map.addLayer({ id: 'measure-v2-fill', type: 'fill', source: 'measure-v2', filter: ['==', '$type', 'Polygon'], paint: { 'fill-color': '#6b7280', 'fill-opacity': .16 } });
     map.addLayer({ id: 'measure-v2-line', type: 'line', source: 'measure-v2', filter: ['==', '$type', 'LineString'], paint: { 'line-color': '#4b5563', 'line-width': 1.35, 'line-dasharray': [3.2, 2.2], 'line-opacity': .96 } });
     map.addLayer({ id: 'measure-v2-line-halo', type: 'line', source: 'measure-v2', filter: ['==', '$type', 'LineString'], paint: { 'line-color': 'rgba(255,255,255,.88)', 'line-width': 3.6, 'line-dasharray': [3.2, 2.2] } }, 'measure-v2-line');
-    map.addLayer({ id: 'measure-v2-points', type: 'circle', source: 'measure-v2', filter: ['==', '$type', 'Point'], paint: { 'circle-radius': 3.7, 'circle-color': '#fff', 'circle-stroke-color': '#4b5563', 'circle-stroke-width': 1.4 } });
+    map.addLayer({ id: 'measure-v2-points', type: 'circle', source: 'measure-v2', filter: ['==', '$type', 'Point'], paint: {
+      'circle-radius': ['case', ['==', ['get', 'kind'], 'start'], 5.2, 3.7],
+      'circle-color': '#fff',
+      'circle-stroke-color': ['case', ['==', ['get', 'kind'], 'start'], '#f86d14', '#4b5563'],
+      'circle-stroke-width': ['case', ['==', ['get', 'kind'], 'start'], 2, 1.4]
+    } });
     map.addLayer({ id: 'measure-snap-v2', type: 'circle', source: 'measure-snap-v2', paint: { 'circle-radius': 6.2, 'circle-color': 'rgba(255,255,255,.82)', 'circle-stroke-color': '#f86d14', 'circle-stroke-width': 2 } });
   }
 
@@ -139,13 +145,11 @@ export function createMeasureController({ map, store, elements }) {
   }
 
   function workingPoints() {
-    if (closed) return points;
     if (draft && points.length && haversineMeters(points[points.length - 1], draft) > .03) return [...points, draft];
     return points;
   }
 
   function lineCoordinates() {
-    if (closed && points.length >= 3) return [...points, points[0]];
     return workingPoints();
   }
 
@@ -194,43 +198,71 @@ export function createMeasureController({ map, store, elements }) {
     measurePanel.style.top = `${Math.max(margin, Math.min(top, container.clientHeight - height - margin))}px`;
   }
 
+  function metricsFor(working, line) {
+    const currentDistance = working.length >= 2 ? haversineMeters(working[working.length - 2], working[working.length - 1]) : 0;
+    const cumulative = line.slice(1).reduce((sum, point, index) => sum + haversineMeters(line[index], point), 0);
+    const angle = angleValue(working);
+    return {
+      distance: formatDistance(currentDistance),
+      cumulative: formatDistance(cumulative),
+      angleLabel: angle.label,
+      angle: `${angle.value.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}°`,
+      area: working.length >= 3 ? formatArea(polygonAreaMeters(working)) : '–'
+    };
+  }
+
+  function showMetrics(metrics) {
+    measureDistance.textContent = metrics.distance;
+    measureAngle.previousElementSibling.textContent = metrics.angleLabel;
+    measureAngle.textContent = metrics.angle;
+    measureCumulative.textContent = metrics.cumulative;
+    measureArea.textContent = metrics.area;
+  }
+
   function render() {
     const active = store.getState().activeTool === 'measure';
-    measurePanel.hidden = !active || !points.length;
+    measurePanel.hidden = !active || (!points.length && !completedMetrics);
     if (!map.getSource('measure-v2')) return;
     const working = workingPoints();
     const line = lineCoordinates();
-    const features = points.map((coordinates) => ({ type: 'Feature', properties: { kind: 'point' }, geometry: { type: 'Point', coordinates } }));
+    const features = [];
+    for (const measurement of completedMeasurements) {
+      const closedLine = [...measurement.points, measurement.points[0]];
+      features.push({ type: 'Feature', properties: { kind: 'area' }, geometry: { type: 'Polygon', coordinates: [closedLine] } });
+      features.push({ type: 'Feature', properties: { kind: 'line' }, geometry: { type: 'LineString', coordinates: closedLine } });
+      measurement.points.forEach((coordinates, index) => features.push({
+        type: 'Feature', properties: { kind: index === 0 ? 'start' : 'point' }, geometry: { type: 'Point', coordinates }
+      }));
+    }
+    points.forEach((coordinates, index) => features.push({
+      type: 'Feature', properties: { kind: index === 0 ? 'start' : 'point' }, geometry: { type: 'Point', coordinates }
+    }));
     if (line.length >= 2) features.unshift({ type: 'Feature', properties: { kind: 'line' }, geometry: { type: 'LineString', coordinates: line } });
     if (working.length >= 3) features.unshift({ type: 'Feature', properties: { kind: 'area' }, geometry: { type: 'Polygon', coordinates: [[...working, working[0]]] } });
     map.getSource('measure-v2').setData(featureCollection(features));
 
-    const currentDistance = working.length >= 2 ? haversineMeters(working[working.length - 2], working[working.length - 1]) : 0;
-    const cumulative = line.slice(1).reduce((sum, point, index) => sum + haversineMeters(line[index], point), 0);
-    const angle = angleValue(working);
-    measureDistance.textContent = formatDistance(currentDistance);
-    measureAngle.previousElementSibling.textContent = angle.label;
-    measureAngle.textContent = `${angle.value.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}°`;
-    measureCumulative.textContent = formatDistance(cumulative);
-    measureArea.textContent = working.length >= 3 ? formatArea(polygonAreaMeters(working)) : '–';
-    measureUndo.disabled = !points.length;
-    measureClear.disabled = !points.length;
+    showMetrics(completedMetrics || metricsFor(working, line));
     measurePanel.dataset.snapped = snapped ? 'true' : 'false';
     positionPanel();
   }
 
   function clear() {
     points = [];
+    completedMeasurements = [];
     draft = null;
-    closed = false;
+    completedMetrics = null;
     snapped = false;
+    clickRevision += 1;
     setSnapIndicator(null);
     render();
   }
 
   function undo() {
-    if (closed) closed = false;
-    else points.pop();
+    if (points.length) points.pop();
+    else if (completedMeasurements.length) {
+      completedMeasurements.pop();
+      completedMetrics = completedMeasurements.at(-1)?.metrics || null;
+    } else completedMetrics = null;
     draft = null;
     setSnapIndicator(null);
     render();
@@ -240,25 +272,54 @@ export function createMeasureController({ map, store, elements }) {
   map.on('click', (event) => {
     if (store.getState().activeTool !== 'measure') return;
     cursorPoint = event.point;
+    completedMetrics = null;
+
+    if (!points.length) {
+      const revision = ++clickRevision;
+      const fallback = [event.lngLat.lng, event.lngLat.lat];
+      const snapEvent = {
+        point: { x: event.point.x, y: event.point.y },
+        lngLat: { lng: event.lngLat.lng, lat: event.lngLat.lat },
+        originalEvent: event.originalEvent
+      };
+      points = [fallback];
+      draft = null;
+      snapped = false;
+      setSnapIndicator(fallback);
+      render();
+      window.requestAnimationFrame(() => window.setTimeout(() => {
+        if (revision !== clickRevision || store.getState().activeTool !== 'measure' || points.length !== 1) return;
+        const candidate = nearestSnap(snapEvent);
+        points[0] = candidate.coordinate;
+        snapped = candidate.snapped;
+        setSnapIndicator(candidate.coordinate);
+        render();
+      }, 0));
+      return;
+    }
+
     const candidate = nearestSnap(event);
     const coordinate = candidate.coordinate;
-    if (closed) {
-      points = [coordinate];
-      closed = false;
-    } else if (points.length >= 3 && haversineMeters(points[0], coordinate) < .05) {
-      closed = true;
+    if (points.length >= 3 && haversineMeters(points[0], coordinate) < .05) {
+      const closedLine = [...points, points[0]];
+      completedMetrics = metricsFor(points, closedLine);
+      completedMeasurements.push({ points: [...points], metrics: completedMetrics });
+      points = [];
+      clickRevision += 1;
+      snapped = false;
+      setSnapIndicator(null);
     } else if (!points.length || haversineMeters(points[points.length - 1], coordinate) >= .03) {
       points.push(coordinate);
+      snapped = candidate.snapped;
+      setSnapIndicator(candidate.snapped ? coordinate : null);
     }
     draft = null;
-    snapped = candidate.snapped;
-    setSnapIndicator(candidate.snapped ? coordinate : null);
     render();
   });
   map.on('mousemove', (event) => {
     if (store.getState().activeTool !== 'measure') return;
     cursorPoint = event.point;
-    if (!points.length || closed) {
+    if (!points.length) {
       positionPanel();
       return;
     }
@@ -289,13 +350,15 @@ export function createMeasureController({ map, store, elements }) {
   });
   window.addEventListener('keydown', (event) => {
     if (store.getState().activeTool !== 'measure') return;
-    if (event.key === 'Escape') clear();
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      finish?.();
+      return;
+    }
     if (event.key === 'Backspace' || event.key === 'Delete') {
       event.preventDefault();
       undo();
     }
   });
-  measureUndo.addEventListener('click', undo);
-  measureClear.addEventListener('click', clear);
   return { clear, undo };
 }

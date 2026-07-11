@@ -120,17 +120,11 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 
 .tool-stack { position: absolute; z-index: 20; left: 13px; top: 70px; display: grid; gap: 7px; }
 .measure-panel { position: absolute; z-index: 30; left: 66px; top: 126px; width: 226px; min-width: 226px; padding: 7px 9px 8px; border: 0; border-radius: 3px; background: rgba(255,255,255,.9); box-shadow: none; display: grid; gap: 6px; pointer-events: none; }
-.measure-panel[data-snapped="true"] { box-shadow: inset 2px 0 0 rgba(248,109,20,.72); }
 .measure-grid { display: grid; gap: 2px; }
 .measure-cell { display: grid; grid-template-columns: 15px minmax(0,1fr) max-content; align-items: center; gap: 6px; min-height: 18px; }
 .measure-cell span:not(.measure-symbol) { color: #4b5563; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .measure-cell strong { color: #374151; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .measure-symbol { color: #6b7280; font-size: 12px; line-height: 1; text-align: center; }
-.measure-actions { display: flex; justify-content: flex-end; gap: 5px; padding-top: 4px; border-top: 1px solid rgba(229,225,219,.72); pointer-events: auto; }
-.measure-actions button { height: 26px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: #5f6670; cursor: pointer; font-size: 11px; }
-.measure-actions button:hover { background: rgba(248,109,20,.09); color: #343a43; }
-.measure-actions button:disabled { opacity: .4; cursor: default; }
-
 .layer-control { position: absolute; z-index: 25; right: 13px; top: 13px; display: grid; justify-items: end; gap: 8px; }
 .layer-menu { width: 226px; max-height: calc(100vh - 84px); overflow: auto; padding: 12px; }
 .layer-menu > strong { display: block; margin-bottom: 5px; font-weight: 600; }
@@ -181,6 +175,8 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .export-frame-box { position: absolute; pointer-events: auto; cursor: grab; border: 2px solid rgba(248,109,20,.84); background: rgba(248,109,20,.09); transition: background-color 120ms ease; }
 .export-frame-box:hover { background: rgba(248,109,20,.14); }
 .export-frame-box.is-dragging { cursor: grabbing; background: rgba(248,109,20,.18); }
+.planner-app[data-active-tool="measure"] .export-frame-box,
+.planner-app[data-active-tool="select"] .export-frame-box { pointer-events: none; cursor: default; }
 .export-center-marker { position: absolute; width: 12px; height: 12px; transform: translate(-50%,-50%); border: 2px solid #fff; border-radius: 50%; background: var(--ok-orange); box-shadow: 0 1px 4px rgba(24,30,39,.28); }
 
 .selection-dock { min-width: 0; min-height: 0; overflow: hidden; display: grid; grid-template-rows: 12px 43px minmax(0,1fr); border-top: 1px solid transparent; background: #fff; pointer-events: none; transform: translateY(8px); transition: transform var(--table-motion-duration) var(--table-motion-easing), border-color 100ms ease; }

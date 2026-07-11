@@ -3,7 +3,7 @@ import { createExportController } from './export.js?v=20260711-layout-stability1
 import { createLayerController } from './layers.js?v=20260711-zoom-table-tunnel1';
 import { createLayout } from './layout.js?v=20260711-independent-export1';
 import { createPlannerMap } from './map.js?v=20260711-north-up1';
-import { createMeasureController } from './measure.js?v=20260711-measure-snap1';
+import { createMeasureController } from './measure.js?v=20260711-measure-session3';
 import { createPersistence, readPersistedState } from './persistence.js';
 import { createSearchController } from './search.js?v=20260711-search-highlight1';
 import { createSelectionController } from './selection.js?v=20260711-zoom-table-tunnel1';
@@ -42,7 +42,7 @@ const api = createApi({ token: params.get('token') || '', fresh: params.get('fre
 const elements = Object.fromEntries([
   'exportSidebar','selectionDock','exportTool','selectTool','measureTool','selectionResize','selectionClose','selectionContent','selectionCount',
   'layerButton','layerMenu','layerZoomNote','searchButton','searchPanel','searchClose','searchMode','addressFields','parcelFields','placeInput','streetInput','houseInput','gemarkungInput','flurInput','parcelInput','placeSuggestions','streetSuggestions','searchSubmit','searchResults','searchStatus',
-  'measurePanel','measureDistance','measureAngle','measureCumulative','measureArea','measureUndo','measureClear','sourceButton','sourcePanel','sourceList',
+  'measurePanel','measureDistance','measureAngle','measureCumulative','measureArea','sourceButton','sourcePanel','sourceList',
   'exportFrame','exportFrameBox','exportCenterMarker','exportPaper','exportOrientation','exportScale','exportPdf','exportDxf','exportAerial','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings','mobileExportBackdrop',
   'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge'
 ].map((id) => [id, document.getElementById(id)]));
@@ -52,7 +52,7 @@ const layout = createLayout({ app, map, store, elements });
 const layers = createLayerController({ map, store, elements });
 const selection = createSelectionController({ map, api, store, layout, elements });
 const search = createSearchController({ map, api, store, elements, selection });
-const measure = createMeasureController({ map, store, elements });
+const measure = createMeasureController({ map, store, elements, finish: () => layout.setTool('measure') });
 const exportController = createExportController({ map, api, store, elements });
 const sources = createSourceController({ map, api, store, elements, layerController: layers });
 createPersistence({ map, store });

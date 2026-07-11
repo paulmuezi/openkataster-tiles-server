@@ -2,6 +2,7 @@ import { pointInGeometry } from './utils.js';
 
 const SOURCE_ID = 'alkis-v2';
 const DETAIL_ZOOM = 17;
+const HIDDEN_ROOF_FORM_LABELS = ['F', 'S', 'W', 'P', 'Z', 'K', 'M', 'T'];
 const BKG_SOURCES = new Set(['smarttiles_de', 'germany_geojson', 'states_geojson', 'state_labels_source', 'world_countries_geojson', 'europe_countries_geojson']);
 const AERIAL_STATES = new Set(['baden-wurttemberg', 'berlin', 'brandenburg', 'bremen', 'hamburg', 'hessen', 'mecklenburg-vorpommern', 'niedersachsen', 'nordrhein-westfalen', 'rheinland-pfalz', 'saarland', 'sachsen', 'schleswig-holstein', 'thueringen', 'thuringen']);
 
@@ -93,7 +94,7 @@ export function createLayerController({ map, store, elements }) {
       paint: { 'line-color': '#25282d', 'line-width': ['interpolate', ['linear'], ['zoom'], 17, .35, 20, .8], 'line-opacity': .86 } });
     add(labelLayer('alkis-parcel-labels', ['==', ['get', 'theme_index'], 0], 9, false));
     add(labelLayer('alkis-house-numbers', ['all', ['==', ['get', 'theme_index'], 1], ['==', ['get', 'signaturnummer'], '4070']], 9, false));
-    add(labelLayer('alkis-building-labels', ['all', ['==', ['get', 'theme_index'], 1], ['!=', ['get', 'signaturnummer'], '4070']], 9, false));
+    add(labelLayer('alkis-building-labels', ['all', ['==', ['get', 'theme_index'], 1], ['!=', ['get', 'signaturnummer'], '4070'], ['!', ['in', ['get', 'text_content'], ['literal', HIDDEN_ROOF_FORM_LABELS]]]], 9, false));
     add(labelLayer('alkis-street-names', ['==', ['get', 'theme_index'], 2], 10, true));
     add({ id: 'alkis-boundary-points', type: 'fill', source: SOURCE_ID, 'source-layer': 'boundary_point_geometries', minzoom: 17.4,
       paint: { 'fill-color': ['coalesce', ['get', 'fill_color'], '#ffffff'], 'fill-outline-color': ['coalesce', ['get', 'stroke_color'], '#111111'], 'fill-opacity': 1 } });

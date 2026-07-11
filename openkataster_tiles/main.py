@@ -6614,6 +6614,43 @@ def normalize_geocoder_text_variants(value: str | None) -> tuple[str, ...]:
             variants.append(candidate)
     return tuple(variants)
 
+CITY_STATE_MUNICIPALITY_ALIASES = {
+    "hamburg": ("Hamburg", "Freie und Hansestadt Hamburg"),
+    "berlin": ("Berlin", "Land Berlin"),
+    "bremen": ("Bremen", "Freie Hansestadt Bremen"),
+}
+
+
+def city_norms_for_state_context(city: str | None, state: str | None) -> tuple[str, ...]:
+    variants = list(normalize_geocoder_text_variants(city))
+    state_key = normalize_state_key(state)
+    aliases = CITY_STATE_MUNICIPALITY_ALIASES.get(state_key, ())
+    normalized_city = normalize_geocoder_text(city)
+    alias_norms = {
+        normalize_geocoder_text(alias)
+        for alias in aliases
+        if normalize_geocoder_text(alias)
+    }
+    if normalized_city and normalized_city in alias_norms:
+        for alias in aliases:
+            for variant in normalize_geocoder_text_variants(alias):
+                if variant and variant not in variants:
+                    variants.append(variant)
+    return tuple(variants)
+
+
+def city_display_name_for_state(city: str | None, state: str | None) -> str:
+    value = str(city or "").strip()
+    state_key = normalize_state_key(state)
+    aliases = CITY_STATE_MUNICIPALITY_ALIASES.get(state_key, ())
+    if normalize_geocoder_text(value) in {
+        normalize_geocoder_text(alias)
+        for alias in aliases
+        if normalize_geocoder_text(alias)
+    }:
+        return state_display_name(state_key)
+    return value
+
 
 def normalize_geocoder_house(value: str | None) -> str:
     return re.sub(r"\s+", "", normalize_geocoder_text(value))
@@ -7073,13 +7110,11 @@ def search_address_result_from_row(row: sqlite3.Row, state: str, city_fallback: 
     lat = fast_float(row["lat"])
     street_label = str(row["street_label"] or "").strip()
     house_label = str(row["house_number_label"] or "").strip()
-    city_label = str(row["city_label"] or city_fallback or "").strip()
-    label = str(row["label"] or "").strip()
+    city_label = city_display_name_for_state(row["city_label"] or city_fallback, state)
     base_label = " ".join(part for part in (street_label, house_label) if part).strip()
-    if not label:
-        label = base_label
-    if label and city_label and city_label.casefold() not in label.casefold():
-        label = f"{label}, {city_label}"
+    post_code = str(row["post_code"] or "").strip()
+    locality = " ".join(part for part in (post_code, city_label) if part)
+    label = f"{base_label}, {locality}" if base_label and locality else (base_label or locality)
     address = {
         "label": label,
         "street": street_label,
@@ -7087,7 +7122,6 @@ def search_address_result_from_row(row: sqlite3.Row, state: str, city_fallback: 
         "city": city_label,
         "country": "Deutschland",
     }
-    post_code = str(row["post_code"] or "").strip()
     if post_code:
         address["post_code"] = post_code
         address["postal_code"] = post_code
@@ -7120,7 +7154,7 @@ def search_street_result_from_row(row: sqlite3.Row, state: str, street_fallback:
     lon = fast_float(row["lon"])
     lat = fast_float(row["lat"])
     street_label = str(row["street_label"] or street_fallback or "").strip()
-    city_label = str(row["city_label"] or city_fallback or "").strip()
+    city_label = city_display_name_for_state(row["city_label"] or city_fallback, state)
     post_code = str(row["post_code"] or "").strip() if "post_code" in row.keys() else ""
     place_label = " ".join(part for part in (post_code, city_label) if part)
     label = f"{street_label}, {place_label}" if place_label else street_label
@@ -7382,7 +7416,7 @@ def search_sqlite_direct_lookup(
         for entry in entries:
             try:
                 con = search_db_connection(entry.path)
-                entry_city_norms = list(city_norms)
+                entry_city_norms = list(city_norms_for_state_context(city, entry.name))
                 if _include_empty_city_for_state_place(entry.name, city, None) and "" not in entry_city_norms:
                     entry_city_norms.append("")
                 if mode == "address":
@@ -7752,7 +7786,7 @@ def search_street_suggestions_cached(
             con = search_db_connection(entry.path)
             rows = []
             for city_name in city_names:
-                city_norms = list(normalize_geocoder_text_variants(city_name))
+                city_norms = list(city_norms_for_state_context(city_name, entry.name))
                 if _include_empty_city_for_state_place(entry.name, place, place_context) and "" not in city_norms:
                     city_norms.append("")
                 if not city_norms:
@@ -7784,7 +7818,7 @@ def search_street_suggestions_cached(
             continue
         for row in rows:
             street_label = str(row["street_label"] or "").strip()
-            city_label = str(row["city_label"] or city_name).strip()
+            city_label = city_display_name_for_state(row["city_label"] or city_name, entry.name)
             key = (entry.name, normalize_geocoder_text(street_label), normalize_geocoder_text(city_label))
             if not street_label or key in seen:
                 continue

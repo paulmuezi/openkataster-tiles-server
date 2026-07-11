@@ -87,12 +87,12 @@ body[data-access="pro"] .site-pro { display: none; }
 .round-tool.is-active,
 .round-tool[aria-expanded="true"] {
   border-color: var(--ok-orange);
-  background: var(--ok-orange);
-  color: #fff;
-  box-shadow: 0 0 0 3px var(--ok-orange-soft), 0 7px 22px rgba(24,30,39,.14);
+  background: #fff;
+  color: #46505d;
+  box-shadow: 0 0 0 2px var(--ok-orange), 0 0 0 5px var(--ok-orange-soft), 0 7px 22px rgba(24,30,39,.14);
 }
 .round-tool.is-active:hover,
-.round-tool[aria-expanded="true"]:hover { background: #df5c0b; }
+.round-tool[aria-expanded="true"]:hover { background: #fff; }
 .round-tool.is-loading { cursor: progress; opacity: .72; }
 .round-tool svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .round-tool svg path, .round-tool svg circle, .round-tool svg rect { vector-effect: non-scaling-stroke; }

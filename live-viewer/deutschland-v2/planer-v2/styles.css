@@ -84,7 +84,15 @@ body[data-access="pro"] .site-pro { display: none; }
   transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
 }
 .round-tool:hover { border-color: rgba(248,109,20,.62); background: #fff; }
-.round-tool.is-active { border-color: var(--ok-orange); box-shadow: 0 0 0 3px var(--ok-orange-soft), 0 7px 22px rgba(24,30,39,.1); }
+.round-tool.is-active,
+.round-tool[aria-expanded="true"] {
+  border-color: var(--ok-orange);
+  background: var(--ok-orange);
+  color: #fff;
+  box-shadow: 0 0 0 3px var(--ok-orange-soft), 0 7px 22px rgba(24,30,39,.14);
+}
+.round-tool.is-active:hover,
+.round-tool[aria-expanded="true"]:hover { background: #df5c0b; }
 .round-tool.is-loading { cursor: progress; opacity: .72; }
 .round-tool svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .round-tool svg path, .round-tool svg circle, .round-tool svg rect { vector-effect: non-scaling-stroke; }

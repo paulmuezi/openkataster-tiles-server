@@ -4,12 +4,11 @@ export function createExportController({ map, api, store, elements }) {
   const {
     exportFrame, exportPageBox, exportFrameBox, exportCenterMarker, exportOutput, exportPaper,
     exportOrientationField, exportOrientation, exportScale, exportLayout, exportHighlight,
-    exportDxf, exportSummary, exportStatus, exportPreview, sourceList
+    exportDxf, exportSummary, exportStatus, exportPreview
   } = elements;
   let drag = null;
   let pinch = null;
   const activePointers = new Map();
-  let activeObjectUrls = [];
 
   const PAPER_MM = {
     a4: [210, 297],
@@ -256,7 +255,7 @@ export function createExportController({ map, api, store, elements }) {
       width_m: frameBounds.size.width,
       height_m: frameBounds.size.height,
       layout: exportLayout.checked,
-      output: exportOutput.value,
+      output: exportOutput.value === 'png' ? 'pdf' : exportOutput.value,
       format: exportPaper.value,
       center: { lng: frameBounds.center.lng, lat: frameBounds.center.lat }
     };
@@ -268,11 +267,8 @@ export function createExportController({ map, api, store, elements }) {
     const wantsDxf = exportDxf.checked;
     exportPreview.disabled = true;
     exportStatus.textContent = 'Export wird vorbereitet …';
-    releaseObjectUrls();
     try {
-      const downloads = [];
-      if (wantsPng) downloads.push(await exportPng());
-      if (wantsPdf || wantsDxf) downloads.push(...await exportVectorFiles({ pdf: wantsPdf, dxf: wantsDxf }));
+      const downloads = await exportVectorFiles({ pdf: wantsPdf, png: wantsPng, dxf: wantsDxf });
       await triggerDownloads(downloads);
       exportStatus.textContent = downloads.length > 1 ? 'Downloads wurden gestartet.' : 'Download wurde gestartet.';
     } catch (error) {
@@ -292,7 +288,7 @@ export function createExportController({ map, api, store, elements }) {
       paper_format: exportPaper.value.toUpperCase(),
       orientation: exportOrientation.value === 'landscape' ? 'Querformat' : 'Hochformat',
       scale: Number(exportScale.value),
-      include_pdf: options.pdf,
+      include_pdf: options.pdf || options.png,
       include_dxf: options.dxf,
       include_luftbild: false,
       planner_render: plannerRender()
@@ -302,9 +298,10 @@ export function createExportController({ map, api, store, elements }) {
       const status = await api.orderStatus(order.order_id, order.guest_token || '');
       if (status.api_status === 'failed') throw new Error(status.message || 'Export-Erstellung fehlgeschlagen.');
       const outputs = status.outputs || {};
-      if ((!options.pdf || outputs.pdf_url) && (!options.dxf || outputs.dxf_url)) {
+      if ((!(options.pdf || options.png) || outputs.pdf_url) && (!options.dxf || outputs.dxf_url)) {
         return [
           options.pdf && { href: downloadUrl(order.order_id, order.guest_token, 'pdf'), filename: `openkataster-${exportPaper.value}.pdf` },
+          options.png && { href: downloadUrl(order.order_id, order.guest_token, 'png'), filename: `openkataster-${exportPaper.value}.png` },
           options.dxf && { href: downloadUrl(order.order_id, order.guest_token, 'dxf'), filename: 'openkataster.dxf' }
         ].filter(Boolean);
       }
@@ -316,10 +313,6 @@ export function createExportController({ map, api, store, elements }) {
     return `/api/orders/${encodeURIComponent(orderId)}/download/${format}${guestToken ? `?guest_token=${encodeURIComponent(guestToken)}` : ''}`;
   }
 
-  function releaseObjectUrls() {
-    for (const url of activeObjectUrls) URL.revokeObjectURL(url);
-    activeObjectUrls = [];
-  }
 
   async function triggerDownloads(downloads) {
     for (const [index, download] of downloads.entries()) {
@@ -338,90 +331,6 @@ export function createExportController({ map, api, store, elements }) {
     }
   }
 
-  function outputPixelSize() {
-    if (exportPaper.value === 'square') return { width: 1800, height: 1800 };
-    if (exportPaper.value === 'ratio43') return { width: 1800, height: 1350 };
-    const base = exportPaper.value === 'a3' ? { width: 1754, height: 2480 } : { width: 1240, height: 1754 };
-    if (exportOrientation.value === 'landscape') [base.width, base.height] = [base.height, base.width];
-    return base;
-  }
-
-  function outputMapRect(size) {
-    if (!exportLayout.checked || !isDocumentFormat()) return { x: 0, y: 0, width: size.width, height: size.height };
-    const metrics = layoutMetrics();
-    return {
-      x: Math.round(size.width * metrics.marginLeft / metrics.pageWidth),
-      y: Math.round(size.height * (metrics.marginTop + metrics.headerHeight + metrics.padding) / metrics.pageHeight),
-      width: Math.round(size.width * metrics.mapWidth / metrics.pageWidth),
-      height: Math.round(size.height * metrics.mapHeight / metrics.pageHeight)
-    };
-  }
-
-  function sourceText() {
-    return String(sourceList?.textContent || '© Amtliches Liegenschaftskataster (ALKIS) · OpenKataster').replace(/\s+/g, ' ').trim();
-  }
-
-  function drawPngDetails(canvas, mapRect) {
-    const context = canvas.getContext('2d');
-    const scale = Math.max(1, Math.min(canvas.width, canvas.height) / 1200);
-    if (exportLayout.checked && isDocumentFormat()) {
-      context.fillStyle = '#20242a';
-      context.font = `600 ${Math.round(22 * scale)}px Arial, sans-serif`;
-      context.fillText('Auszug aus dem Liegenschaftskataster', mapRect.x, Math.max(28 * scale, mapRect.y * .47));
-      context.font = `400 ${Math.round(11 * scale)}px Arial, sans-serif`;
-      context.textAlign = 'right';
-      context.fillText(`Maßstab 1:${exportScale.value}`, mapRect.x + mapRect.width, Math.max(28 * scale, mapRect.y * .47));
-      context.textAlign = 'left';
-      context.fillStyle = '#59616c';
-      context.font = `400 ${Math.round(9 * scale)}px Arial, sans-serif`;
-      context.fillText(sourceText(), mapRect.x, Math.min(canvas.height - 10 * scale, mapRect.y + mapRect.height + 28 * scale));
-      return;
-    }
-    const text = sourceText();
-    context.font = `400 ${Math.round(10 * scale)}px Arial, sans-serif`;
-    const padding = Math.round(7 * scale);
-    const width = Math.min(canvas.width - 20, context.measureText(text).width + padding * 2);
-    const height = Math.round(24 * scale);
-    context.fillStyle = 'rgba(255,255,255,.9)';
-    context.fillRect(canvas.width - width, canvas.height - height, width, height);
-    context.fillStyle = '#59616c';
-    context.textBaseline = 'middle';
-    context.fillText(text, canvas.width - width + padding, canvas.height - height / 2, width - padding * 2);
-  }
-
-  async function exportPng() {
-    const size = outputPixelSize();
-    const mapRect = outputMapRect(size);
-    const container = document.createElement('div');
-    Object.assign(container.style, { position: 'fixed', left: '-10000px', top: '0', width: `${mapRect.width}px`, height: `${mapRect.height}px` });
-    document.body.appendChild(container);
-    const style = structuredClone(map.getStyle());
-    if (!exportHighlight.checked || exportHighlight.disabled) {
-      style.layers = style.layers.filter((layer) => !['selected-parcels-v2', 'selected-buildings-v2'].includes(layer.id));
-    }
-    const frameBounds = bounds();
-    const printMap = new maplibregl.Map({ container, style, center: center(), zoom: map.getZoom(), bearing: 0, pitch: 0, interactive: false, preserveDrawingBuffer: true, attributionControl: false, fadeDuration: 0 });
-    try {
-      await new Promise((resolve) => printMap.once('load', () => {
-        printMap.fitBounds([[frameBounds.west, frameBounds.south], [frameBounds.east, frameBounds.north]], { padding: 0, duration: 0 });
-        printMap.once('idle', resolve);
-      }));
-      const output = document.createElement('canvas');
-      output.width = size.width;
-      output.height = size.height;
-      const context = output.getContext('2d');
-      context.fillStyle = '#fff';
-      context.fillRect(0, 0, size.width, size.height);
-      context.drawImage(printMap.getCanvas(), mapRect.x, mapRect.y, mapRect.width, mapRect.height);
-      drawPngDetails(output, mapRect);
-      const blob = await new Promise((resolve) => output.toBlob(resolve, 'image/png'));
-      if (!blob) throw new Error('PNG konnte nicht erstellt werden.');
-      const href = URL.createObjectURL(blob);
-      activeObjectUrls.push(href);
-      return { href, filename: `openkataster-${exportPaper.value}-${Date.now()}.png` };
-    } finally { printMap.remove(); container.remove(); }
-  }
-
   map.on('click', (event) => { if (store.getState().activeTool === 'export' && !drag) setCenter(event.lngLat); });
   map.on('move', render);
   map.on('zoom', render);
@@ -433,6 +342,5 @@ export function createExportController({ map, api, store, elements }) {
   exportFrameBox.addEventListener('wheel', forwardWheelToMap, { passive: false });
   for (const control of [exportOutput, exportPaper, exportOrientation, exportScale, exportLayout, exportHighlight, exportDxf]) control.addEventListener('change', render);
   exportPreview.addEventListener('click', preview);
-  window.addEventListener('beforeunload', releaseObjectUrls);
   return { render, setCenter, preview };
 }

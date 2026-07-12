@@ -12964,7 +12964,7 @@ def api_v1_create_embed_session(
     )
 
 
-@app.post("/api/v1/internal/viewer-sessions", include_in_schema=False)
+@app.post("/internal/v1/viewer-sessions", include_in_schema=False)
 def api_v1_create_internal_viewer_session(
     _: Annotated[str, Depends(require_admin_key)],
     payload: InternalViewerSessionRequest,
@@ -13481,7 +13481,7 @@ def api_v1_session(
     return _public_access_claims(access)
 
 
-@app.post("/api/v1/admin/api-keys/sync")
+@app.post("/internal/v1/api-keys/sync", include_in_schema=False)
 def api_v1_admin_api_keys_sync(
     payload: Annotated[dict, Body()],
     _: Annotated[str, Depends(require_admin_key)],
@@ -13514,7 +13514,7 @@ def api_v1_admin_api_keys_sync(
     return {"ok": True, "count": len(keys)}
 
 
-@app.post("/api/v1/admin/api-keys/usage")
+@app.post("/internal/v1/api-keys/usage", include_in_schema=False)
 def api_v1_admin_api_keys_usage(
     payload: Annotated[dict, Body()],
     _: Annotated[str, Depends(require_admin_key)],

@@ -114,7 +114,7 @@ def main() -> int:
             "monthly_limit": 5,
         }
         expect_status(
-            "/api/v1/admin/api-keys/sync",
+            "/internal/v1/api-keys/sync",
             200,
             method="POST",
             bearer=ADMIN_KEY,
@@ -124,11 +124,11 @@ def main() -> int:
         openapi, _ = expect_status("/openapi.json", 200)
         assert "OpenKatasterApiKey" in openapi["components"]["securitySchemes"]
         assert "/api/v1/embed/sessions" in openapi["paths"]
-        assert "/api/v1/admin/api-keys/sync" not in openapi["paths"]
+        assert "/internal/v1/api-keys/sync" not in openapi["paths"]
         embed_docs, _ = expect_status("/docs/embed", 200)
         assert b"openkataster:ready" in embed_docs
         viewer_session, _ = expect_status(
-            "/api/v1/internal/viewer-sessions",
+            "/internal/v1/viewer-sessions",
             200,
             method="POST",
             bearer=ADMIN_KEY,
@@ -184,7 +184,7 @@ def main() -> int:
         expect_status("/api/v1/search/address?q=Hamburg&limit=1", 200, bearer=PROJECT_KEY)
         expect_status("/api/v1/suggest/places?q=Hamburg&limit=1", 200, bearer=PROJECT_KEY)
         usage, _ = expect_status(
-            "/api/v1/admin/api-keys/usage",
+            "/internal/v1/api-keys/usage",
             200,
             method="POST",
             bearer=ADMIN_KEY,
@@ -201,7 +201,7 @@ def main() -> int:
 
         disabled_record = {**active_record, "status": "disabled"}
         expect_status(
-            "/api/v1/admin/api-keys/sync",
+            "/internal/v1/api-keys/sync",
             200,
             method="POST",
             bearer=ADMIN_KEY,

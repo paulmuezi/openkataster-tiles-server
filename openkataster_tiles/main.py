@@ -4,10 +4,12 @@ import asyncio
 import base64
 import gzip
 import hashlib
+import hmac
 import json
 import math
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import subprocess
@@ -23,12 +25,15 @@ from pathlib import Path
 from typing import Annotated
 
 import mapbox_vector_tile
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response, Security
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse
 from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pmtiles.reader import Compression, MmapSource, Reader
+from pydantic import BaseModel, Field
 from shapely import wkb
 from shapely.geometry import Point, mapping, shape
 from shapely.errors import GEOSException
@@ -44,21 +49,19 @@ except Exception:  # pragma: no cover - optional deployment dependency
 DATA_DIR = Path(os.environ.get("OPENKATASTER_TILE_DATA_DIR", "/srv/openkataster-tiles/data"))
 VIEWER_ROOT = Path(os.environ.get("OPENKATASTER_VIEWER_ROOT", "/srv/openkataster-tiles/live-viewer"))
 GN250_PLACES_DB = Path(os.environ.get("OPENKATASTER_GN250_PLACES_DB", str(DATA_DIR / "places.sqlite")))
-OPENPLZ_DB = Path(os.environ.get("OPENKATASTER_OPENPLZ_DB", "/srv/openkataster-tiles/plz/openplz.sqlite"))
 POSTCODE_AREAS_DB = Path(os.environ.get("OPENKATASTER_POSTCODE_AREAS_DB", "/srv/openkataster-tiles/plz/postcode_areas.sqlite"))
-GEOCODER_DB = Path(os.environ.get("OPENKATASTER_GEOCODER_DB", "/srv/openkataster-tiles/geocoder/geocoder.sqlite"))
-FAST_GEOCODER_DB = Path(os.environ.get("OPENKATASTER_FAST_GEOCODER_DB", "/srv/openkataster-tiles/geocoder/geocoder_fast.sqlite"))
 API_KEY_STORE_PATH = Path(os.environ.get("OPENKATASTER_API_KEY_STORE", str(DATA_DIR / "api_keys.json")))
 API_USAGE_DB = Path(os.environ.get("OPENKATASTER_API_USAGE_DB", str(DATA_DIR / "api_usage.sqlite")))
-_GEOCODER_THREAD_LOCAL = threading.local()
-_FAST_GEOCODER_THREAD_LOCAL = threading.local()
-_GEOCODER_GLOBAL_CONNECTION: sqlite3.Connection | None = None
-_GEOCODER_GLOBAL_SIGNATURE: tuple[int, int] | None = None
-_FAST_GEOCODER_GLOBAL_CONNECTION: sqlite3.Connection | None = None
-_FAST_GEOCODER_GLOBAL_SIGNATURE: tuple[int, int] | None = None
-_GEOCODER_GLOBAL_LOCK = threading.Lock()
-_FAST_GEOCODER_GLOBAL_LOCK = threading.Lock()
+EMBED_SESSION_TTL_SECONDS = max(60, min(3600, int(os.environ.get("OPENKATASTER_EMBED_SESSION_TTL_SECONDS", "900"))))
 PUBLIC_BASE_URL = os.environ.get("OPENKATASTER_TILE_PUBLIC_BASE_URL", "").rstrip("/")
+CORS_ORIGINS = [
+    value.strip().rstrip("/")
+    for value in os.environ.get(
+        "OPENKATASTER_CORS_ORIGINS",
+        "https://tiles.openkataster.de,https://openkataster.de,https://www.openkataster.de",
+    ).split(",")
+    if value.strip()
+]
 ADMIN_API_BASE_URL = os.environ.get("OPENKATASTER_ADMIN_API_BASE_URL", "http://openkataster-api:8000").rstrip("/")
 LUFTBILD_TILE_SIZE = int(os.environ.get("OPENKATASTER_LUFTBILD_TILE_SIZE", "1024"))
 LUFTBILD_CACHE_DIR = Path(os.environ.get("OPENKATASTER_LUFTBILD_CACHE_DIR", str(DATA_DIR / "luftbild_cache")))
@@ -486,6 +489,118 @@ def _verify_viewer_token(token: str) -> dict | None:
         return None
 
 
+def _base64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _embed_session_secret() -> bytes:
+    raw = os.environ.get("OPENKATASTER_EMBED_SESSION_SECRET", "").strip()
+    if len(raw) < 32:
+        raise HTTPException(status_code=503, detail="embed sessions are not configured")
+    return raw.encode("utf-8")
+
+
+def _normalize_origin(value: str) -> str | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    if parsed.username or parsed.password or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        return None
+    host = parsed.hostname.lower().rstrip(".")
+    if not re.fullmatch(r"(?:\*\.)?[a-z0-9.-]+|localhost|\[[0-9a-f:]+\]", host):
+        return None
+    port = f":{parsed.port}" if parsed.port else ""
+    return f"{parsed.scheme}://{host}{port}"
+
+
+def _origin_is_allowed(origin: str, allowed_origins: list[str]) -> bool:
+    normalized = _normalize_origin(origin)
+    if not normalized:
+        return False
+    requested = urllib.parse.urlsplit(normalized)
+    for configured in allowed_origins:
+        candidate = _normalize_origin(str(configured))
+        if not candidate:
+            continue
+        parsed = urllib.parse.urlsplit(candidate)
+        if parsed.scheme != requested.scheme or parsed.port != requested.port:
+            continue
+        configured_host = parsed.hostname or ""
+        requested_host = requested.hostname or ""
+        if configured_host.startswith("*."):
+            suffix = configured_host[1:]
+            if requested_host.endswith(suffix) and requested_host != configured_host[2:]:
+                return True
+        elif configured_host == requested_host:
+            return True
+    return False
+
+
+def _sign_embed_claims(claims: dict) -> str:
+    header = {"alg": "HS256", "typ": "JWT", "kid": "embed-v1"}
+    encoded_header = _base64url_encode(json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    encoded_claims = _base64url_encode(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signing_input = f"{encoded_header}.{encoded_claims}".encode("ascii")
+    signature = hmac.new(_embed_session_secret(), signing_input, hashlib.sha256).digest()
+    return f"{encoded_header}.{encoded_claims}.{_base64url_encode(signature)}"
+
+
+def _verify_embed_session(token: str) -> dict | None:
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        header = json.loads(_base64url_decode(parts[0]).decode("utf-8"))
+        if header.get("alg") != "HS256" or header.get("kid") != "embed-v1":
+            return None
+        signing_input = f"{parts[0]}.{parts[1]}".encode("ascii")
+        supplied = _base64url_decode(parts[2])
+        expected = hmac.new(_embed_session_secret(), signing_input, hashlib.sha256).digest()
+        if not hmac.compare_digest(supplied, expected):
+            return None
+        claims = json.loads(_base64url_decode(parts[1]).decode("utf-8"))
+        now = int(time.time())
+        if claims.get("typ") not in {"embed", "viewer"}:
+            return None
+        if claims.get("aud") != "openkataster-embed":
+            return None
+        if int(claims.get("nbf", 0)) > now or int(claims.get("exp", 0)) < now:
+            return None
+        return claims if isinstance(claims, dict) else None
+    except (HTTPException, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _new_viewer_session(*, pro: bool = False, subject: str = "public-viewer", name: str | None = None) -> str:
+    now = int(time.time())
+    scopes = ["map:view", "search:basic", "layers:basic", "feature:preview"]
+    if pro:
+        scopes.extend(["layers:advanced", "feature:read", "measure", "export:map", "export:cadastre"])
+    return _sign_embed_claims(
+        {
+            "typ": "viewer",
+            "aud": "openkataster-embed",
+            "sub": subject[:120],
+            "name": name[:255] if name else None,
+            "plan": "pro" if pro else "free",
+            "integration": "viewer",
+            "scopes": scopes,
+            "iat": now,
+            "nbf": now - 5,
+            "exp": now + min(3600, EMBED_SESSION_TTL_SECONDS * 4),
+            "jti": secrets.token_urlsafe(12),
+        }
+    )
+
+
 def _claims_grant_pro_access(claims: dict) -> bool:
     scopes = claims.get("scopes")
     if isinstance(scopes, list) and ("feature:read" in scopes or "measure" in scopes):
@@ -754,10 +869,41 @@ def _api_key_usage_count(record: dict, month: str | None = None) -> int:
 
 
 def _check_and_record_api_key_usage(record: dict) -> None:
+    subject = _api_usage_subject(record)
+    if not subject:
+        raise HTTPException(status_code=503, detail="API usage subject is not configured")
     monthly_limit = int(record.get("monthly_limit") or 0)
-    if monthly_limit > 0 and _api_key_usage_count(record) >= monthly_limit:
-        raise HTTPException(status_code=429, detail="monthly API request limit exceeded")
-    _record_api_key_usage(record)
+    month = _api_usage_month()
+    token_hash = str(record.get("token_hash") or "").strip().lower()
+    identifiers = [subject]
+    if re.fullmatch(r"[a-f0-9]{64}", token_hash):
+        identifiers.extend([token_hash, f"key:{token_hash}"])
+    try:
+        API_USAGE_DB.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(API_USAGE_DB, timeout=3.0, isolation_level=None) as con:
+            _ensure_api_usage_schema(con)
+            con.execute("BEGIN IMMEDIATE")
+            count = con.execute(
+                f"SELECT COALESCE(SUM(count), 0) FROM api_usage WHERE token_hash IN ({','.join(['?'] * len(identifiers))}) AND month = ?",
+                (*identifiers, month),
+            ).fetchone()
+            if monthly_limit > 0 and int(count[0] if count else 0) >= monthly_limit:
+                con.execute("ROLLBACK")
+                raise HTTPException(status_code=429, detail="monthly API request limit exceeded")
+            con.execute(
+                """
+                INSERT INTO api_usage (token_hash, month, count, updated_at)
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(token_hash, month)
+                DO UPDATE SET count = count + 1, updated_at = excluded.updated_at
+                """,
+                (subject, month, int(time.time())),
+            )
+            con.execute("COMMIT")
+    except HTTPException:
+        raise
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail="API usage accounting unavailable") from exc
 
 
 def _sanitize_api_key_record(record: dict) -> dict | None:
@@ -808,6 +954,22 @@ class ApiAccessContext:
     def is_pro(self) -> bool:
         return self.mode in {"pro", "partner"}
 
+    @property
+    def scopes(self) -> set[str]:
+        values = (self.claims or {}).get("scopes")
+        if isinstance(values, list):
+            return {str(value) for value in values}
+        if self.is_pro:
+            return {"map:view", "search:basic", "layers:basic", "feature:preview", "feature:read", "measure", "export:map", "export:cadastre", "embed:pro"}
+        return set()
+
+
+api_key_bearer = HTTPBearer(
+    auto_error=False,
+    scheme_name="OpenKatasterApiKey",
+    description="Projekt-Key aus dem Developer-Bereich. Nur serverseitig verwenden.",
+)
+
 
 def _configured_pro_tokens() -> set[str]:
     raw = os.environ.get("OPENKATASTER_TILE_PRO_TOKENS", "")
@@ -816,12 +978,14 @@ def _configured_pro_tokens() -> set[str]:
 
 
 def api_access_context(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Security(api_key_bearer)] = None,
+    session: Annotated[str | None, Query(description="Kurzlebiges Embed-Session-Token")] = None,
     token: Annotated[str | None, Query()] = None,
     api_key: Annotated[str | None, Query()] = None,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
-    authorization: Annotated[str | None, Header()] = None,
 ) -> ApiAccessContext:
-    provided = token or api_key or x_api_key or _extract_bearer(authorization)
+    bearer = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else None
+    provided = session or token or api_key or x_api_key or bearer
     if provided and provided in _configured_pro_tokens():
         return ApiAccessContext(mode="pro", token=provided)
     api_key_record = _api_key_record_for_token(provided)
@@ -831,11 +995,48 @@ def api_access_context(
         mode = "partner" if _claims_grant_pro_access(claims) else "free"
         return ApiAccessContext(mode=mode, token=provided, claims=claims)
     if provided:
-        claims = _verify_viewer_token(provided)
-        if claims and _claims_grant_pro_access(claims):
-            mode = "partner" if claims.get("integration") else "pro"
+        claims = _verify_embed_session(provided) or _verify_viewer_token(provided)
+        if claims:
+            grants_pro = _claims_grant_pro_access(claims)
+            mode = "partner" if grants_pro and claims.get("integration") == "embed" else "pro" if grants_pro else "free"
             return ApiAccessContext(mode=mode, token=provided, claims=claims)
     return ApiAccessContext(mode="free")
+
+
+def require_api_key_access(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Security(api_key_bearer)] = None,
+) -> ApiAccessContext:
+    provided = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else None
+    record = _api_key_record_for_token(provided)
+    if not record:
+        raise HTTPException(
+            status_code=401,
+            detail="missing or invalid API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    _check_and_record_api_key_usage(record)
+    claims = _api_key_claims(record)
+    mode = "partner" if _claims_grant_pro_access(claims) else "free"
+    return ApiAccessContext(mode=mode, token=provided, claims=claims)
+
+
+class RequireScopes:
+    def __init__(self, *scopes: str):
+        self.required = set(scopes)
+
+    def __call__(
+        self,
+        access: ApiAccessContext = Depends(api_access_context),
+    ) -> ApiAccessContext:
+        if not access.token:
+            raise HTTPException(
+                status_code=401,
+                detail="authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if not self.required.issubset(access.scopes):
+            raise HTTPException(status_code=403, detail=f"required scope: {', '.join(sorted(self.required))}")
+        return access
 
 def _configured_admin_keys() -> set[str]:
     raw = os.environ.get("OPENKATASTER_TILE_ADMIN_KEYS", "")
@@ -1687,11 +1888,7 @@ def _clear_data_caches() -> None:
     _mosaic_tile_cached.cache_clear()
     gn250_place_entries.cache_clear()
     _search_places_for_dataset_cached.cache_clear()
-    openplz_lookup_postcode.cache_clear()
     postcode_area_lookup.cache_clear()
-    geocoder_lookup.cache_clear()
-    geocoder_direct_lookup.cache_clear()
-    fast_parcel_lookup.cache_clear()
 
 
 def _active_manifest_key(state_slug: str, version_name: str | None) -> str:
@@ -3838,27 +4035,8 @@ def german_token_variants(token: str) -> list[str]:
     return list(dict.fromkeys(variants))
 
 
-def fts_token_query(token: str) -> str:
-    token = token.strip().lower()
-    if not token:
-        return ""
-    if token.isdigit() or len(token) <= 2:
-        return token
-    return f"{token}*"
 
 
-def fts_query(query: str) -> str:
-    groups = []
-    for token in search_tokens(query):
-        variants = [fts_token_query(variant) for variant in german_token_variants(token)]
-        variants = [variant for variant in variants if variant]
-        if not variants:
-            continue
-        if len(variants) == 1:
-            groups.append(variants[0])
-        else:
-            groups.append("(" + " OR ".join(variants) + ")")
-    return " AND ".join(groups)
 
 
 def like_pattern(query: str) -> str:
@@ -4012,14 +4190,6 @@ PLACE_BOUNDS = {
 }
 
 
-def place_scan_signature() -> tuple[tuple[str, int, int], ...]:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    return tuple(
-        sorted(
-            (path.name, path.stat().st_mtime_ns, path.stat().st_size)
-            for path in list(DATA_DIR.glob("*_overview_labels.json")) + list(DATA_DIR.glob("*_overview_boundaries.json"))
-        )
-    )
 
 
 def normalize_place_class(value: str) -> str:
@@ -4074,20 +4244,14 @@ def gn250_places_signature() -> tuple[int, int]:
     return sqlite_file_signature(GN250_PLACES_DB)
 
 
-def openplz_signature() -> tuple[int, int]:
-    return sqlite_file_signature(OPENPLZ_DB)
 
 
 def postcode_areas_signature() -> tuple[int, int]:
     return sqlite_file_signature(POSTCODE_AREAS_DB)
 
 
-def geocoder_signature() -> tuple[int, int]:
-    return sqlite_file_signature(GEOCODER_DB)
 
 
-def fast_geocoder_signature() -> tuple[int, int]:
-    return sqlite_file_signature(FAST_GEOCODER_DB)
 
 
 @lru_cache(maxsize=65536)
@@ -4121,49 +4285,10 @@ def postcode_area_lookup(lon: float, lat: float, signature: tuple[int, int]) -> 
     return ""
 
 
-def normalize_openplz_street(value: str | None) -> str:
-    text = normalize_place_search_text(value)
-    text = re.sub(r"\bstr\b", "strasse", text)
-    text = re.sub(r"\bstrae\b", "strasse", text)
-    text = re.sub(r"\bstrasse\b", "strasse", text)
-    return re.sub(r"[^a-z0-9]+", "", text)
 
 
-def normalize_openplz_place(value: str | None) -> str:
-    return normalize_place_search_text(value)
 
 
-@lru_cache(maxsize=16384)
-def openplz_lookup_postcode(street_norm: str, place_norm: str, state_key: str, signature: tuple[int, int]) -> dict | None:
-    if signature == (0, 0) or not street_norm or not place_norm:
-        return None
-    try:
-        con = sqlite3.connect(f"file:{OPENPLZ_DB}?mode=ro", uri=True)
-        con.row_factory = sqlite3.Row
-        rows = con.execute(
-            """
-            SELECT postal_code, locality, borough, suburb, priority
-            FROM aliases
-            WHERE street_norm = ?
-              AND place_norm = ?
-              AND (? = '' OR state_key = ?)
-            ORDER BY priority ASC, postal_code ASC, locality ASC
-            LIMIT 8
-            """,
-            (street_norm, place_norm, state_key, state_key),
-        ).fetchall()
-        con.close()
-    except sqlite3.Error:
-        return None
-    if not rows:
-        return None
-    row = rows[0]
-    return {
-        "post_code": str(row["postal_code"] or "").strip(),
-        "locality": str(row["locality"] or "").strip(),
-        "borough": str(row["borough"] or "").strip(),
-        "suburb": str(row["suburb"] or "").strip(),
-    }
 
 
 def enrich_address_postcode(address: dict, lon: float, lat: float) -> None:
@@ -4578,13 +4703,6 @@ def place_context_as_municipality(context: dict | None) -> dict | None:
     return {"name": name, "folded": folded}
 
 
-def municipality_name_matches(value: str, wanted: dict | None) -> bool:
-    if not wanted:
-        return True
-    value_norm = normalize_place_search_text(value)
-    wanted_norm = normalize_place_search_text(str(wanted.get("name") or wanted.get("folded") or ""))
-    wanted_folded = normalize_place_search_text(str(wanted.get("folded") or ""))
-    return bool(value_norm and (value_norm == wanted_norm or value_norm == wanted_folded))
 
 
 def normalized_bbox(value) -> tuple[float, float, float, float] | None:
@@ -4601,26 +4719,8 @@ def normalized_bbox(value) -> tuple[float, float, float, float] | None:
     return min_lon, min_lat, max_lon, max_lat
 
 
-def feature_bbox_sql(alias: str, bbox) -> tuple[str, tuple[float, float, float, float]]:
-    normalized = normalized_bbox(bbox)
-    if not normalized:
-        return "", ()
-    min_lon, min_lat, max_lon, max_lat = normalized
-    return (
-        f" AND {alias}.max_lon >= ? AND {alias}.min_lon <= ? AND {alias}.max_lat >= ? AND {alias}.min_lat <= ?",
-        (min_lon, max_lon, min_lat, max_lat),
-    )
 
 
-def point_bbox_sql(alias: str, bbox) -> tuple[str, tuple[float, float, float, float]]:
-    normalized = normalized_bbox(bbox)
-    if not normalized:
-        return "", ()
-    min_lon, min_lat, max_lon, max_lat = normalized
-    return (
-        f" AND {alias}.lon >= ? AND {alias}.lon <= ? AND {alias}.lat >= ? AND {alias}.lat <= ?",
-        (min_lon, max_lon, min_lat, max_lat),
-    )
 
 
 def nearest_municipality(state: str, lon: float, lat: float) -> dict | None:
@@ -4948,10 +5048,6 @@ def result_from_compact_feature(row: sqlite3.Row) -> dict:
     }
 
 
-def result_from_any_feature(row: sqlite3.Row) -> dict:
-    if "geometry_wkb" in row.keys():
-        return result_from_feature(row)
-    return result_from_compact_feature(row)
 
 
 def compact_address_properties(row: sqlite3.Row) -> dict:
@@ -4975,252 +5071,12 @@ def compact_address_properties(row: sqlite3.Row) -> dict:
     return address
 
 
-def result_from_compact_feature_address(feature_row: sqlite3.Row, address_properties: dict) -> dict:
-    result = result_from_compact_feature(feature_row)
-    address_label = str(address_properties.get("label") or "").strip()
-    if address_label:
-        result["label"] = address_label
-        result["subtitle"] = "Adresse"
-        result["address"] = address_properties
-        result["feature"]["address"] = address_label
-        result["feature"]["addresses"] = [address_properties]
-    result["result_type"] = "address"
-    return result
 
 
-def result_from_feature_address(feature_row: sqlite3.Row, address_properties: dict, geom=None) -> dict:
-    result = result_from_feature(feature_row, geom)
-    address_label = str(address_properties.get("label") or "").strip()
-    if not address_label:
-        street = str(address_properties.get("street") or "").strip()
-        house_number = str(address_properties.get("house_number") or "").strip()
-        address_label = " ".join(part for part in (street, house_number) if part)
-    if address_label:
-        result["label"] = address_label
-        result["subtitle"] = "Adresse"
-        result["address"] = address_properties
-        result["feature"]["address"] = address_label
-        result["feature"]["addresses"] = [address_properties]
-    result["result_type"] = "address"
-    return result
 
 
-def street_from_address_properties(address: dict) -> str:
-    street = str(address.get("street") or "").strip()
-    if street:
-        return street
-    street_house = str(address.get("street_house") or "").strip()
-    label = str(address.get("label") or "").strip()
-    for value in (street_house, label):
-        match = re.match(r"^(.+?)\s+[0-9].*$", value)
-        if match:
-            return match.group(1).strip()
-    return ""
 
 
-def search_streets_in_index(path: Path, query: str, limit: int, bbox=None, municipality: dict | None = None) -> list[dict]:
-    normalized = normalized_bbox(bbox)
-    if not normalized or not search_tokens(query):
-        return []
-    grouped: dict[str, dict] = {}
-
-    def add_street(street: str, center: list[float] | None, item_bbox: list[float] | None):
-        street = street.strip()
-        if not street:
-            return
-        key = normalize_place_search_text(street)
-        if not key:
-            return
-        entry = grouped.setdefault(
-            key,
-            {
-                "street": street,
-                "count": 0,
-                "bbox": None,
-                "sum_lon": 0.0,
-                "sum_lat": 0.0,
-                "center_count": 0,
-                "points": [],
-            },
-        )
-        entry["count"] += 1
-        if center and len(center) == 2:
-            entry["sum_lon"] += float(center[0])
-            entry["sum_lat"] += float(center[1])
-            entry["center_count"] += 1
-        if item_bbox and len(item_bbox) == 4:
-            numeric_bbox = [float(value) for value in item_bbox]
-            if entry["bbox"] is None:
-                entry["bbox"] = numeric_bbox[:]
-            else:
-                entry["bbox"][0] = min(entry["bbox"][0], numeric_bbox[0])
-                entry["bbox"][1] = min(entry["bbox"][1], numeric_bbox[1])
-                entry["bbox"][2] = max(entry["bbox"][2], numeric_bbox[2])
-                entry["bbox"][3] = max(entry["bbox"][3], numeric_bbox[3])
-            point = center if center and len(center) == 2 else center_from_bbox(numeric_bbox)
-            if point and len(point) == 2:
-                entry["points"].append((float(point[0]), float(point[1]), numeric_bbox))
-
-    def dominant_street_geometry(entry: dict) -> tuple[list[float] | None, list[float] | None]:
-        points = entry.get("points") or []
-        if not points:
-            bbox_value = entry.get("bbox")
-            center_count = int(entry.get("center_count") or 0)
-            if center_count:
-                return [entry["sum_lon"] / center_count, entry["sum_lat"] / center_count], bbox_value
-            return center_from_bbox(bbox_value), bbox_value
-        threshold_sq = 0.012 * 0.012
-        clusters: list[dict] = []
-        for lon, lat, item_bbox in sorted(points, key=lambda point: (point[1], point[0])):
-            selected = None
-            best_distance = None
-            for cluster in clusters:
-                cx = cluster["sum_lon"] / cluster["count"]
-                cy = cluster["sum_lat"] / cluster["count"]
-                distance = (lon - cx) * (lon - cx) + (lat - cy) * (lat - cy)
-                if distance <= threshold_sq and (best_distance is None or distance < best_distance):
-                    selected = cluster
-                    best_distance = distance
-            if selected is None:
-                selected = {"count": 0, "sum_lon": 0.0, "sum_lat": 0.0, "bbox": item_bbox[:]}
-                clusters.append(selected)
-            selected["count"] += 1
-            selected["sum_lon"] += lon
-            selected["sum_lat"] += lat
-            selected["bbox"][0] = min(selected["bbox"][0], item_bbox[0])
-            selected["bbox"][1] = min(selected["bbox"][1], item_bbox[1])
-            selected["bbox"][2] = max(selected["bbox"][2], item_bbox[2])
-            selected["bbox"][3] = max(selected["bbox"][3], item_bbox[3])
-        cluster = max(clusters, key=lambda item: item["count"])
-        return [cluster["sum_lon"] / cluster["count"], cluster["sum_lat"] / cluster["count"]], cluster["bbox"]
-
-    with sqlite_feature_connection(path) as con:
-        feature_bbox_clause, feature_bbox_params = feature_bbox_sql("f", normalized)
-        if compact_feature_schema(con):
-            if sqlite_table_exists(con, "feature_fts") and sqlite_table_exists(con, "feature_addresses"):
-                try:
-                    rows = con.execute(
-                        f"""
-                        SELECT
-                          fa.address AS compact_address,
-                          fa.street_house AS compact_street_house,
-                          fa.parcel_id AS compact_address_parcel_id,
-                          fa.lon AS compact_address_lon,
-                          fa.lat AS compact_address_lat,
-                          fa.source AS compact_address_source,
-                          f.min_lon,
-                          f.min_lat,
-                          f.max_lon,
-                          f.max_lat
-                        FROM feature_fts
-                        JOIN features f ON f.id = feature_fts.feature_id
-                        LEFT JOIN feature_addresses fa ON fa.feature_id = f.id
-                        WHERE feature_fts MATCH ?
-                          AND f.kind = 'building'
-                          {feature_bbox_clause}
-                        ORDER BY bm25(feature_fts)
-                        LIMIT ?
-                        """,
-                        (fts_query(query), *feature_bbox_params, 2000),
-                    ).fetchall()
-                except sqlite3.OperationalError:
-                    rows = []
-                for row in rows:
-                    address = compact_address_properties(row)
-                    street = street_from_address_properties(address)
-                    item_bbox = [row["min_lon"], row["min_lat"], row["max_lon"], row["max_lat"]]
-                    center = [address["lon"], address["lat"]] if address.get("lon") is not None and address.get("lat") is not None else center_from_bbox(item_bbox)
-                    add_street(street, center, item_bbox)
-        else:
-            if sqlite_table_exists(con, "feature_address_search"):
-                try:
-                    rows = con.execute(
-                        f"""
-                        SELECT fa.properties_json AS address_properties_json,
-                               f.min_lon,
-                               f.min_lat,
-                               f.max_lon,
-                               f.max_lat
-                        FROM feature_address_search s
-                        JOIN feature_addresses fa ON fa.id = CAST(s.feature_address_id AS INTEGER)
-                        JOIN features f
-                          ON f.source_db = fa.source_db
-                         AND f.kind = fa.kind
-                         AND f.gml_id = fa.gml_id
-                        WHERE feature_address_search MATCH ?
-                          AND fa.kind = 'building'
-                          {feature_bbox_clause}
-                        ORDER BY bm25(feature_address_search)
-                        LIMIT ?
-                        """,
-                        (fts_query(query), *feature_bbox_params, 2000),
-                    ).fetchall()
-                except sqlite3.OperationalError:
-                    rows = []
-                for row in rows:
-                    address = load_properties(row["address_properties_json"])
-                    street = street_from_address_properties(address)
-                    item_bbox = [row["min_lon"], row["min_lat"], row["max_lon"], row["max_lat"]]
-                    center = center_from_bbox(item_bbox)
-                    add_street(street, center, item_bbox)
-
-        point_bbox_clause, point_bbox_params = point_bbox_sql("a", normalized)
-        if sqlite_table_exists(con, "address_search") and sqlite_table_exists(con, "address_points"):
-            try:
-                rows = con.execute(
-                    f"""
-                    SELECT a.*
-                    FROM address_search
-                    JOIN address_points a ON a.id = CAST(address_search.address_id AS INTEGER)
-                    WHERE address_search MATCH ?
-                    {point_bbox_clause}
-                    ORDER BY bm25(address_search)
-                    LIMIT ?
-                    """,
-                    (fts_query(query), *point_bbox_params, 2000),
-                ).fetchall()
-            except sqlite3.OperationalError:
-                rows = []
-            for row in rows:
-                address = load_properties(row["properties_json"])
-                street = street_from_address_properties(address)
-                lon = float(row["lon"])
-                lat = float(row["lat"])
-                add_street(street, [lon, lat], [lon, lat, lon, lat])
-
-    wanted = normalize_place_search_text(query)
-    results: list[dict] = []
-    municipality_name = str((municipality or {}).get("name") or "").strip()
-    for entry in grouped.values():
-        street_norm = normalize_place_search_text(entry["street"])
-        center, bbox_value = dominant_street_geometry(entry)
-        if not bbox_value or not center:
-            continue
-        label = f"{entry['street']}, {municipality_name}" if municipality_name else entry["street"]
-        results.append(
-            {
-                "kind": "street",
-                "result_type": "street",
-                "label": label,
-                "subtitle": "Straße",
-                "center": center,
-                "bbox": bbox_value,
-                "zoom": 17.4,
-                "feature": {
-                    "street": entry["street"],
-                    "municipality": municipality_name,
-                    "address_count": entry["count"],
-                },
-                "_rank": (
-                    0 if street_norm == wanted else 1,
-                    0 if street_norm.startswith(wanted) else 1,
-                    -int(entry["count"] or 0),
-                    street_norm,
-                ),
-            }
-        )
-    results.sort(key=lambda item: item.pop("_rank"))
-    return results[:limit]
 
 
 def address_match_score(address: dict, wanted: dict) -> int:
@@ -6092,144 +5948,8 @@ def feature_preview_item(item: dict, kind: str) -> dict | None:
     }
 
 
-def search_features_in_index(path: Path, query: str, limit: int) -> list[dict]:
-    results: list[dict] = []
-    seen: set[tuple[str, str, str]] = set()
-    with sqlite_feature_connection(path) as con:
-        if compact_feature_schema(con):
-            rows = []
-            if sqlite_table_exists(con, "feature_fts") and search_tokens(query):
-                try:
-                    rows = con.execute(
-                        """
-                        SELECT f.*
-                        FROM feature_fts
-                        JOIN features f ON f.id = feature_fts.feature_id
-                        WHERE feature_fts MATCH ?
-                        ORDER BY bm25(feature_fts)
-                        LIMIT ?
-                        """,
-                        (fts_query(query), limit),
-                    ).fetchall()
-                except sqlite3.OperationalError:
-                    rows = []
-            if not rows and not sqlite_table_exists(con, "feature_fts"):
-                rows = con.execute(
-                    """
-                    SELECT *
-                    FROM features
-                    WHERE search_text LIKE ? OR properties_json LIKE ?
-                    LIMIT ?
-                    """,
-                    (like_pattern(query), like_pattern(query), limit),
-                ).fetchall()
-            compact_seen: set[tuple[str, str]] = set()
-            for row in rows:
-                key = (row["kind"], row["id"])
-                if key in compact_seen:
-                    continue
-                result = result_from_compact_feature(row)
-                result["result_type"] = "feature"
-                results.append(result)
-                compact_seen.add(key)
-                if len(results) >= limit:
-                    break
-            return results
-
-        rows = []
-        if sqlite_table_exists(con, "feature_search") and search_tokens(query):
-            try:
-                rows = con.execute(
-                    """
-                    SELECT f.*
-                    FROM feature_search
-                    JOIN features f ON f.id = CAST(feature_search.feature_id AS INTEGER)
-                    WHERE feature_search MATCH ?
-                    ORDER BY bm25(feature_search)
-                    LIMIT ?
-                    """,
-                    (fts_query(query), limit),
-                ).fetchall()
-            except sqlite3.OperationalError:
-                rows = []
-        if not rows and not sqlite_table_exists(con, "feature_search"):
-            rows = con.execute(
-                """
-                SELECT *
-                FROM features
-                WHERE properties_json LIKE ?
-                LIMIT ?
-                """,
-                (like_pattern(query), limit),
-            ).fetchall()
-
-        for row in rows:
-            key = (row["kind"], row["source_db"], row["gml_id"])
-            if key in seen:
-                continue
-            try:
-                result = result_from_feature(row)
-            except (GEOSException, TypeError, ValueError):
-                continue
-            result["result_type"] = "feature"
-            results.append(result)
-            seen.add(key)
-            if len(results) >= limit:
-                break
-    return results
 
 
-def search_cadastre_parcels_in_index(
-    path: Path,
-    *,
-    gemarkung: str = "",
-    flur: str = "",
-    flurstueck: str = "",
-    limit: int = 12,
-) -> list[dict]:
-    clauses = ["kind = 'parcel'"]
-    params: list[object] = []
-    gemarkung = gemarkung.strip()
-    flur = flur.strip()
-    flurstueck = normalize_parcel_number(flurstueck)
-    if gemarkung:
-        clauses.append("LOWER(json_extract(properties_json, '$.gemarkung')) = LOWER(?)")
-        params.append(gemarkung)
-    if flur:
-        clauses.append("CAST(json_extract(properties_json, '$.flur') AS TEXT) = ?")
-        params.append(flur)
-    if flurstueck:
-        clauses.append(
-            "(REPLACE(json_extract(properties_json, '$.flurstueck'), ' ', '') = ? "
-            "OR REPLACE(json_extract(properties_json, '$.zaehler'), ' ', '') = ? "
-            "OR REPLACE(json_extract(properties_json, '$.label'), ' ', '') = ?)"
-        )
-        params.extend([flurstueck, flurstueck, flurstueck])
-    if len(clauses) == 1:
-        return []
-    results: list[dict] = []
-    with sqlite_feature_connection(path) as con:
-        rows = con.execute(
-            f"""
-            SELECT *
-            FROM features
-            WHERE {' AND '.join(clauses)}
-            ORDER BY
-              CAST(json_extract(properties_json, '$.flur') AS INTEGER),
-              CAST(json_extract(properties_json, '$.zaehler') AS INTEGER),
-              CAST(json_extract(properties_json, '$.nenner') AS INTEGER)
-            LIMIT ?
-            """,
-            (*params, limit),
-        ).fetchall()
-        for row in rows:
-            try:
-                result = result_from_any_feature(row)
-            except (GEOSException, TypeError, ValueError):
-                continue
-            result["result_type"] = "feature"
-            results.append(result)
-    return results
 
 
 @lru_cache(maxsize=8)
@@ -6356,211 +6076,8 @@ def search_cadastre_gemarkungen_for_dataset(
     return {"query": query, "count": len(clean_results), "results": clean_results}
 
 
-def search_addresses_in_index(path: Path, query: str, limit: int, bbox=None) -> list[dict]:
-    results: list[dict] = []
-    with sqlite_feature_connection(path) as con:
-        if not sqlite_table_exists(con, "address_points"):
-            return results
-        bbox_clause, bbox_params = point_bbox_sql("a", bbox)
-        rows = []
-        if sqlite_table_exists(con, "address_search") and search_tokens(query):
-            try:
-                rows = con.execute(
-                    f"""
-                    SELECT a.*
-                    FROM address_search
-                    JOIN address_points a ON a.id = CAST(address_search.address_id AS INTEGER)
-                    WHERE address_search MATCH ?
-                    {bbox_clause}
-                    ORDER BY bm25(address_search)
-                    LIMIT ?
-                    """,
-                    (fts_query(query), *bbox_params, limit),
-                ).fetchall()
-            except sqlite3.OperationalError:
-                rows = []
-        if not rows and not sqlite_table_exists(con, "address_search"):
-            fallback_bbox_clause, fallback_bbox_params = point_bbox_sql("address_points", bbox)
-            rows = con.execute(
-                f"""
-                SELECT *
-                FROM address_points
-                WHERE properties_json LIKE ?
-                {fallback_bbox_clause}
-                LIMIT ?
-                """,
-                (like_pattern(query), *fallback_bbox_params, limit),
-            ).fetchall()
-
-        seen_labels: set[str] = set()
-        for row in rows:
-            properties = load_properties(row["properties_json"])
-            label = properties.get("label") or "Adresse"
-            key = label.casefold()
-            if key in seen_labels:
-                continue
-            results.append(
-                {
-                    "kind": "address",
-                    "result_type": "address",
-                    "label": label,
-                    "subtitle": "Adresse",
-                    "source_db": row["source_db"],
-                    "center": [float(row["lon"]), float(row["lat"])],
-                    "feature": properties,
-                }
-            )
-            seen_labels.add(key)
-            if len(results) >= limit:
-                break
-    return results
 
 
-def search_relation_addresses_in_index(path: Path, query: str, limit: int, bbox=None) -> list[dict]:
-    results: list[dict] = []
-    seen: set[tuple[str, str, str, str]] = set()
-    with sqlite_feature_connection(path) as con:
-        if compact_feature_schema(con):
-            rows = []
-            tokens = search_tokens(query)
-            bbox_clause, bbox_params = feature_bbox_sql("f", bbox)
-            if sqlite_table_exists(con, "feature_fts") and sqlite_table_exists(con, "feature_addresses") and tokens:
-                try:
-                    candidate_limit = max(limit * 20, 400)
-                    rows = con.execute(
-                        f"""
-                        SELECT
-                          fa.address AS compact_address,
-                          fa.street_house AS compact_street_house,
-                          fa.parcel_id AS compact_address_parcel_id,
-                          fa.lon AS compact_address_lon,
-                          fa.lat AS compact_address_lat,
-                          fa.source AS compact_address_source,
-                          f.*
-                        FROM feature_fts
-                        JOIN features f ON f.id = feature_fts.feature_id
-                        LEFT JOIN feature_addresses fa ON fa.feature_id = f.id
-                        WHERE feature_fts MATCH ?
-                          AND f.kind = 'building'
-                          {bbox_clause}
-                        ORDER BY bm25(feature_fts)
-                        LIMIT ?
-                        """,
-                        (fts_query(query), *bbox_params, candidate_limit),
-                    ).fetchall()
-                except sqlite3.OperationalError:
-                    rows = []
-            if (
-                not rows
-                and not sqlite_table_exists(con, "feature_fts")
-                and sqlite_table_exists(con, "feature_addresses")
-                and len(query.strip()) >= 4
-            ):
-                rows = con.execute(
-                    f"""
-                    SELECT
-                      fa.address AS compact_address,
-                      fa.street_house AS compact_street_house,
-                      fa.parcel_id AS compact_address_parcel_id,
-                      fa.lon AS compact_address_lon,
-                      fa.lat AS compact_address_lat,
-                      fa.source AS compact_address_source,
-                      f.*
-                    FROM feature_addresses fa
-                    JOIN features f ON f.id = fa.feature_id
-                    WHERE fa.address LIKE ?
-                       OR fa.street_house LIKE ?
-                       OR f.search_text LIKE ?
-                       {bbox_clause}
-                    LIMIT ?
-                    """,
-                    (like_pattern(query), like_pattern(query), like_pattern(query), *bbox_params, limit),
-                ).fetchall()
-
-            query_folded = query.strip().casefold()
-            token_list = [token.casefold() for token in tokens]
-
-            def compact_address_rank(row: sqlite3.Row) -> tuple[int, int, int, str]:
-                address = str(row["compact_address"] or "").casefold()
-                street_house = str(row["compact_street_house"] or "").casefold()
-                exact = street_house == query_folded or address == query_folded
-                starts = street_house.startswith(query_folded) or address.startswith(query_folded)
-                token_misses = sum(1 for token in token_list if token not in address and token not in street_house)
-                return (0 if exact else 1, 0 if starts else 1, token_misses, address)
-
-            rows = sorted(rows, key=compact_address_rank)
-            compact_seen: set[tuple[str, str]] = set()
-            compact_result_limit = limit
-            for row in rows:
-                address_properties = compact_address_properties(row)
-                label = str(address_properties.get("label") or "").casefold()
-                key = (row["id"], label)
-                if key in compact_seen:
-                    continue
-                result = result_from_compact_feature_address(row, address_properties)
-                results.append(result)
-                compact_seen.add(key)
-                if len(results) >= compact_result_limit:
-                    break
-            return results
-
-        rows = []
-        bbox_clause, bbox_params = feature_bbox_sql("f", bbox)
-        if sqlite_table_exists(con, "feature_address_search") and search_tokens(query):
-            try:
-                rows = con.execute(
-                    f"""
-                    SELECT fa.properties_json AS address_properties_json, f.*
-                    FROM feature_address_search s
-                    JOIN feature_addresses fa ON fa.id = CAST(s.feature_address_id AS INTEGER)
-                    JOIN features f
-                      ON f.source_db = fa.source_db
-                     AND f.kind = fa.kind
-                     AND f.gml_id = fa.gml_id
-                    WHERE feature_address_search MATCH ?
-                      AND fa.kind = 'building'
-                      {bbox_clause}
-                    ORDER BY bm25(feature_address_search)
-                    LIMIT ?
-                    """,
-                    (fts_query(query), *bbox_params, limit),
-                ).fetchall()
-            except sqlite3.OperationalError:
-                rows = []
-        if not rows and not sqlite_table_exists(con, "feature_address_search"):
-            rows = con.execute(
-                f"""
-                SELECT fa.properties_json AS address_properties_json, f.*
-                FROM feature_addresses fa
-                JOIN features f
-                  ON f.source_db = fa.source_db
-                 AND f.kind = fa.kind
-                 AND f.gml_id = fa.gml_id
-                WHERE fa.properties_json LIKE ?
-                  AND fa.kind = 'building'
-                  {bbox_clause}
-                LIMIT ?
-                """,
-                (like_pattern(query), *bbox_params, limit),
-            ).fetchall()
-
-        for row in rows:
-            address_properties = load_properties(row["address_properties_json"])
-            label = str(address_properties.get("label") or "").casefold()
-            resolved_row = row
-            resolved_geom = None
-            key = (resolved_row["kind"], resolved_row["source_db"], resolved_row["gml_id"], label)
-            if key in seen:
-                continue
-            try:
-                result = result_from_feature_address(resolved_row, address_properties, resolved_geom)
-            except (GEOSException, TypeError, ValueError):
-                continue
-            results.append(result)
-            seen.add(key)
-            if len(results) >= limit:
-                break
-    return results
 
 
 def is_probable_address_query(query: str) -> bool:
@@ -6614,6 +6131,7 @@ def normalize_geocoder_text_variants(value: str | None) -> tuple[str, ...]:
             variants.append(candidate)
     return tuple(variants)
 
+
 CITY_STATE_MUNICIPALITY_ALIASES = {
     "hamburg": ("Hamburg", "Freie und Hansestadt Hamburg"),
     "berlin": ("Berlin", "Land Berlin"),
@@ -6656,89 +6174,14 @@ def normalize_geocoder_house(value: str | None) -> str:
     return re.sub(r"\s+", "", normalize_geocoder_text(value))
 
 
-def parse_geocoder_address_query(query: str) -> tuple[str, str]:
-    text = re.sub(r"\s+", " ", (query or "").strip())
-    match = re.match(r"^(.+?)\s+([0-9][0-9A-Za-zÄÖÜäöüß./\- ]*)$", text)
-    if not match:
-        return text, ""
-    return match.group(1).strip(), match.group(2).strip()
 
 
-def geocoder_bbox_clause(alias: str, bbox) -> tuple[str, list[float]]:
-    normalized = normalized_bbox(bbox)
-    if not normalized:
-        return "", []
-    min_lon, min_lat, max_lon, max_lat = normalized
-    return (
-        f" AND {alias}.max_lon >= ? AND {alias}.min_lon <= ? AND {alias}.max_lat >= ? AND {alias}.min_lat <= ?",
-        [min_lon, max_lon, min_lat, max_lat],
-    )
 
 
-def geocoder_result_label(label: str, municipality: dict | None) -> str:
-    label = str(label or "").strip()
-    municipality_name = str((municipality or {}).get("name") or "").strip()
-    if municipality_name and label and municipality_name.casefold() not in label.casefold():
-        return f"{label}, {municipality_name}"
-    return label
 
 
-def geocoder_connection() -> sqlite3.Connection:
-    global _GEOCODER_GLOBAL_CONNECTION, _GEOCODER_GLOBAL_SIGNATURE
-    signature = geocoder_signature()
-    con = _GEOCODER_GLOBAL_CONNECTION
-    if con is not None and _GEOCODER_GLOBAL_SIGNATURE == signature:
-        return con
-    with _GEOCODER_GLOBAL_LOCK:
-        con = _GEOCODER_GLOBAL_CONNECTION
-        if con is not None and _GEOCODER_GLOBAL_SIGNATURE == signature:
-            return con
-        if con is not None:
-            try:
-                con.close()
-            except Exception:
-                pass
-        con = sqlite3.connect(f"file:{GEOCODER_DB}?mode=ro", uri=True, timeout=10, check_same_thread=False)
-        con.row_factory = sqlite3.Row
-        try:
-            con.execute("PRAGMA query_only = ON")
-            con.execute("PRAGMA mmap_size = 1073741824")
-            con.execute("PRAGMA cache_size = -262144")
-            con.execute("PRAGMA temp_store = MEMORY")
-        except sqlite3.Error:
-            pass
-        _GEOCODER_GLOBAL_CONNECTION = con
-        _GEOCODER_GLOBAL_SIGNATURE = signature
-        return con
 
 
-def fast_geocoder_connection() -> sqlite3.Connection:
-    global _FAST_GEOCODER_GLOBAL_CONNECTION, _FAST_GEOCODER_GLOBAL_SIGNATURE
-    signature = fast_geocoder_signature()
-    con = _FAST_GEOCODER_GLOBAL_CONNECTION
-    if con is not None and _FAST_GEOCODER_GLOBAL_SIGNATURE == signature:
-        return con
-    with _FAST_GEOCODER_GLOBAL_LOCK:
-        con = _FAST_GEOCODER_GLOBAL_CONNECTION
-        if con is not None and _FAST_GEOCODER_GLOBAL_SIGNATURE == signature:
-            return con
-        if con is not None:
-            try:
-                con.close()
-            except Exception:
-                pass
-        con = sqlite3.connect(f"file:{FAST_GEOCODER_DB}?mode=ro", uri=True, timeout=10, check_same_thread=False)
-        con.row_factory = sqlite3.Row
-        try:
-            con.execute("PRAGMA query_only = ON")
-            con.execute("PRAGMA mmap_size = 1073741824")
-            con.execute("PRAGMA cache_size = -131072")
-            con.execute("PRAGMA temp_store = MEMORY")
-        except sqlite3.Error:
-            pass
-        _FAST_GEOCODER_GLOBAL_CONNECTION = con
-        _FAST_GEOCODER_GLOBAL_SIGNATURE = signature
-        return con
 
 
 def fast_compact_norm(value: str | None) -> str:
@@ -6754,328 +6197,15 @@ def fast_float(value, fallback: float = 0.0) -> float:
         return fallback
 
 
-def fast_address_result_from_row(row: sqlite3.Row, city_fallback: str = "") -> dict:
-    lon = fast_float(row["lon"])
-    lat = fast_float(row["lat"])
-    label = str(row["label"] or "").strip()
-    city_label = str(row["city"] or city_fallback or "").strip()
-    if not city_label:
-        state_key = str(row["state"] or "")
-        municipality = municipality_at(state_key, lon, lat) or nearest_municipality(state_key, lon, lat)
-        if municipality:
-            city_label = str(municipality.get("name") or "").strip()
-    if label and city_label and city_label.casefold() not in label.casefold():
-        label = f"{label}, {city_label}"
-    address = {
-        "label": label,
-        "street": str(row["street"] or ""),
-        "house_number": str(row["house_number"] or ""),
-        "city": city_label,
-        "country": str(row["country"] or "Deutschland"),
-    }
-    post_code = str(row["post_code"] or "").strip() if "post_code" in row.keys() else ""
-    if post_code:
-        address["post_code"] = post_code
-        address["postal_code"] = post_code
-    return {
-        "kind": str(row["feature_kind"] or "address"),
-        "result_type": "address",
-        "label": label,
-        "subtitle": "Adresse",
-        "address": address,
-        "state": str(row["state"] or ""),
-        "state_label": str(row["state_label"] or ""),
-        "center": [lon, lat],
-        "bbox": [
-            fast_float(row["min_lon"], lon),
-            fast_float(row["min_lat"], lat),
-            fast_float(row["max_lon"], lon),
-            fast_float(row["max_lat"], lat),
-        ],
-        "zoom": 18.0,
-        "feature": {
-            "address": label,
-            "addresses": [address],
-            "source_db": str(row["source_db"] or ""),
-            "gml_id": str(row["gml_id"] or ""),
-        },
-    }
-
-def fast_street_result_from_row(row: sqlite3.Row, street_fallback: str = "", city_fallback: str = "") -> dict:
-    lon = fast_float(row["lon"])
-    lat = fast_float(row["lat"])
-    street_label = str(row["street"] or street_fallback or "").strip()
-    city_label = str(row["city"] or city_fallback or "").strip()
-    post_code = str(row["post_code"] or "").strip() if "post_code" in row.keys() else ""
-    place_label = " ".join(part for part in (post_code, city_label) if part)
-    label = f"{street_label}, {place_label}" if place_label else street_label
-    feature = {
-        "street": street_label,
-        "municipality": city_label,
-        "address_count": int(row["address_count"] or 0),
-        "country": str(row["country"] or "Deutschland"),
-    }
-    if post_code:
-        feature["post_code"] = post_code
-    return {
-        "kind": "street",
-        "result_type": "street",
-        "label": label,
-        "subtitle": "Straße",
-        "state": str(row["state"] or ""),
-        "state_label": str(row["state_label"] or ""),
-        "center": [lon, lat],
-        "bbox": [
-            fast_float(row["min_lon"], lon),
-            fast_float(row["min_lat"], lat),
-            fast_float(row["max_lon"], lon),
-            fast_float(row["max_lat"], lat),
-        ],
-        "zoom": 17.4,
-        "feature": feature,
-    }
 
 
-def fast_street_row_needs_address_clusters(row: sqlite3.Row) -> bool:
-    lon = fast_float(row["lon"])
-    lat = fast_float(row["lat"])
-    min_lon = fast_float(row["min_lon"], lon)
-    max_lon = fast_float(row["max_lon"], lon)
-    min_lat = fast_float(row["min_lat"], lat)
-    max_lat = fast_float(row["max_lat"], lat)
-    return abs(max_lon - min_lon) > 0.08 or abs(max_lat - min_lat) > 0.05
 
 
-def fast_clustered_street_results_from_address_rows(
-    rows: list[sqlite3.Row],
-    street_fallback: str = "",
-    city_fallback: str = "",
-    limit: int = 10,
-) -> list[dict]:
-    clusters: list[dict] = []
-    lon_pad = 0.055
-    lat_pad = 0.035
-    for row in rows:
-        lon = fast_float(row["lon"])
-        lat = fast_float(row["lat"])
-        street_label = str(row["street"] or street_fallback or "").strip()
-        city_label = str(row["city"] or city_fallback or "").strip()
-        state_key = str(row["state"] or "")
-        chosen = None
-        for cluster in clusters:
-            if cluster["state"] != state_key or normalize_geocoder_text(cluster["city"]) != normalize_geocoder_text(city_label):
-                continue
-            if (
-                cluster["min_lon"] - lon_pad <= lon <= cluster["max_lon"] + lon_pad
-                and cluster["min_lat"] - lat_pad <= lat <= cluster["max_lat"] + lat_pad
-            ):
-                chosen = cluster
-                break
-        if chosen is None:
-            chosen = {
-                "state": state_key,
-                "state_label": str(row["state_label"] or ""),
-                "street": street_label,
-                "city": city_label,
-                "country": str(row["country"] or "Deutschland"),
-                "count": 0,
-                "sum_lon": 0.0,
-                "sum_lat": 0.0,
-                "min_lon": fast_float(row["min_lon"], lon),
-                "min_lat": fast_float(row["min_lat"], lat),
-                "max_lon": fast_float(row["max_lon"], lon),
-                "max_lat": fast_float(row["max_lat"], lat),
-            }
-            clusters.append(chosen)
-        chosen["count"] += 1
-        chosen["sum_lon"] += lon
-        chosen["sum_lat"] += lat
-        chosen["min_lon"] = min(chosen["min_lon"], fast_float(row["min_lon"], lon), lon)
-        chosen["min_lat"] = min(chosen["min_lat"], fast_float(row["min_lat"], lat), lat)
-        chosen["max_lon"] = max(chosen["max_lon"], fast_float(row["max_lon"], lon), lon)
-        chosen["max_lat"] = max(chosen["max_lat"], fast_float(row["max_lat"], lat), lat)
-    clusters.sort(key=lambda cluster: (-int(cluster["count"]), str(cluster["street"]), str(cluster["city"])))
-    results: list[dict] = []
-    for cluster in clusters[:limit]:
-        count = max(int(cluster["count"]), 1)
-        lon = float(cluster["sum_lon"]) / count
-        lat = float(cluster["sum_lat"]) / count
-        street_label = str(cluster["street"] or street_fallback or "").strip()
-        city_label = str(cluster["city"] or city_fallback or "").strip()
-        # Do not run polygon-based postcode enrichment in search suggestions.
-        # It is useful for feature details, but too expensive for autocomplete.
-        post_code = ""
-        place_label = " ".join(part for part in (post_code, city_label) if part)
-        label = f"{street_label}, {place_label}" if place_label else street_label
-        feature = {
-            "street": street_label,
-            "municipality": city_label,
-            "address_count": count,
-            "country": str(cluster["country"] or "Deutschland"),
-        }
-        if post_code:
-            feature["post_code"] = post_code
-        results.append({
-            "kind": "street",
-            "result_type": "street",
-            "label": label,
-            "subtitle": "Straße",
-            "state": str(cluster["state"] or ""),
-            "state_label": str(cluster["state_label"] or ""),
-            "center": [lon, lat],
-            "bbox": [
-                float(cluster["min_lon"]),
-                float(cluster["min_lat"]),
-                float(cluster["max_lon"]),
-                float(cluster["max_lat"]),
-            ],
-            "zoom": 17.4,
-            "feature": feature,
-        })
-    return results
 
 
-def fast_parcel_result_from_row(row: sqlite3.Row) -> dict:
-    lon = fast_float(row["lon"])
-    lat = fast_float(row["lat"])
-    bbox = [
-        fast_float(row["min_lon"], lon),
-        fast_float(row["min_lat"], lat),
-        fast_float(row["max_lon"], lon),
-        fast_float(row["max_lat"], lat),
-    ]
-    area = row["amtliche_flaeche_m2"]
-    feature = {
-        "source_db": str(row["source_db"] or ""),
-        "gml_id": str(row["gml_id"] or ""),
-        "gemarkung": str(row["gemarkung"] or ""),
-        "gemarkungsnummer": str(row["gemarkungsnummer"] or ""),
-        "flur": str(row["flur"] or ""),
-        "flurstueck": str(row["flurstueck"] or ""),
-        "zaehler": str(row["zaehler"] or ""),
-        "nenner": str(row["nenner"] or ""),
-    }
-    if area is not None:
-        feature["amtliche_flaeche_m2"] = fast_float(area)
-    cadastre = {
-        "flur": feature["flur"],
-        "flurstueck": feature["flurstueck"],
-        "gemarkung": feature["gemarkung"],
-        "gemarkungsnummer": feature["gemarkungsnummer"],
-    }
-    return {
-        "kind": "parcel",
-        "result_type": "feature",
-        "cadastre": cadastre,
-        "label": str(row["label"] or "Flurstück"),
-        "subtitle": "Flurstück",
-        "state": str(row["state"] or ""),
-        "state_label": str(row["state_label"] or ""),
-        "center": [lon, lat],
-        "bbox": bbox,
-        "zoom": 18.0,
-        "feature": feature,
-    }
 
 
-@lru_cache(maxsize=4096)
-def fast_parcel_lookup(
-    gemarkung: str,
-    flur: str,
-    flurstueck: str,
-    states_key: tuple[str, ...],
-    signature: tuple[int, int],
-    limit: int,
-) -> list[dict]:
-    if signature == (0, 0) or not FAST_GEOCODER_DB.exists():
-        return []
-    states = [state for state in states_key if state]
-    gemarkung = (gemarkung or "").strip()
-    flur = (flur or "").strip()
-    flurstueck = fast_compact_norm(flurstueck)
-    if not any((gemarkung, flur, flurstueck)):
-        return []
-    gemarkung_norms = list(normalize_geocoder_text_variants(gemarkung))
-    gemarkung_norm = gemarkung_norms[0] if gemarkung_norms else ""
-    flur_norm = fast_compact_norm(flur)
-    state_clause = ""
-    state_params: list[object] = []
-    if states:
-        placeholders = ",".join("?" for _ in states)
-        state_clause = f" AND state IN ({placeholders})"
-        state_params.extend(states)
 
-    query_variants: list[tuple[str, list[object]]] = []
-    if gemarkung_norms and flur_norm and flurstueck:
-        placeholders = ",".join("?" for _ in gemarkung_norms)
-        query_variants.append((
-            f"gemarkung_norm IN ({placeholders}) AND flur_norm = ? AND flurstueck_norm = ?{state_clause}",
-            [*gemarkung_norms, flur_norm, flurstueck, *state_params],
-        ))
-    if gemarkung and flur_norm and flurstueck:
-        query_variants.append((
-            f"gemarkungsnummer = ? AND flur_norm = ? AND flurstueck_norm = ?{state_clause}",
-            [gemarkung, flur_norm, flurstueck, *state_params],
-        ))
-    if gemarkung_norms and flurstueck:
-        placeholders = ",".join("?" for _ in gemarkung_norms)
-        query_variants.append((
-            f"gemarkung_norm IN ({placeholders}) AND flurstueck_norm = ?{state_clause}",
-            [*gemarkung_norms, flurstueck, *state_params],
-        ))
-    if gemarkung and flurstueck:
-        query_variants.append((
-            f"gemarkungsnummer = ? AND flurstueck_norm = ?{state_clause}",
-            [gemarkung, flurstueck, *state_params],
-        ))
-    # In structured cadastre search, a supplied Gemarkung is a hard filter.
-    # Falling back to only Flur/Flurstück produces many unrelated parcels with
-    # identical parcel numbers across Germany.
-    if not gemarkung_norms and not gemarkung:
-        if flur_norm and flurstueck and states:
-            query_variants.append((
-                f"flur_norm = ? AND flurstueck_norm = ?{state_clause}",
-                [flur_norm, flurstueck, *state_params],
-            ))
-        if flurstueck and states:
-            query_variants.append((
-                f"flurstueck_norm = ?{state_clause}",
-                [flurstueck, *state_params],
-            ))
-    if not query_variants:
-        return []
-
-    seen: set[tuple[str, str, str]] = set()
-    results: list[dict] = []
-    try:
-        con = fast_geocoder_connection()
-        for where, params in query_variants:
-            rows = con.execute(
-                f"""
-                SELECT *
-                FROM parcel_exact
-                WHERE {where}
-                ORDER BY
-                  CASE WHEN gemarkung_norm = ? THEN 0 ELSE 1 END,
-                  CASE WHEN flur_norm = ? THEN 0 ELSE 1 END,
-                  LENGTH(flurstueck_norm), flurstueck_norm
-                LIMIT ?
-                """,
-                [*params, gemarkung_norm, flur_norm, max(int(limit) * 3, 12)],
-            ).fetchall()
-            for row in rows:
-                key = (str(row["state"] or ""), str(row["source_db"] or ""), str(row["gml_id"] or ""))
-                if key in seen:
-                    continue
-                seen.add(key)
-                results.append(fast_parcel_result_from_row(row))
-                if len(results) >= int(limit):
-                    return results[:int(limit)]
-            if rows and gemarkung_norm and flur_norm and flurstueck:
-                return results[:int(limit)]
-    except sqlite3.Error:
-        return []
-    return results[:int(limit)]
 
 
 def search_fast_cadastre_parcels_for_dataset(
@@ -7093,16 +6223,7 @@ def search_fast_cadastre_parcels_for_dataset(
         search_db_signature_for_states(search_states),
         int(limit),
     )
-    if sqlite_results:
-        return sqlite_results[:int(limit)]
-    return fast_parcel_lookup(
-        gemarkung or "",
-        flur or "",
-        flurstueck or "",
-        tuple(sorted(search_states)),
-        fast_geocoder_signature(),
-        int(limit),
-    )
+    return sqlite_results[:int(limit)]
 
 
 def search_address_result_from_row(row: sqlite3.Row, state: str, city_fallback: str = "") -> dict:
@@ -7335,21 +6456,40 @@ def search_sqlite_parcel_lookup(
     flurstueck = fast_compact_norm(flurstueck)
     if not any((gemarkung, flur, flurstueck)):
         return []
-    gemarkung_norms = list(normalize_geocoder_text_variants(gemarkung))
-    gemarkung_norm = gemarkung_norms[0] if gemarkung_norms else ""
+    gemarkung_base = re.sub(r"\s*\([^)]*\)\s*$", "", gemarkung).strip()
+    gemarkung_norms = tuple(
+        dict.fromkeys(
+            value
+            for source in (gemarkung, gemarkung_base)
+            for value in normalize_geocoder_text_variants(source)
+            if value
+        )
+    )
+    parenthesized_codes = re.findall(r"\((\d+)\)", gemarkung)
+    gemarkung_numbers = tuple(
+        dict.fromkeys(
+            value
+            for value in (
+                gemarkung if re.fullmatch(r"\d+", gemarkung) else "",
+                *parenthesized_codes,
+            )
+            if value
+        )
+    )
+    gemarkung_norm = gemarkung_norms[-1] if gemarkung_norms else ""
     flur_norm = fast_compact_norm(flur)
     query_variants: list[tuple[str, list[object]]] = []
-    if gemarkung_norms and flur_norm and flurstueck:
-        placeholders = ",".join("?" for _ in gemarkung_norms)
-        query_variants.append((f"gemarkung_norm IN ({placeholders}) AND flur_norm = ? AND flurstueck_norm = ?", [*gemarkung_norms, flur_norm, flurstueck]))
-    if gemarkung and flur_norm and flurstueck:
-        query_variants.append(("gemarkungsnummer = ? AND flur_norm = ? AND flurstueck_norm = ?", [gemarkung, flur_norm, flurstueck]))
-    if gemarkung_norms and flurstueck:
-        placeholders = ",".join("?" for _ in gemarkung_norms)
-        query_variants.append((f"gemarkung_norm IN ({placeholders}) AND flurstueck_norm = ?", [*gemarkung_norms, flurstueck]))
-    if gemarkung and flurstueck:
-        query_variants.append(("gemarkungsnummer = ? AND flurstueck_norm = ?", [gemarkung, flurstueck]))
-    if not gemarkung_norms and not gemarkung:
+    for candidate in gemarkung_norms:
+        if flur_norm and flurstueck:
+            query_variants.append(("gemarkung_norm = ? AND flur_norm = ? AND flurstueck_norm = ?", [candidate, flur_norm, flurstueck]))
+        if flurstueck:
+            query_variants.append(("gemarkung_norm = ? AND flurstueck_norm = ?", [candidate, flurstueck]))
+    for candidate in gemarkung_numbers:
+        if flur_norm and flurstueck:
+            query_variants.append(("gemarkungsnummer = ? AND flur_norm = ? AND flurstueck_norm = ?", [candidate, flur_norm, flurstueck]))
+        if flurstueck:
+            query_variants.append(("gemarkungsnummer = ? AND flurstueck_norm = ?", [candidate, flurstueck]))
+    if not gemarkung_norms and not gemarkung_numbers:
         if flur_norm and flurstueck:
             query_variants.append(("flur_norm = ? AND flurstueck_norm = ?", [flur_norm, flurstueck]))
         if flurstueck:
@@ -7409,16 +6549,14 @@ def search_sqlite_direct_lookup(
     results: list[dict] = []
     seen: set[tuple[str, str, str, str]] = set()
     for mode, street, house, city in geocoder_direct_candidates(query, allow_plain_street=allow_plain_street):
-        street_norms = list(normalize_geocoder_text_variants(street))
-        city_norms = list(normalize_geocoder_text_variants(city))
+        street_norms = normalize_geocoder_text_variants(street)
+        city_norms = normalize_geocoder_text_variants(city)
         if not street_norms:
             continue
         for entry in entries:
+            entry_city_norms = city_norms_for_state_context(city, entry.name)
             try:
                 con = search_db_connection(entry.path)
-                entry_city_norms = list(city_norms_for_state_context(city, entry.name))
-                if _include_empty_city_for_state_place(entry.name, city, None) and "" not in entry_city_norms:
-                    entry_city_norms.append("")
                 if mode == "address":
                     house_norm = normalize_geocoder_house(house)
                     if not house_norm:
@@ -7477,8 +6615,6 @@ def search_sqlite_direct_lookup(
     return results[:int(limit)]
 
 
-def _norm_prefix_bounds(prefix: str) -> tuple[str, str]:
-    return prefix, f"{prefix}\uffff"
 
 
 def _place_fts_query(query: str) -> str:
@@ -7776,7 +6912,7 @@ def search_street_suggestions_cached(
         value = value.strip()
         if value and normalize_geocoder_text(value) not in {normalize_geocoder_text(item) for item in city_names}:
             city_names.append(value)
-    street_norms = _unique_norm_values(query) if "_unique_norm_values" in globals() else list(normalize_geocoder_text_variants(query))
+    street_norms = normalize_geocoder_text_variants(query)
     if not city_names or not street_norms:
         return tuple()
     results: list[dict] = []
@@ -7786,12 +6922,9 @@ def search_street_suggestions_cached(
             con = search_db_connection(entry.path)
             rows = []
             for city_name in city_names:
-                city_norms = list(city_norms_for_state_context(city_name, entry.name))
-                if _include_empty_city_for_state_place(entry.name, place, place_context) and "" not in city_norms:
-                    city_norms.append("")
+                city_norms = city_norms_for_state_context(city_name, entry.name)
                 if not city_norms:
                     continue
-                street_clauses = " OR ".join("street_norm LIKE ?" for _ in street_norms)
                 rows.extend(con.execute(
                     f"""
                     SELECT
@@ -7802,12 +6935,12 @@ def search_street_suggestions_cached(
                       AVG(lon) AS lon,
                       AVG(lat) AS lat,
                       MIN(min_lon) AS min_lon,
-                      MAX(max_lon) AS max_lon,
                       MIN(min_lat) AS min_lat,
+                      MAX(max_lon) AS max_lon,
                       MAX(max_lat) AS max_lat
                     FROM street_lookup
                     WHERE city_norm IN ({','.join('?' for _ in city_norms)})
-                      AND ({street_clauses})
+                      AND ({' OR '.join('street_norm LIKE ?' for _ in street_norms)})
                     GROUP BY street_norm, city_norm
                     ORDER BY address_count DESC, street_label
                     LIMIT ?
@@ -7828,14 +6961,13 @@ def search_street_suggestions_cached(
                 "value": street_label,
                 "subtitle": city_label,
                 "kind": "street",
+                "result_type": "street",
                 "state": entry.name,
                 "state_label": state_display_name(entry.name),
                 "address_count": int(row["address_count"] or 0),
                 "center": [float(row["lon"]), float(row["lat"])] if row["lon"] is not None and row["lat"] is not None else None,
                 "bbox": [float(row["min_lon"]), float(row["min_lat"]), float(row["max_lon"]), float(row["max_lat"])] if row["min_lon"] is not None and row["min_lat"] is not None and row["max_lon"] is not None and row["max_lat"] is not None else None,
                 "zoom": 17.4,
-                "result_type": "street",
-                "kind": "street",
             })
             if len(results) >= int(limit):
                 return tuple(results)
@@ -7948,184 +7080,6 @@ def search_gemarkung_suggestions_for_dataset(dataset: str, q: str, limit: int, s
     return {"results": list(results)}
 
 
-@lru_cache(maxsize=4096)
-def geocoder_lookup(
-    query: str,
-    limit: int,
-    mode: str,
-    states_key: tuple[str, ...],
-    municipality_name: str,
-    bbox_key: tuple[float, float, float, float] | tuple,
-    signature: tuple[int, int],
-) -> list[dict]:
-    if signature == (0, 0) or not GEOCODER_DB.exists():
-        return []
-    street, house = parse_geocoder_address_query(query)
-    street_norm = normalize_geocoder_text(street)
-    house_norm = normalize_geocoder_house(house)
-    municipality_norm = normalize_geocoder_text(municipality_name)
-    if not street_norm:
-        return []
-    states = [state for state in states_key if state]
-    if not states:
-        return []
-    bbox = tuple(float(value) for value in bbox_key) if len(bbox_key) == 4 else None
-    bbox_clause, bbox_params = geocoder_bbox_clause("a", bbox)
-    state_placeholders = ",".join("?" for _ in states)
-    results: list[dict] = []
-    try:
-        con = geocoder_connection()
-        if mode == "address" and house_norm:
-            city_clause = ""
-            city_params: list[str] = []
-            if municipality_norm:
-                city_clause = " AND a.city_norm = ?"
-                city_params.append(municipality_norm)
-            rows = con.execute(
-                f"""
-                SELECT a.*
-                FROM addresses a
-                WHERE a.street_norm = ?
-                  AND a.house_norm = ?
-                  AND a.feature_kind = 'building'
-                  AND a.state IN ({state_placeholders})
-                  {city_clause}
-                  {bbox_clause}
-                ORDER BY a.label
-                LIMIT ?
-                """,
-                [street_norm, house_norm, *states, *city_params, *bbox_params, max(limit * 3, 12)],
-            ).fetchall()
-            if not rows and municipality_norm:
-                rows = con.execute(
-                    f"""
-                    SELECT a.*
-                    FROM addresses a
-                    WHERE a.street_norm = ?
-                      AND a.house_norm = ?
-                      AND a.feature_kind = 'building'
-                      AND a.state IN ({state_placeholders})
-                      {bbox_clause}
-                    ORDER BY a.label
-                    LIMIT ?
-                    """,
-                    [street_norm, house_norm, *states, *bbox_params, max(limit * 3, 12)],
-                ).fetchall()
-            seen: set[tuple[str, str, str, int, int]] = set()
-            for row in rows:
-                label = geocoder_result_label(str(row["label"] or ""), {"name": municipality_name} if municipality_name else None)
-                key = (
-                    normalize_geocoder_text(label),
-                    str(row["state"] or ""),
-                )
-                if key in seen:
-                    continue
-                seen.add(key)
-                bbox_value = [float(row["min_lon"]), float(row["min_lat"]), float(row["max_lon"]), float(row["max_lat"])]
-                result = {
-                    "kind": str(row["feature_kind"] or "address"),
-                    "result_type": "address",
-                    "label": label,
-                    "subtitle": "Adresse",
-                    "state": str(row["state"] or ""),
-                    "state_label": str(row["state_label"] or ""),
-                    "center": [float(row["lon"]), float(row["lat"])],
-                    "bbox": bbox_value,
-                    "zoom": 18.0,
-                    "feature": {
-                        "address": label,
-                        "addresses": [{
-                            "label": label,
-                            "street": str(row["street"] or ""),
-                            "house_number": str(row["house_number"] or ""),
-                            "city": str(row["city"] or municipality_name or ""),
-                        }],
-                        "source_db": str(row["source_db"] or ""),
-                        "gml_id": str(row["gml_id"] or ""),
-                    },
-                }
-                results.append(result)
-                if len(results) >= limit:
-                    break
-        elif mode == "street":
-            city_clause = ""
-            city_params = []
-            if municipality_norm:
-                city_clause = " AND a.city_norm = ?"
-                city_params.append(municipality_norm)
-            rows = con.execute(
-                f"""
-                SELECT
-                  a.state,
-                  a.state_label,
-                  MIN(a.street) AS street,
-                  MIN(a.city) AS city,
-                  AVG(a.lon) AS lon,
-                  AVG(a.lat) AS lat,
-                  MIN(a.min_lon) AS min_lon,
-                  MIN(a.min_lat) AS min_lat,
-                  MAX(a.max_lon) AS max_lon,
-                  MAX(a.max_lat) AS max_lat,
-                  COUNT(*) AS address_count
-                FROM addresses a
-                WHERE a.street_norm = ?
-                  AND a.state IN ({state_placeholders})
-                  {city_clause}
-                  {bbox_clause}
-                GROUP BY a.state, a.street_norm, a.city_norm
-                ORDER BY address_count DESC
-                LIMIT ?
-                """,
-                [street_norm, *states, *city_params, *bbox_params, limit],
-            ).fetchall()
-            if not rows and municipality_norm:
-                rows = con.execute(
-                    f"""
-                    SELECT
-                      a.state,
-                      a.state_label,
-                      MIN(a.street) AS street,
-                      MIN(a.city) AS city,
-                      AVG(a.lon) AS lon,
-                      AVG(a.lat) AS lat,
-                      MIN(a.min_lon) AS min_lon,
-                      MIN(a.min_lat) AS min_lat,
-                      MAX(a.max_lon) AS max_lon,
-                      MAX(a.max_lat) AS max_lat,
-                      COUNT(*) AS address_count
-                    FROM addresses a
-                    WHERE a.street_norm = ?
-                      AND a.state IN ({state_placeholders})
-                      {bbox_clause}
-                    GROUP BY a.state, a.street_norm, a.city_norm
-                    ORDER BY address_count DESC
-                    LIMIT ?
-                    """,
-                    [street_norm, *states, *bbox_params, limit],
-                ).fetchall()
-            for row in rows:
-                city = str(row["city"] or municipality_name or "").strip()
-                street_label = str(row["street"] or street).strip()
-                label = f"{street_label}, {city}" if city else street_label
-                results.append({
-                    "kind": "street",
-                    "result_type": "street",
-                    "label": label,
-                    "subtitle": "Straße",
-                    "state": str(row["state"] or ""),
-                    "state_label": str(row["state_label"] or ""),
-                    "center": [float(row["lon"]), float(row["lat"])],
-                    "bbox": [float(row["min_lon"]), float(row["min_lat"]), float(row["max_lon"]), float(row["max_lat"])],
-                    "zoom": 17.4,
-                    "feature": {
-                        "street": street_label,
-                        "municipality": city,
-                        "address_count": int(row["address_count"] or 0),
-                    },
-                })
-    except sqlite3.Error:
-        return []
-    return results[:limit]
 
 
 def search_geocoder_for_dataset(
@@ -8182,49 +7136,13 @@ def search_geocoder_for_dataset(
                 if len(results) >= int(limit):
                     return results[:int(limit)]
         return results[:int(limit)]
-    # Legacy geocoder/features.sqlite fallback is intentionally disabled for
-    # interactive search. The fast geocoder must answer directly or return an
-    # empty result quickly; otherwise typo queries can block for seconds.
+    # Interactive search is intentionally served only by the per-state
+    # search.sqlite files. A miss must stay cheap and never scan features.sqlite.
     return []
 
 
-def geocoder_prefix_upper_bound(prefix: str) -> str:
-    if not prefix:
-        return ""
-    return prefix[:-1] + chr(ord(prefix[-1]) + 1)
 
 
-def fast_address_rows_for_street_prefix(
-    con: sqlite3.Connection,
-    street_norm: str,
-    house_norm: str,
-    city_norm: str,
-    states: list[str],
-    limit: int,
-) -> list[sqlite3.Row]:
-    if len(street_norm) < 5 or not house_norm or not states:
-        return []
-    upper = geocoder_prefix_upper_bound(street_norm)
-    if not upper:
-        return []
-    state_placeholders = ",".join("?" for _ in states)
-    city_clause = " AND city_norm = ?" if city_norm else ""
-    city_params = [city_norm] if city_norm else []
-    return con.execute(
-        f"""
-        SELECT *
-        FROM address_exact
-        WHERE street_norm >= ?
-          AND street_norm < ?
-          AND house_norm = ?
-          AND feature_kind = 'building'
-          {city_clause}
-          AND state IN ({state_placeholders})
-        ORDER BY length(street_norm), label
-        LIMIT ?
-        """,
-        [street_norm, upper, house_norm, *city_params, *states, max(limit * 3, 12)],
-    ).fetchall()
 
 
 def geocoder_direct_candidates(query: str, *, allow_plain_street: bool = False) -> list[tuple[str, str, str, str]]:
@@ -8261,248 +7179,6 @@ def geocoder_direct_candidates(query: str, *, allow_plain_street: bool = False) 
     return unique
 
 
-@lru_cache(maxsize=4096)
-def geocoder_direct_lookup(
-    query: str,
-    limit: int,
-    states_key: tuple[str, ...],
-    signature: tuple[int, int],
-    fast_signature: tuple[int, int],
-) -> list[dict]:
-    if signature == (0, 0) and fast_signature == (0, 0):
-        return []
-    states = [state for state in states_key if state]
-    if not states:
-        return []
-    state_placeholders = ",".join("?" for _ in states)
-    results: list[dict] = []
-    try:
-        for mode, street, house, city in geocoder_direct_candidates(query):
-            street_norm = normalize_geocoder_text(street)
-            city_norm = normalize_geocoder_text(city)
-            city_norms = list(normalize_geocoder_text_variants(city))
-            if any(_include_empty_city_for_state_place(state, city, None) for state in states) and "" not in city_norms:
-                city_norms.append("")
-            if not street_norm:
-                continue
-            if mode == "address":
-                house_norm = normalize_geocoder_house(house)
-                if not house_norm:
-                    continue
-                if fast_signature != (0, 0) and FAST_GEOCODER_DB.exists():
-                    try:
-                        fast_con = fast_geocoder_connection()
-                        fast_city_clause = f" AND city_norm IN ({','.join('?' for _ in city_norms)})" if city_norms else ""
-                        fast_city_params = list(city_norms)
-                        fast_rows = fast_con.execute(
-                            f"""
-                            SELECT *
-                            FROM address_exact
-                            WHERE street_norm = ?
-                              AND house_norm = ?
-                              AND feature_kind = 'building'
-                              {fast_city_clause}
-                              AND state IN ({state_placeholders})
-                            ORDER BY label
-                            LIMIT ?
-                            """,
-                            [street_norm, house_norm, *fast_city_params, *states, max(limit * 3, 12)],
-                        ).fetchall()
-                    except sqlite3.Error:
-                        fast_rows = []
-                    if not fast_rows:
-                        try:
-                            for variant_city_norm in city_norms or ("",):
-                                fast_rows = fast_address_rows_for_street_prefix(
-                                    fast_con,
-                                    street_norm,
-                                    house_norm,
-                                    variant_city_norm,
-                                    states,
-                                    limit,
-                                )
-                                if fast_rows:
-                                    break
-                        except sqlite3.Error:
-                            fast_rows = []
-                    seen_fast: set[tuple[str, str]] = set()
-                    for row in fast_rows:
-                        result = fast_address_result_from_row(row, city)
-                        key = (normalize_geocoder_text(str(result.get("label") or "")), str(result.get("state") or ""))
-                        if key in seen_fast:
-                            continue
-                        seen_fast.add(key)
-                        results.append(result)
-                        if len(results) >= limit:
-                            return results[:limit]
-                    # No legacy fallback: a missing fast result must stay a fast empty result.
-                    continue
-                if signature == (0, 0) or not GEOCODER_DB.exists():
-                    continue
-                con = geocoder_connection()
-                city_clause = f" AND a.city_norm IN ({','.join('?' for _ in city_norms)})" if city_norms else ""
-                city_params = list(city_norms)
-                rows = con.execute(
-                    f"""
-                    SELECT a.*
-                    FROM addresses a
-                    WHERE a.street_norm = ?
-                      AND a.house_norm = ?
-                      AND a.feature_kind = 'building'
-                      {city_clause}
-                      AND a.state IN ({state_placeholders})
-                    ORDER BY a.label
-                    LIMIT ?
-                    """,
-                    [street_norm, house_norm, *city_params, *states, max(limit * 3, 12)],
-                ).fetchall()
-                seen: set[tuple[str, str]] = set()
-                for row in rows:
-                    label = geocoder_result_label(str(row["label"] or ""), {"name": city})
-                    key = (normalize_geocoder_text(label), str(row["state"] or ""))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    address = {
-                        "label": label,
-                        "street": str(row["street"] or ""),
-                        "house_number": str(row["house_number"] or ""),
-                        "city": str(row["city"] or city or ""),
-                        "country": "Deutschland",
-                    }
-                    post_code = str(row["post_code"] or "").strip() if "post_code" in row.keys() else ""
-                    if post_code:
-                        address["post_code"] = post_code
-                        address["postal_code"] = post_code
-                    results.append({
-                        "kind": str(row["feature_kind"] or "address"),
-                        "result_type": "address",
-                        "label": label,
-                        "subtitle": "Adresse",
-                        "address": address,
-                        "state": str(row["state"] or ""),
-                        "state_label": str(row["state_label"] or ""),
-                        "center": [float(row["lon"]), float(row["lat"])],
-                        "bbox": [float(row["min_lon"]), float(row["min_lat"]), float(row["max_lon"]), float(row["max_lat"])],
-                        "zoom": 18.0,
-                        "feature": {
-                            "address": label,
-                            "addresses": [address],
-                            "source_db": str(row["source_db"] or ""),
-                            "gml_id": str(row["gml_id"] or ""),
-                        },
-                    })
-                    if len(results) >= limit:
-                        return results[:limit]
-            elif mode == "street":
-                if not city_norms:
-                    continue
-                fast_rows = []
-                if fast_signature != (0, 0) and FAST_GEOCODER_DB.exists():
-                    fast_con = fast_geocoder_connection()
-                    fast_rows = fast_con.execute(
-                        f"""
-                        SELECT *
-                        FROM street_exact
-                        WHERE street_norm = ?
-                          AND city_norm IN ({','.join('?' for _ in city_norms)})
-                          AND state IN ({state_placeholders})
-                        ORDER BY address_count DESC
-                        LIMIT ?
-                        """,
-                        [street_norm, *city_norms, *states, limit],
-                    ).fetchall()
-                    seen_streets: set[tuple[str, str, str]] = set()
-                    for row in fast_rows:
-                        row_results: list[dict]
-                        if fast_street_row_needs_address_clusters(row):
-                            address_rows = fast_con.execute(
-                                """
-                                SELECT *
-                                FROM address_exact
-                                WHERE street_norm = ?
-                                  AND city_norm = ?
-                                  AND state = ?
-                                  AND feature_kind = 'building'
-                                  AND lon IS NOT NULL
-                                  AND lat IS NOT NULL
-                                ORDER BY lon, lat
-                                LIMIT 5000
-                                """,
-                                [street_norm, str(row["city_norm"] or ""), str(row["state"] or "")],
-                            ).fetchall()
-                            row_results = fast_clustered_street_results_from_address_rows(address_rows, street, city, limit) if address_rows else []
-                        else:
-                            row_results = []
-                        if not row_results:
-                            row_results = [fast_street_result_from_row(row, street, city)]
-                        for result in row_results:
-                            key = (
-                                normalize_geocoder_text(str(result.get("label") or "")),
-                                str(result.get("state") or ""),
-                                str(result.get("result_type") or ""),
-                            )
-                            if key in seen_streets:
-                                continue
-                            seen_streets.add(key)
-                            results.append(result)
-                            if len(results) >= limit:
-                                return results[:limit]
-                # No legacy fallback: street search is served by street_exact only.
-                continue
-                if fast_rows or signature == (0, 0) or not GEOCODER_DB.exists():
-                    continue
-                con = geocoder_connection()
-                rows = con.execute(
-                    f"""
-                    SELECT
-                      a.state,
-                      a.state_label,
-                      MIN(a.street) AS street,
-                      MIN(a.city) AS city,
-                      AVG(a.lon) AS lon,
-                      AVG(a.lat) AS lat,
-                      MIN(a.min_lon) AS min_lon,
-                      MIN(a.min_lat) AS min_lat,
-                      MAX(a.max_lon) AS max_lon,
-                      MAX(a.max_lat) AS max_lat,
-                      COUNT(*) AS address_count
-                    FROM addresses a
-                    WHERE a.street_norm = ?
-                      AND a.city_norm = ?
-                      AND a.state IN ({state_placeholders})
-                    GROUP BY a.state, a.street_norm, a.city_norm
-                    ORDER BY address_count DESC
-                    LIMIT ?
-                    """,
-                    [street_norm, city_norm, *states, limit],
-                ).fetchall()
-                for row in rows:
-                    city_label = str(row["city"] or city or "").strip()
-                    street_label = str(row["street"] or street).strip()
-                    label = f"{street_label}, {city_label}" if city_label else street_label
-                    results.append({
-                        "kind": "street",
-                        "result_type": "street",
-                        "label": label,
-                        "subtitle": "Straße",
-                        "state": str(row["state"] or ""),
-                        "state_label": str(row["state_label"] or ""),
-                        "center": [float(row["lon"]), float(row["lat"])],
-                        "bbox": [float(row["min_lon"]), float(row["min_lat"]), float(row["max_lon"]), float(row["max_lat"])],
-                        "zoom": 17.4,
-                        "feature": {
-                            "street": street_label,
-                            "municipality": city_label,
-                            "address_count": int(row["address_count"] or 0),
-                            "country": "Deutschland",
-                        },
-                    })
-                    if len(results) >= limit:
-                        return results[:limit]
-    except sqlite3.Error:
-        return []
-    return results[:limit]
 
 
 def search_direct_geocoder_for_dataset(query: str, limit: int, search_states: set[str], *, allow_plain_street: bool = False) -> list[dict]:
@@ -8631,63 +7307,6 @@ def search_features_for_dataset(
     results.extend(state_results)
     results.extend(place_results)
 
-    entries = feature_db_entries_for_dataset(dataset)
-    if not entries:
-        raise HTTPException(status_code=404, detail="feature index not found")
-
-    for entry in entries:
-        if entry.name not in search_states:
-            continue
-        if cadastre_mode and any(part.strip() for part in (gemarkung, flur, flurstueck)):
-            for item in search_cadastre_parcels_in_index(
-                entry.path,
-                gemarkung=gemarkung,
-                flur=flur,
-                flurstueck=flurstueck,
-                limit=per_index_limit,
-            ):
-                item["state"] = entry.name
-                item["state_label"] = state_display_name(entry.name)
-                results.append(item)
-            continue
-        if place_scoped_street_query:
-            for item in search_streets_in_index(
-                entry.path,
-                address_query,
-                limit,
-                bbox=search_bbox,
-                municipality=wanted_municipality,
-            ):
-                item["state"] = entry.name
-                item["state_label"] = state_display_name(entry.name)
-                results.append(item)
-            continue
-        if not cadastre_mode and not unscoped_street_query:
-            relation_limit = max(per_index_limit * 8, 80) if wanted_municipality else per_index_limit
-            for item in search_relation_addresses_in_index(entry.path, address_query, relation_limit, bbox=search_bbox):
-                item["state"] = entry.name
-                item["state_label"] = state_display_name(entry.name)
-                if wanted_municipality:
-                    enrich_address_municipality(item, entry.name)
-                    if not municipality_name_matches(str(item.get("municipality") or ""), wanted_municipality):
-                        continue
-                results.append(item)
-            for item in search_addresses_in_index(entry.path, address_query, per_index_limit, bbox=search_bbox):
-                item["state"] = entry.name
-                item["state_label"] = state_display_name(entry.name)
-                if wanted_municipality:
-                    enrich_address_municipality(item, entry.name)
-                    if not municipality_name_matches(str(item.get("municipality") or ""), wanted_municipality):
-                        continue
-                results.append(item)
-        if cadastre_mode or (not standard_mode and not wanted_municipality and not unscoped_street_query and not is_probable_address_query(address_query)):
-            for item in search_features_in_index(entry.path, address_query, per_index_limit):
-                if cadastre_mode and item.get("kind") != "parcel":
-                    continue
-                item["state"] = entry.name
-                item["state_label"] = state_display_name(entry.name)
-                results.append(item)
-
     def result_rank(item: dict) -> tuple:
         label = str(item.get("label") or "")
         subtitle = str(item.get("subtitle") or "")
@@ -8752,7 +7371,7 @@ def cached_search_features_for_dataset(
     direct_candidates = geocoder_direct_candidates(stripped_query, allow_plain_street=street_mode) if not cadastre_mode else []
     now = time.time()
 
-    # Address/street autocomplete must stay independent from feature.sqlite scans.
+    # Address/street autocomplete must stay independent from features.sqlite scans.
     # Feature DB signatures require filesystem stats for every active state and can
     # turn typo/no-result searches into multi-second requests.
     if direct_candidates:
@@ -8823,10 +7442,8 @@ def cached_search_features_for_dataset(
             _SEARCH_RESPONSE_CACHE[key] = (now + SEARCH_CACHE_SECONDS, json.loads(json.dumps(result)))
             return result
 
-    entries = feature_db_entries_for_dataset(dataset)
-    signature = tuple((entry.name, str(entry.path), *sqlite_file_signature(entry.path)) for entry in entries)
     search_signature = tuple((entry.name, str(entry.path), *sqlite_file_signature(entry.path)) for entry in search_db_entries_for_dataset(dataset))
-    key = (dataset, stripped_query, int(limit), normalized_mode, state, gemarkung, flur, flurstueck, tuple(active_bucket_state_keys()), gn250_places_signature(), postcode_areas_signature(), signature, search_signature)
+    key = (dataset, stripped_query, int(limit), normalized_mode, state, gemarkung, flur, flurstueck, tuple(active_bucket_state_keys()), gn250_places_signature(), postcode_areas_signature(), search_signature)
     cached = _SEARCH_RESPONSE_CACHE.get(key)
     if cached and cached[0] > now:
         return json.loads(json.dumps(cached[1]))
@@ -13874,9 +12491,9 @@ def _active_volume_state_dir(state_slug: str) -> Path:
 app = FastAPI(title="OpenKataster Tiles", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 
@@ -13909,9 +12526,6 @@ def warm_search_indexes() -> None:
         print(f"search warmup failed: {exc}")
 
 
-@app.post("/admin/rebuild-geocoder")
-def rebuild_geocoder(_: Annotated[str, Depends(require_admin_key)]) -> dict:
-    raise HTTPException(status_code=410, detail="legacy geocoder rebuild removed; search.sqlite is built per tile version")
 
 
 @app.api_route("/datasets", methods=["GET", "HEAD"])
@@ -14209,6 +12823,38 @@ def _api_v1_search_query_from_parts(*parts: str) -> str:
     return " ".join(part.strip() for part in parts if part and part.strip()).strip()
 
 
+class EmbedSessionRequest(BaseModel):
+    origin: str = Field(
+        min_length=8,
+        max_length=255,
+        description="Exakte Origin der einbettenden Seite, inklusive https://.",
+        examples=["https://www.beispiel-immobilien.de"],
+    )
+    dataset: str = Field(default=VIRTUAL_GERMANY_DATASET, examples=["deutschland"])
+    mode: str = Field(default="standard", pattern="^(standard|onoffice)$", examples=["standard"])
+
+
+class EmbedSessionResponse(BaseModel):
+    session_token: str
+    embed_url: str
+    expires_at: int
+    origin: str
+    scopes: list[str]
+
+
+class InternalViewerSessionRequest(BaseModel):
+    access: str = Field(default="free", pattern="^(free|pro)$")
+    subject: str = Field(default="public-viewer", max_length=120)
+    name: str | None = Field(default=None, max_length=255)
+
+
+AUTH_ERROR_RESPONSES = {
+    401: {"description": "API-Key fehlt oder ist ungültig."},
+    403: {"description": "Scope oder freigeschaltete Domain fehlt."},
+    429: {"description": "Monatliches Nutzungskontingent ist ausgeschöpft."},
+}
+
+
 @app.api_route("/api/v1", methods=["GET", "HEAD"])
 def api_v1_contract() -> dict:
     return {
@@ -14217,11 +12863,11 @@ def api_v1_contract() -> dict:
         "status": "preview",
         "auth": {
             "free": {
-                "description": "No token required for public map, basic search and public geometry previews.",
-                "scopes": ["map:view", "search:basic", "layers:basic"],
+                "description": "Public map tiles remain readable. Search and geometry previews use a short-lived viewer session or a project key.",
+                "scopes": ["map:view", "search:basic", "layers:basic", "feature:preview"],
             },
             "pro": {
-                "description": "Use token query parameter or Bearer token for feature details and pro tools.",
+                "description": "Use Authorization: Bearer <project-key> for server API calls. Embed clients receive a short-lived session token.",
                 "scopes": ["feature:read", "measure", "export:map", "export:cadastre"],
             },
         },
@@ -14235,8 +12881,12 @@ def api_v1_contract() -> dict:
             "search_address": "GET /api/v1/search/address?place=&street=&house_number=",
             "search_parcel": "GET /api/v1/search/parcel?gemarkung=&flur=&flurstueck=",
             "search_dataset": "GET /api/v1/search/{dataset}?q=&mode=",
+            "suggest_places": "GET /api/v1/suggest/places?q=",
+            "suggest_streets": "GET /api/v1/suggest/streets?place=&q=",
+            "suggest_gemarkungen": "GET /api/v1/suggest/gemarkungen?q=",
             "feature_point": "GET /api/v1/features/point?lon=&lat=",
             "feature_geometry": "GET /api/v1/features/geometry?state=&source_db=&gml_id=&kind=",
+            "embed_session": "POST /api/v1/embed/sessions",
             "onoffice_selection_payload": "POST /api/v1/integrations/onoffice/selection-payload",
         },
         "notes": [
@@ -14245,6 +12895,87 @@ def api_v1_contract() -> dict:
             "The onOffice endpoint is a payload adapter only. It does not write to onOffice yet.",
         ],
     }
+
+
+@app.post(
+    "/api/v1/embed/sessions",
+    response_model=EmbedSessionResponse,
+    tags=["Embed"],
+    summary="Kurzlebige Embed-Session erstellen",
+    description="Wird serverseitig mit dem geheimen Projekt-Key aufgerufen. Der zurückgegebene Session-Token darf in die iframe-URL eingesetzt werden.",
+    responses=AUTH_ERROR_RESPONSES,
+)
+def api_v1_create_embed_session(
+    request: Request,
+    payload: EmbedSessionRequest,
+    access: Annotated[ApiAccessContext, Depends(require_api_key_access)],
+) -> EmbedSessionResponse:
+    required_scope = "embed:pro" if payload.mode == "onoffice" else "embed:free"
+    if required_scope not in access.scopes and "embed:pro" not in access.scopes:
+        raise HTTPException(status_code=403, detail=f"required scope: {required_scope}")
+
+    origin = _normalize_origin(payload.origin)
+    if not origin:
+        raise HTTPException(status_code=422, detail="origin must be a valid http(s) origin")
+    allowed_origins = (access.claims or {}).get("allowed_origins")
+    if not isinstance(allowed_origins, list) or not _origin_is_allowed(origin, allowed_origins):
+        raise HTTPException(status_code=403, detail="origin is not enabled for this project")
+    request_origin = _normalize_origin(request.headers.get("Origin", ""))
+    if request_origin and request_origin != origin:
+        raise HTTPException(status_code=403, detail="Origin header does not match requested origin")
+
+    dataset = normalize_state_key(payload.dataset)
+    if not dataset or (dataset != VIRTUAL_GERMANY_DATASET and dataset not in set(active_bucket_state_keys())):
+        raise HTTPException(status_code=404, detail="dataset not found")
+
+    now = int(time.time())
+    claims = {
+        "typ": "embed",
+        "aud": "openkataster-embed",
+        "sub": (access.claims or {}).get("sub"),
+        "name": (access.claims or {}).get("name"),
+        "plan": (access.claims or {}).get("plan") or "free",
+        "integration": "embed",
+        "project_id": (access.claims or {}).get("sub"),
+        "origin": origin,
+        "dataset": dataset,
+        "mode": payload.mode,
+        "scopes": sorted(access.scopes),
+        "iat": now,
+        "nbf": now - 5,
+        "exp": now + EMBED_SESSION_TTL_SECONDS,
+        "jti": secrets.token_urlsafe(12),
+    }
+    session_token = _sign_embed_claims(claims)
+    base_url = PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
+    query = urllib.parse.urlencode(
+        {
+            "session": session_token,
+            "okParentOrigin": origin,
+            "mode": payload.mode,
+        }
+    )
+    return EmbedSessionResponse(
+        session_token=session_token,
+        embed_url=f"{base_url}/embed/{dataset}?{query}",
+        expires_at=claims["exp"],
+        origin=origin,
+        scopes=claims["scopes"],
+    )
+
+
+@app.post("/api/v1/internal/viewer-sessions", include_in_schema=False)
+def api_v1_create_internal_viewer_session(
+    _: Annotated[str, Depends(require_admin_key)],
+    payload: InternalViewerSessionRequest,
+) -> dict:
+    token = _new_viewer_session(
+        pro=payload.access == "pro",
+        subject=payload.subject or "public-viewer",
+        name=payload.name,
+    )
+    claims = _verify_embed_session(token) or {}
+    return {"token": token, "expires_at": claims.get("exp")}
 
 
 @app.api_route("/api/v1/states", methods=["GET", "HEAD"])
@@ -14322,6 +13053,7 @@ def api_v1_tile_mvt(state: str, z: int, x: int, y: int) -> Response:
 
 @app.api_route("/api/v1/search/address", methods=["GET", "HEAD"])
 def api_v1_search_address(
+    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
     q: str = "",
     place: str = "",
     street: str = "",
@@ -14372,6 +13104,7 @@ def api_v1_search_parcel(
     gemarkung: str,
     flur: str,
     flurstueck: str,
+    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
     limit: Annotated[int, Query(ge=1, le=30)] = 12,
     state: str = "",
 ) -> dict:
@@ -14393,6 +13126,7 @@ def api_v1_search_parcel(
 @app.api_route("/api/v1/search/{dataset}", methods=["GET", "HEAD"])
 def api_v1_dataset_search(
     dataset: str,
+    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
     q: str = "",
     limit: Annotated[int, Query(ge=1, le=30)] = 12,
     mode: str = "mixed",
@@ -14416,6 +13150,37 @@ def api_v1_dataset_search(
         flur=flur,
         flurstueck=flurstueck,
     )
+
+
+@app.api_route("/api/v1/suggest/places", methods=["GET", "HEAD"], tags=["Search"])
+def api_v1_suggest_places(
+    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    q: Annotated[str, Query(min_length=2, max_length=80)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 10,
+    state: str = "",
+) -> dict:
+    return search_place_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, q, limit, state=state)
+
+
+@app.api_route("/api/v1/suggest/streets", methods=["GET", "HEAD"], tags=["Search"])
+def api_v1_suggest_streets(
+    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    q: Annotated[str, Query(min_length=2, max_length=80)],
+    place: Annotated[str, Query(min_length=2, max_length=80)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 10,
+    state: str = "",
+) -> dict:
+    return search_street_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, place, q, limit, state=state)
+
+
+@app.api_route("/api/v1/suggest/gemarkungen", methods=["GET", "HEAD"], tags=["Search"])
+def api_v1_suggest_gemarkungen(
+    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    q: Annotated[str, Query(min_length=2, max_length=80)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 10,
+    state: str = "",
+) -> dict:
+    return search_gemarkung_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, q, limit, state=state)
 
 
 
@@ -14777,7 +13542,7 @@ def api_v1_admin_api_keys_usage(
 
 @app.post("/api/v1/integrations/onoffice/selection-payload")
 def api_v1_onoffice_selection_payload(
-    access: Annotated[ApiAccessContext, Depends(api_access_context)],
+    access: Annotated[ApiAccessContext, Depends(RequireScopes("feature:read"))],
     payload: Annotated[dict, Body()],
 ) -> dict:
     if not access.is_pro:
@@ -14810,18 +13575,11 @@ def api_v1_onoffice_selection_payload(
 
 @app.api_route("/api/v1/features/point", methods=["GET", "HEAD"])
 def api_v1_features_at_point(
-    access: Annotated[ApiAccessContext, Depends(api_access_context)],
+    access: Annotated[ApiAccessContext, Depends(RequireScopes("feature:read"))],
     lon: Annotated[float, Query(ge=-180, le=180)],
     lat: Annotated[float, Query(ge=-90, le=90)],
     dataset: str = VIRTUAL_GERMANY_DATASET,
 ) -> dict:
-    if not access.is_pro:
-        return {
-            "access": "free",
-            "pro_required": True,
-            "parcels": [],
-            "buildings": [],
-        }
     if not is_virtual_germany_dataset(dataset):
         try:
             get_dataset(dataset)
@@ -14835,6 +13593,7 @@ def api_v1_features_at_point(
 
 @app.api_route("/api/v1/features/point-preview", methods=["GET", "HEAD"])
 def api_v1_features_at_point_preview(
+    _: Annotated[ApiAccessContext, Depends(RequireScopes("feature:preview"))],
     lon: Annotated[float, Query(ge=-180, le=180)],
     lat: Annotated[float, Query(ge=-90, le=90)],
     dataset: str = VIRTUAL_GERMANY_DATASET,
@@ -14983,21 +13742,143 @@ def viewer_asset(viewer_version: str, asset_path: str) -> FileResponse:
         headers={"Cache-Control": "public, max-age=300"},
     )
 
+
+@app.get("/embed-contract-v1.js", include_in_schema=False)
+def embed_contract_javascript() -> Response:
+    script = r'''(() => {
+  const params = new URLSearchParams(window.location.search);
+  const parentOrigin = params.get("okParentOrigin") || "*";
+  const isEmbedded = window.parent && window.parent !== window;
+  if (!isEmbedded) return;
+
+  const post = (type, payload = {}) => window.parent.postMessage({
+    type,
+    version: 1,
+    dataset: "deutschland",
+    ...payload,
+  }, parentOrigin);
+
+  const mapState = () => {
+    const map = window.__okMap;
+    if (!map || !map.getCenter) return null;
+    const center = map.getCenter();
+    return { center: [center.lng, center.lat], zoom: map.getZoom(), bearing: 0, pitch: 0 };
+  };
+
+  const compactItem = (kind, item) => ({
+    kind,
+    state: item.state || item.bundesland || null,
+    source_db: item.source_db || null,
+    gml_id: item.gml_id || item.id || null,
+    label: item.label || item.name || null,
+    address: item.address || item.adresse || null,
+    center: Array.isArray(item.center) ? item.center : null,
+    bbox: Array.isArray(item.bbox) ? item.bbox : null,
+  });
+
+  const selectionState = () => {
+    try {
+      const parcels = typeof selectedParcels !== "undefined"
+        ? [...selectedParcels.values()].map((item) => compactItem("parcel", item)) : [];
+      const buildings = typeof selectedBuildings !== "undefined"
+        ? [...selectedBuildings.values()].map((item) => compactItem("building", item)) : [];
+      return { parcels, buildings };
+    } catch (_) {
+      return { parcels: [], buildings: [] };
+    }
+  };
+
+  let lastSelection = "";
+  const publishSelection = () => {
+    const selection = selectionState();
+    const signature = JSON.stringify(selection);
+    if (signature === lastSelection) return;
+    lastSelection = signature;
+    post("openkataster:selection", { selection });
+  };
+
+  const selectionBody = document.getElementById("selectionBody");
+  if (selectionBody) new MutationObserver(publishSelection).observe(selectionBody, { childList: true, subtree: true });
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) return;
+    if (parentOrigin !== "*" && event.origin !== parentOrigin) return;
+    const message = event.data;
+    if (!message || typeof message !== "object" || message.version !== 1) return;
+    const map = window.__okMap;
+    if (message.type === "openkataster:set-view" && map) {
+      const center = Array.isArray(message.center) ? message.center.map(Number) : null;
+      const zoom = Number(message.zoom);
+      if (center && center.length === 2 && center.every(Number.isFinite)) {
+        map.easeTo({ center, zoom: Number.isFinite(zoom) ? zoom : map.getZoom(), bearing: 0, pitch: 0, duration: 350 });
+      }
+    } else if (message.type === "openkataster:clear-selection") {
+      document.getElementById("toolClear")?.click();
+      publishSelection();
+    } else if (message.type === "openkataster:set-layers" && message.layers) {
+      for (const [name, enabled] of Object.entries(message.layers)) {
+        const input = document.querySelector(`[data-layer-setting="${CSS.escape(name)}"]`);
+        if (input && input.checked !== Boolean(enabled)) {
+          input.checked = Boolean(enabled);
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+    } else if (message.type === "openkataster:search-address") {
+      const values = message.address || {};
+      const fields = { addressPlace: values.place, addressStreet: values.street, addressHouseNumber: values.house_number };
+      for (const [id, value] of Object.entries(fields)) {
+        const input = document.getElementById(id);
+        if (input && value != null) input.value = String(value);
+      }
+      document.getElementById("cadastreSearchButton")?.click();
+    } else if (message.type === "openkataster:request-state") {
+      post("openkataster:state", { map: mapState(), selection: selectionState() });
+    }
+  });
+
+  const ready = () => {
+    const map = window.__okMap;
+    if (!map || !map.getCenter) return window.setTimeout(ready, 50);
+    const publishReady = () => post("openkataster:ready", {
+      capabilities: ["set-view", "search-address", "set-layers", "clear-selection", "selection"],
+      map: mapState(),
+    });
+    if (map.loaded && map.loaded()) publishReady(); else map.once("load", publishReady);
+  };
+  ready();
+})();'''
+    return Response(content=script, media_type="text/javascript; charset=utf-8", headers={"Cache-Control": "public, max-age=300"})
+
 @app.api_route("/viewer/{dataset}", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def viewer(
     request: Request,
     dataset: str,
     key: Annotated[str | None, Query()] = None,
+    token: Annotated[str | None, Query()] = None,
+    session: Annotated[str | None, Query()] = None,
 ):
     if not is_virtual_germany_dataset(dataset):
         get_dataset(dataset)
+    supplied = session or token or key
+    session_claims = _verify_embed_session(supplied) if supplied else None
+    if session and not session_claims:
+        raise HTTPException(status_code=401, detail="invalid or expired embed session")
+    if session_claims and session_claims.get("dataset") and session_claims.get("dataset") != dataset:
+        raise HTTPException(status_code=403, detail="embed session is not valid for this dataset")
+    if not supplied:
+        params = dict(request.query_params)
+        params["token"] = _new_viewer_session()
+        return RedirectResponse(url=f"/viewer/{dataset}?{urllib.parse.urlencode(params)}", status_code=307)
     static_index = VIEWER_ROOT / f"{dataset}-v2" / "index.html"
     if static_index.is_file():
-        return FileResponse(
-            static_index,
-            media_type="text/html; charset=utf-8",
-            headers={"Cache-Control": "no-cache"},
-        )
+        html = static_index.read_text(encoding="utf-8")
+        if "/embed-contract-v1.js" not in html:
+            html = html.replace("</body>", '<script src="/embed-contract-v1.js"></script></body>')
+        headers = {"Cache-Control": "no-cache", "Referrer-Policy": "strict-origin"}
+        origin = str((session_claims or {}).get("origin") or "")
+        if origin:
+            headers["Content-Security-Policy"] = f"frame-ancestors {origin}"
+        return HTMLResponse(content=html, headers=headers)
     key_value = viewer_key(key)
     return HTMLResponse(viewer_html(request, dataset, key_value))
 
@@ -15014,12 +13895,42 @@ def _viewer_redirect(request: Request, dataset: str, extra: dict[str, str] | Non
     )
 
 
+def _embed_runtime_redirect(request: Request, dataset: str, session: str, mode: str) -> RedirectResponse:
+    params = dict(request.query_params)
+    params.pop("session", None)
+    params.pop("key", None)
+    params.pop("api_key", None)
+    params["token"] = session
+    params["iframe"] = "1"
+    params["mode"] = mode
+    query = urllib.parse.urlencode(params, doseq=True)
+    return RedirectResponse(url=f"/embed-runtime/{dataset}?{query}", status_code=307)
+
+
+@app.api_route("/embed-runtime/{dataset}", methods=["GET", "HEAD"], include_in_schema=False)
+def embed_runtime_viewer(
+    request: Request,
+    dataset: str,
+    token: Annotated[str, Query()],
+):
+    claims = _verify_embed_session(token)
+    if not claims or claims.get("typ") != "embed" or claims.get("dataset") != dataset:
+        raise HTTPException(status_code=403, detail="valid embed session required")
+    return viewer(request, dataset, token=token)
+
+
 @app.api_route("/embed/onoffice", methods=["GET", "HEAD"])
 def embed_onoffice_viewer(
     request: Request,
     key: Annotated[str | None, Query()] = None,
     token: Annotated[str | None, Query()] = None,
+    session: Annotated[str | None, Query()] = None,
 ):
+    if session:
+        claims = _verify_embed_session(session)
+        if not claims or claims.get("mode") != "onoffice":
+            raise HTTPException(status_code=403, detail="valid onOffice embed session required")
+        return _embed_runtime_redirect(request, VIRTUAL_GERMANY_DATASET, session, "onoffice")
     return _viewer_redirect(request, VIRTUAL_GERMANY_DATASET, {"mode": "onoffice"})
 
 
@@ -15029,9 +13940,15 @@ def embed_viewer(
     dataset: str,
     key: Annotated[str | None, Query()] = None,
     token: Annotated[str | None, Query()] = None,
+    session: Annotated[str | None, Query()] = None,
 ):
     if not is_virtual_germany_dataset(dataset):
         get_dataset(dataset)
+    if session:
+        claims = _verify_embed_session(session)
+        if not claims or claims.get("dataset") != dataset:
+            raise HTTPException(status_code=403, detail="valid embed session required")
+        return _embed_runtime_redirect(request, dataset, session, str(claims.get("mode") or "standard"))
     return _viewer_redirect(request, dataset)
 
 
@@ -15302,3 +14219,196 @@ def tile_pbf(
 def normalize_slug(value: str | None) -> str:
     value_text = str(value or '').strip().casefold()
     return re.sub(r'[^0-9a-z-]', '-', value_text)
+
+
+@app.get("/docs/embed", response_class=HTMLResponse, include_in_schema=False)
+def embed_documentation() -> HTMLResponse:
+    return HTMLResponse(
+        r'''<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenKataster Embed</title>
+  <style>
+    :root { color-scheme: light; --orange:#f86d14; --line:#e7e7e4; --muted:#666b70; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:#202326; background:#fff; font:15px/1.55 "IBM Plex Sans",Inter,Arial,sans-serif; }
+    header { height:58px; display:flex; align-items:center; border-bottom:1px solid var(--line); padding:0 24px; font-weight:600; }
+    header span { color:var(--orange); margin-right:7px; }
+    main { width:min(860px,calc(100% - 32px)); margin:42px auto 80px; }
+    h1 { font-size:30px; line-height:1.2; margin:0 0 12px; font-weight:600; }
+    h2 { font-size:18px; margin:42px 0 10px; font-weight:600; }
+    p { margin:8px 0; color:var(--muted); }
+    code,pre { font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    pre { padding:16px; overflow:auto; background:#f7f7f5; border:1px solid var(--line); border-radius:6px; color:#26282a; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; }
+    th,td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { font-size:12px; color:var(--muted); font-weight:500; }
+    a { color:#303438; text-underline-offset:3px; }
+    .note { border-left:2px solid var(--orange); padding:2px 0 2px 14px; margin:18px 0; }
+  </style>
+</head>
+<body>
+  <header><span>▧</span> OpenKataster Developer</header>
+  <main>
+    <h1>Karte einbetten</h1>
+    <p>Eine Embed-Session verbindet ein Projekt mit einer freigeschalteten Domain. Der geheime API-Key bleibt auf Ihrem Server.</p>
+
+    <h2>1. Session serverseitig erstellen</h2>
+    <pre><code>curl -X POST https://tiles.openkataster.de/api/v1/embed/sessions \
+  -H "Authorization: Bearer OK_IHR_PROJEKT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"origin":"https://www.beispiel.de","dataset":"deutschland","mode":"standard"}'</code></pre>
+    <div class="note"><p>Der Projekt-Key darf nicht in HTML, JavaScript oder einer iframe-URL veröffentlicht werden.</p></div>
+
+    <h2>2. Zurückgegebene URL einsetzen</h2>
+    <pre><code>&lt;iframe
+  id="openkataster-map"
+  src="EMBED_URL_AUS_DER_ANTWORT"
+  title="OpenKataster"
+  style="width:100%;height:720px;border:0"
+&gt;&lt;/iframe&gt;</code></pre>
+    <p>Session-Tokens sind kurzlebig und an die im Projekt freigeschaltete Origin gebunden.</p>
+
+    <h2>Nachrichten vom Viewer</h2>
+    <table>
+      <thead><tr><th>Typ</th><th>Inhalt</th></tr></thead>
+      <tbody>
+        <tr><td><code>openkataster:ready</code></td><td>Viewer und Karte sind einsatzbereit.</td></tr>
+        <tr><td><code>openkataster:selection</code></td><td>Aktuelle Gebäude- und Flurstücksauswahl.</td></tr>
+        <tr><td><code>openkataster:state</code></td><td>Kartenposition und Auswahl nach einer Statusabfrage.</td></tr>
+      </tbody>
+    </table>
+    <pre><code>window.addEventListener("message", (event) =&gt; {
+  if (event.origin !== "https://tiles.openkataster.de") return;
+  if (event.data?.type === "openkataster:selection") {
+    console.log(event.data.selection);
+  }
+});</code></pre>
+
+    <h2>Befehle an den Viewer</h2>
+    <table>
+      <thead><tr><th>Typ</th><th>Parameter</th></tr></thead>
+      <tbody>
+        <tr><td><code>openkataster:set-view</code></td><td><code>center: [lon, lat]</code>, <code>zoom</code></td></tr>
+        <tr><td><code>openkataster:search-address</code></td><td><code>address: { place, street, house_number }</code></td></tr>
+        <tr><td><code>openkataster:set-layers</code></td><td><code>layers: { aerial: true, alkis: true }</code></td></tr>
+        <tr><td><code>openkataster:clear-selection</code></td><td>Keine weiteren Parameter.</td></tr>
+        <tr><td><code>openkataster:request-state</code></td><td>Antwortet mit <code>openkataster:state</code>.</td></tr>
+      </tbody>
+    </table>
+    <pre><code>const frame = document.getElementById("openkataster-map");
+frame.contentWindow.postMessage({
+  type: "openkataster:set-view",
+  version: 1,
+  center: [9.9937, 53.5511],
+  zoom: 18
+}, "https://tiles.openkataster.de");</code></pre>
+
+    <h2>REST-API</h2>
+    <p>Die interaktive REST-Referenz liegt unter <a href="/api/docs">/api/docs</a>. Die maschinenlesbare Spezifikation steht unter <a href="/api/openapi.json">/api/openapi.json</a>.</p>
+  </main>
+</body>
+</html>'''
+    )
+
+
+PUBLIC_OPENAPI_PATHS = {
+    "/health",
+    "/api/v1",
+    "/api/v1/states",
+    "/api/v1/sources",
+    "/api/v1/datasets",
+    "/api/v1/tilejson/{state}.json",
+    "/api/v1/tiles/{state}/{z}/{x}/{y}.mvt",
+    "/api/v1/search/address",
+    "/api/v1/search/parcel",
+    "/api/v1/search/{dataset}",
+    "/api/v1/suggest/places",
+    "/api/v1/suggest/streets",
+    "/api/v1/suggest/gemarkungen",
+    "/api/v1/features/geometry",
+    "/api/v1/features/point",
+    "/api/v1/features/point-preview",
+    "/api/v1/session",
+    "/api/v1/embed/sessions",
+    "/api/v1/integrations/onoffice/selection-payload",
+    "/embed/{dataset}",
+}
+
+
+def public_openapi_schema() -> dict:
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title="OpenKataster API",
+        version="1.0.0-preview",
+        description=(
+            "Versionierte Schnittstelle für Katasterkarten, Suche, Objektinformationen und sichere Einbettungen. "
+            "Projekt-Keys werden als Bearer-Token ausschließlich serverseitig verwendet."
+        ),
+        routes=app.routes,
+        tags=[
+            {"name": "Embed", "description": "Kurzlebige, domain-gebundene iframe-Sessions."},
+            {"name": "Search", "description": "Adress- und Flurstückssuche."},
+            {"name": "Features", "description": "Geometrien und fachliche Objektinformationen."},
+            {"name": "Map", "description": "Öffentliche Karten- und Quellenressourcen."},
+        ],
+    )
+    schema["paths"] = {path: operations for path, operations in schema.get("paths", {}).items() if path in PUBLIC_OPENAPI_PATHS}
+    schema["servers"] = [{"url": PUBLIC_BASE_URL or "https://tiles.openkataster.de"}]
+    protected_paths = {
+        "/api/v1/search/address",
+        "/api/v1/search/parcel",
+        "/api/v1/search/{dataset}",
+        "/api/v1/suggest/places",
+        "/api/v1/suggest/streets",
+        "/api/v1/suggest/gemarkungen",
+        "/api/v1/features/point",
+        "/api/v1/features/point-preview",
+        "/api/v1/embed/sessions",
+        "/api/v1/integrations/onoffice/selection-payload",
+    }
+    hidden_auth_parameters = {"session", "token", "api_key", "x-api-key", "authorization"}
+    for path, operations in schema["paths"].items():
+        for method, operation in operations.items():
+            if method.lower() not in {"get", "post", "put", "patch", "delete", "head"} or not isinstance(operation, dict):
+                continue
+            operation["parameters"] = [
+                parameter
+                for parameter in operation.get("parameters", [])
+                if str(parameter.get("name") or "").lower() not in hidden_auth_parameters
+            ]
+            if path in protected_paths:
+                operation["security"] = [{"OpenKatasterApiKey": []}]
+
+    examples = {
+        "/api/v1/session": {
+            "access": "partner",
+            "authenticated": True,
+            "plan": "api_beta",
+            "scopes": ["search:basic", "feature:read", "embed:pro"],
+        },
+        "/api/v1/search/address": {
+            "query": "Feldstraße 18 Hildesheim",
+            "count": 1,
+            "results": [{"label": "Feldstraße 18, 31134 Hildesheim", "center": [9.95, 52.15]}],
+        },
+        "/api/v1/features/point-preview": {
+            "access": "free",
+            "count": 1,
+            "parcels": [{"kind": "parcel", "label": "17/3", "state": "niedersachsen"}],
+            "buildings": [],
+        },
+    }
+    for path, example in examples.items():
+        operation = schema["paths"].get(path, {}).get("get")
+        if operation:
+            response = operation.setdefault("responses", {}).setdefault("200", {"description": "Erfolgreiche Antwort"})
+            response.setdefault("content", {}).setdefault("application/json", {})["example"] = example
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = public_openapi_schema

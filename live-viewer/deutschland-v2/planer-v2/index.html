@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>OpenKataster Planer</title>
+  <link rel="icon" href="/viewer-assets/deutschland-v2/openkataster-logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.css">
+  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/planer-v2/styles.css?v=20260711-search-tool-click1">
+  <script>document.documentElement.dataset.embed = new URLSearchParams(location.search).has('iframe') ? 'true' : 'false';</script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-brand" href="/" aria-label="OpenKataster Startseite"><img src="/logo.svg" alt=""><span>OpenKataster</span></a>
+    <nav class="site-nav" aria-label="Konto">
+      <a id="headerProLink" class="site-pill site-pro" href="/pro">Pro</a>
+      <a id="headerAccountLink" class="site-account" href="/login" aria-label="Anmelden">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6"/></svg>
+      </a>
+    </nav>
+  </header>
+  <main id="plannerApp" class="planner-app" data-ready="false" data-sidebar-open="false" data-table-open="false" data-active-tool="none" data-resizing="false" data-layout-transitioning="false">
+    <section class="map-workspace" aria-label="OpenKataster Planer">
+      <div id="mapPane" class="map-pane">
+        <div id="map"></div>
+
+        <div class="search-control">
+          <button id="searchButton" class="round-tool" type="button" aria-label="Suche öffnen" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.3-4.3"/><circle cx="10.5" cy="10.5" r="6.5"/></svg>
+          </button>
+          <section id="searchPanel" class="search-panel ui-panel" hidden>
+            <header class="panel-head">
+              <select id="searchMode" aria-label="Suchart"><option value="address">Adresse</option><option value="parcel">Flurstück</option></select>
+              <button id="searchClose" class="icon-button" type="button" aria-label="Suche schließen">×</button>
+            </header>
+            <div id="addressFields" class="search-fields">
+              <label class="clear-field"><span class="sr-only">Ort</span><input id="placeInput" name="ok-search-place" type="text" placeholder="Ort erforderlich" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="placeInput" aria-label="Ort löschen">×</button><div id="placeSuggestions" class="field-suggestions" hidden></div></label>
+              <label class="clear-field"><span class="sr-only">Straße</span><input id="streetInput" name="ok-search-street" type="text" placeholder="Straße optional" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="streetInput" aria-label="Straße löschen">×</button><div id="streetSuggestions" class="field-suggestions" hidden></div></label>
+              <label class="clear-field"><span class="sr-only">Hausnummer</span><input id="houseInput" name="ok-search-house-number" type="text" placeholder="Hausnummer optional" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="houseInput" aria-label="Hausnummer löschen">×</button></label>
+            </div>
+            <div id="parcelFields" class="search-fields" hidden>
+              <label class="clear-field"><span class="sr-only">Gemarkung</span><input id="gemarkungInput" name="ok-search-cadastre" type="text" placeholder="Gemarkung erforderlich" autocomplete="new-password" spellcheck="false" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="gemarkungInput" aria-label="Gemarkung löschen">×</button><div id="gemarkungSuggestions" class="field-suggestions" hidden></div></label>
+              <label class="clear-field"><span class="sr-only">Flur</span><input id="flurInput" name="ok-search-district" type="text" placeholder="Flur erforderlich" inputmode="numeric" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="flurInput" aria-label="Flur löschen">×</button></label>
+              <label class="clear-field"><span class="sr-only">Flurstück</span><input id="parcelInput" name="ok-search-parcel" type="text" placeholder="Flurstück erforderlich" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="parcelInput" aria-label="Flurstück löschen">×</button></label>
+            </div>
+            <div id="searchStatus" class="search-status" hidden aria-live="polite"></div>
+            <button id="searchSubmit" class="primary-action search-submit" type="button"><span class="button-spinner" aria-hidden="true"></span><span>Suchen</span></button>
+            <div id="searchResults" class="search-results" hidden></div>
+          </section>
+        </div>
+
+        <nav class="tool-stack" aria-label="Werkzeuge">
+          <button id="selectTool" class="round-tool pro-tool" type="button" aria-label="Objektinformationen auswählen" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h10M5 7v10M7 19h10M19 7v10"/><circle cx="5" cy="5" r="1.7"/><circle cx="19" cy="5" r="1.7"/><circle cx="5" cy="19" r="1.7"/><circle cx="19" cy="19" r="1.7"/><circle cx="12" cy="9.2" r=".7" fill="currentColor" stroke="none"/><path d="M12 12v4.2"/></svg><span class="pro-badge">Pro</span>
+          </button>
+          <button id="measureTool" class="round-tool pro-tool" type="button" aria-label="Messen" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 6h19M2.5 18h19M2.5 6v12M5.5 6v2.6M9 6v4.2M12.5 6v2.6M16 6v4.2M19.5 6v2.6"/><text x="9" y="16.3" text-anchor="middle">1</text><text x="16" y="16.3" text-anchor="middle">2</text></svg><span class="pro-badge">Pro</span>
+          </button>
+          <button id="exportTool" class="round-tool" type="button" aria-label="Karte exportieren" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11"/><path d="m7.5 9.5 4.5 4.5 4.5-4.5"/><path d="M5 19h14"/></svg>
+          </button>
+        </nav>
+
+        <section id="measurePanel" class="measure-panel ui-panel" hidden aria-live="polite">
+          <div id="measureValues" class="measure-grid">
+            <div class="measure-cell"><span class="measure-symbol">↔</span><span>Abstand</span><strong id="measureDistance">0 m</strong></div>
+            <div class="measure-cell"><span class="measure-symbol">∠</span><span>Winkel zur Horizontalen</span><strong id="measureAngle">0,0°</strong></div>
+            <div class="measure-cell"><span class="measure-symbol">Σ</span><span>Kumulierter Abstand</span><strong id="measureCumulative">0 m</strong></div>
+            <div class="measure-cell"><span class="measure-symbol">▧</span><span>Fläche</span><strong id="measureArea">–</strong></div>
+          </div>
+          <div id="measureLocked" class="measure-pro-lock" hidden><span>Messwerte sind in Pro verfügbar.</span><a href="/pro" target="_top">Pro buchen</a></div>
+        </section>
+
+        <div class="layer-control">
+          <button id="layerButton" class="round-tool" type="button" aria-label="Kartenlayer" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>
+          </button>
+          <section id="layerMenu" class="layer-menu ui-panel" hidden>
+            <strong>Layer</strong>
+            <p id="layerZoomNote" class="layer-zoom-note">ALKIS und Luftbild sind ab Zoom 17 verfügbar.</p>
+            <details open><summary><label><input type="checkbox" data-layer="alkis"><span class="swatch alkis"></span>ALKIS</label></summary>
+              <div class="layer-subtree">
+                <label><input type="checkbox" data-layer="buildings"><span class="swatch building"></span>Gebäude</label>
+                <label><input type="checkbox" data-layer="parcelLines"><span class="swatch line"></span>Flurstücksgrenzen</label>
+                <label><input type="checkbox" data-layer="surfaceOutlines"><span class="swatch line light"></span>Flächenumrisse</label>
+                <label><input type="checkbox" data-layer="houseNumbers"><span class="swatch text"></span>Hausnummern</label>
+                <label><input type="checkbox" data-layer="streetNames"><span class="swatch text bold"></span>Straßennamen</label>
+                <details open><summary><label><input type="checkbox" data-layer="extended"><span class="swatch fill"></span>Erweitert</label></summary>
+                  <div class="layer-subtree nested">
+                    <label><input type="checkbox" data-layer="parcelLabels"><span class="swatch parcel-number" aria-hidden="true"></span>Flurstücksnummern</label>
+                    <label><input type="checkbox" data-layer="surfaces"><span class="swatch fill"></span>Flächennutzung</label>
+                    <label><input type="checkbox" data-layer="buildingUsage"><span class="swatch building-use"></span>Gebäudenutzung</label>
+                    <label><input type="checkbox" data-layer="buildingLabels"><span class="swatch building-detail" aria-hidden="true">II</span>Gebäudedetails</label>
+                    <label><input type="checkbox" data-layer="boundaryPoints"><span class="swatch point"></span>Grenzpunkte</label>
+                    <label><input type="checkbox" data-layer="symbols"><span class="swatch monument-symbol" aria-hidden="true"></span>Symbole</label>
+                  </div>
+                </details>
+              </div>
+            </details>
+            <label class="layer-single"><input type="checkbox" data-layer="aerial"><span class="swatch aerial" aria-hidden="true"><span></span></span>Luftbild</label>
+          </section>
+        </div>
+
+        <div id="exportFrame" class="export-frame" hidden>
+          <div id="exportPageBox" class="export-page-box" hidden></div>
+          <div id="exportFrameBox" class="export-frame-box" aria-label="Exportausschnitt"></div>
+          <div id="exportCenterMarker" class="export-center-marker" aria-hidden="true"></div>
+        </div>
+
+        <div id="zoomBadge" class="zoom-badge">Zoom –</div>
+        <div class="source-control">
+          <button id="sourceButton" class="source-button" type="button" aria-label="Quellen" aria-expanded="false">i</button>
+          <section id="sourcePanel" class="source-panel ui-panel" hidden><ul id="sourceList"></ul></section>
+        </div>
+        <div class="brand-mark"><img src="/viewer-assets/deutschland-v2/openkataster-logo.svg" alt=""><span>OpenKataster</span></div>
+      </div>
+
+      <section id="selectionDock" class="selection-dock" aria-label="Auswahl" aria-hidden="true">
+        <div id="selectionResize" class="selection-resize" role="separator" aria-orientation="horizontal" aria-label="Tabellenhöhe ändern"><span></span></div>
+        <header class="selection-head"><div><strong>Auswahl</strong><span id="selectionCount">Keine Objekte ausgewählt</span></div><button id="selectionClose" class="icon-button" type="button" aria-label="Auswahl schließen">×</button></header>
+        <div id="selectionContent" class="selection-content"></div>
+      </section>
+    </section>
+
+    <button id="mobileExportBackdrop" class="mobile-export-backdrop" type="button" aria-label="Exporteinstellungen schließen"></button>
+
+    <aside id="exportSidebar" class="export-sidebar" aria-label="Export" aria-hidden="true">
+      <header class="panel-head"><strong>Karte exportieren</strong><button id="exportClose" class="icon-button" type="button" aria-label="Export schließen">×</button></header>
+      <div class="sidebar-scroll">
+        <div class="field"><label for="exportOutput">Ausgabe</label><select id="exportOutput"><option value="pdf">PDF</option><option value="png">PNG</option></select></div>
+        <div class="field"><label for="exportPaper">Format</label><select id="exportPaper"><option value="a4">DIN A4</option><option value="a3">DIN A3</option><option value="square">Quadratisch</option><option value="ratio43">4:3</option></select></div>
+        <div id="exportOrientationField" class="field"><label for="exportOrientation">Ausrichtung</label><select id="exportOrientation"><option value="portrait">Hochformat</option><option value="landscape">Querformat</option></select></div>
+        <div class="field"><label for="exportScale">Maßstab</label><select id="exportScale"><option value="500">1:500</option><option value="1000" selected>1:1000</option><option value="2000">1:2000</option></select></div>
+        <fieldset><legend>Darstellung</legend><label><input id="exportLayout" type="checkbox" checked><span>Mit Layout</span></label><label><input id="exportHighlight" type="checkbox" checked><span>Auswahl hervorheben</span></label></fieldset>
+        <fieldset><legend>Zusätzlich</legend><label><input id="exportDxf" type="checkbox"><span>DXF exportieren</span></label></fieldset>
+      </div>
+      <footer>
+        <div class="export-summary-row">
+          <div id="exportSummary" class="export-summary">A4 · 1:1000 · PDF</div>
+          <button id="mobileExportSettings" class="mobile-export-settings" type="button" aria-label="Exporteinstellungen" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.12 2.12-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.04 1.56V20.3h-3v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-2.12-2.12.06-.06A1.7 1.7 0 0 0 7 15a1.7 1.7 0 0 0-1.56-1.04H5.3v-3h.14A1.7 1.7 0 0 0 7 9.92a1.7 1.7 0 0 0-.34-1.88L6.6 7.98l2.12-2.12.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 11.7 4.7v-.1h3v.1a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.12 2.12-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.56 1.04h.14v3h-.14A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+          </button>
+        </div>
+        <button id="exportPreview" class="primary-action" type="button">Exportieren</button>
+        <div id="exportStatus" class="export-status" aria-live="polite"></div>
+      </footer>
+    </aside>
+
+    <section id="noticePanel" class="notice-panel ui-panel" hidden><button id="noticeClose" class="icon-button" type="button" aria-label="Hinweis schließen">×</button><strong id="noticeTitle">OpenKataster Pro</strong><p id="noticeText"></p><a class="primary-action" href="/pro" target="_top">Pro buchen</a></section>
+  </main>
+
+  <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js"></script>
+  <script type="module" src="/viewer-assets/deutschland-v2/planer-v2/app.js?v=20260712-brandenburg-ui1"></script>
+</body>
+</html>

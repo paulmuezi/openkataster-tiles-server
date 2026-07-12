@@ -88,6 +88,29 @@ The API serves it at:
 
 Free/Pro behavior is handled by the viewer session API and configured tokens.
 
+## Developer API and embeds
+
+The public REST contract is generated from FastAPI:
+
+```text
+/docs
+/openapi.json
+```
+
+The iframe integration guide is served separately at:
+
+```text
+/docs/embed
+```
+
+Long-lived project keys are accepted only as `Authorization: Bearer <key>` for
+developer requests. A project backend exchanges the key at
+`POST /api/v1/embed/sessions` for a short-lived token tied to one configured
+origin. Never place a project key in browser JavaScript or an iframe URL.
+
+Internal admin, upload and legacy routes are deliberately excluded from the
+public OpenAPI document.
+
 ## Data Contract
 
 Each active state version is expected to provide:

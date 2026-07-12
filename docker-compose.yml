@@ -14,7 +14,6 @@ services:
       - /srv/openkataster-tiles/active:/srv/openkataster-tiles/active
       - /srv/openkataster-tiles/cache:/srv/openkataster-tiles/cache
       - /srv/openkataster-tiles/plz:/srv/openkataster-tiles/plz
-      - /srv/openkataster-tiles/geocoder:/srv/openkataster-tiles/geocoder
       - /srv/openkataster-tiles/logs:/srv/openkataster-tiles/logs
       - /srv/openkataster-tiles/live-viewer:/srv/openkataster-tiles/live-viewer:ro
     expose:

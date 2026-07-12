@@ -33,6 +33,7 @@ temp/
 # Backups and OS metadata
 *.bak
 *.bak.*
+*.bak-*
 ._*
 .DS_Store
 

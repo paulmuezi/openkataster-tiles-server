@@ -391,6 +391,15 @@
       pointer-events: none;
       user-select: none;
     }
+    body.ok-detail-zoom-disabled #layerMenu .layer-group-root > summary,
+    body.ok-detail-zoom-disabled #layerMenu .layer-check-single {
+      opacity: 0.38;
+      pointer-events: none;
+      user-select: none;
+    }
+    body.ok-detail-zoom-disabled #layerMenu input[data-layer-setting] {
+      cursor: not-allowed;
+    }
     .layer-group-nested {
       margin: 2px 0 0;
       padding: 0;
@@ -3266,7 +3275,7 @@
     </button>
     <div id="layerMenu" hidden>
       <div class="layer-menu-title">Layer</div>
-      <div class="layer-zoom-note">Detail-Layer ab Zoom 17</div>
+      <div class="layer-zoom-note">ALKIS und Luftbild sind ab Zoom 17 verfügbar.</div>
       <details class="layer-group layer-group-root" open>
         <summary><label class="layer-group-check"><input type="checkbox" data-layer-setting="alkis"><span class="legend-swatch alkis"></span><span>ALKIS</span></label></summary>
         <div class="layer-subtree">
@@ -3323,6 +3332,38 @@
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
     <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260709-mobile-export-sheet5"></script>
+    <script>
+      (function () {
+        var minimumDetailZoom = 17;
+        var listenerAttached = false;
+
+        function syncDetailLayerAvailability() {
+          var map = window.__okMap;
+          var disabled = !map || map.getZoom() < minimumDetailZoom;
+          document.body.classList.toggle("ok-detail-zoom-disabled", disabled);
+          document.querySelectorAll("#layerMenu input[data-layer-setting]").forEach(function (input) {
+            input.disabled = disabled;
+            input.setAttribute("aria-disabled", disabled ? "true" : "false");
+          });
+        }
+
+        function attachDetailLayerAvailability() {
+          var map = window.__okMap;
+          if (!map) {
+            window.setTimeout(attachDetailLayerAvailability, 50);
+            return;
+          }
+          if (!listenerAttached) {
+            map.on("zoom", syncDetailLayerAvailability);
+            map.on("zoomend", syncDetailLayerAvailability);
+            listenerAttached = true;
+          }
+          syncDetailLayerAvailability();
+        }
+
+        attachDetailLayerAvailability();
+      })();
+    </script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

@@ -1,7 +1,7 @@
 import { createApi } from './api.js?v=20260711-free-preview1';
-import { createExportController } from './export.js?v=20260711-frame-interaction1';
+import { createExportController } from './export.js?v=20260712-export-placement1';
 import { createLayerController } from './layers.js?v=20260712-brandenburg-labels1';
-import { createLayout } from './layout.js?v=20260711-export-toggle-preserve-tool1';
+import { createLayout } from './layout.js?v=20260712-export-placement1';
 import { createPlannerMap } from './map.js?v=20260712-bkg-direct1';
 import { createMeasureController } from './measure.js?v=20260711-free-columns1';
 import { createPersistence, readPersistedState } from './persistence.js';
@@ -38,7 +38,7 @@ const store = createStore({
   },
   layers: { ...defaultLayers, ...(saved?.layers || {}) },
   selection: { parcels: saved?.selection?.parcels || [], buildings: saved?.selection?.buildings || [], loading: false },
-  export: { center: saved?.export?.center || null },
+  export: { center: saved?.export?.center || null, placing: false },
   notice: null
 });
 const api = createApi({ token: params.get('token') || '', fresh: params.get('fresh') || '' });
@@ -47,7 +47,7 @@ const elements = Object.fromEntries([
   'exportSidebar','selectionDock','exportTool','selectTool','measureTool','selectionResize','selectionClose','selectionContent','selectionCount',
   'layerButton','layerMenu','layerZoomNote','searchButton','searchPanel','searchClose','searchMode','addressFields','parcelFields','placeInput','streetInput','houseInput','gemarkungInput','flurInput','parcelInput','placeSuggestions','streetSuggestions','gemarkungSuggestions','searchSubmit','searchResults','searchStatus',
   'measurePanel','measureValues','measureLocked','measureDistance','measureAngle','measureCumulative','measureArea','sourceButton','sourcePanel','sourceList',
-  'exportFrame','exportPageBox','exportFrameBox','exportCenterMarker','exportOutput','exportPaper','exportOrientationField','exportOrientation','exportScale','exportLayout','exportHighlight','exportDxf','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings','mobileExportBackdrop',
+  'exportFrame','exportPageBox','exportFrameBox','exportCenterMarker','exportOutput','exportPaper','exportOrientationField','exportOrientation','exportScale','exportLayout','exportHighlight','exportDxf','exportSummary','exportStatus','exportPreview','exportClose','exportPlacement','mobileExportSettings','mobileExportBackdrop',
   'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge','exportProBadge'
 ].map((id) => [id, document.getElementById(id)]));
 elements.layerInputs = [...document.querySelectorAll('[data-layer]')];
@@ -80,6 +80,7 @@ elements.exportTool.addEventListener('click', () => {
 });
 elements.exportClose.addEventListener('click', layout.closeExportPanel);
 elements.mobileExportSettings.addEventListener('click', layout.toggleMobileExportSettings);
+elements.exportPlacement.addEventListener('click', layout.toggleExportPlacement);
 elements.mobileExportBackdrop.addEventListener('click', layout.closeMobileExportSettings);
 elements.selectionClose.addEventListener('click', selection.clear);
 elements.selectionResize.addEventListener('pointerdown', layout.beginTableResize);
@@ -90,7 +91,7 @@ store.subscribe((state, reason) => {
   elements.measureTool.setAttribute('aria-pressed', state.activeTool === 'measure' ? 'true' : 'false');
   elements.exportTool.setAttribute('aria-pressed', state.layout.sidebarOpen ? 'true' : 'false');
   document.body.dataset.access = state.access.pro ? 'pro' : 'free';
-  const mapCursor = state.activeTool === 'measure' || state.activeTool === 'select' ? 'crosshair' : '';
+  const mapCursor = state.export.placing || state.activeTool === 'measure' || state.activeTool === 'select' ? 'crosshair' : '';
   if (map.getCanvas().style.cursor !== mapCursor) map.getCanvas().style.cursor = mapCursor;
   if (reason === 'notice') {
     elements.noticePanel.hidden = !state.notice;

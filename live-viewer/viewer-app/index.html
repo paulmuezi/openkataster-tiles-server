@@ -6,7 +6,7 @@
   <title>OpenKataster Karte</title>
   <link rel="icon" href="/viewer-assets/viewer-app/openkataster-logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/viewer-assets/viewer-app/maplibre-gl-5.14.0.css">
-  <link rel="stylesheet" href="/viewer-assets/viewer-app/styles.css?v=20260711-search-tool-click1">
+  <link rel="stylesheet" href="/viewer-assets/viewer-app/styles.css?v=20260712-export-placement1">
   <script>document.documentElement.dataset.embed = new URLSearchParams(location.search).has('iframe') ? 'true' : 'false';</script>
 </head>
 <body>
@@ -127,6 +127,7 @@
     <aside id="exportSidebar" class="export-sidebar" aria-label="Export" aria-hidden="true">
       <header class="panel-head"><strong>Karte exportieren</strong><button id="exportClose" class="icon-button" type="button" aria-label="Export schließen">×</button></header>
       <div class="sidebar-scroll">
+        <button id="exportPlacement" class="secondary-action export-placement" type="button" aria-pressed="false">Ausschnitt setzen</button>
         <div class="field"><label for="exportOutput">Ausgabe</label><select id="exportOutput"><option value="pdf">PDF</option><option value="png">PNG</option></select></div>
         <div class="field"><label for="exportPaper">Format</label><select id="exportPaper"><option value="a4">DIN A4</option><option value="a3">DIN A3</option><option value="square">Quadratisch</option><option value="ratio43">4:3</option></select></div>
         <div id="exportOrientationField" class="field"><label for="exportOrientation">Ausrichtung</label><select id="exportOrientation"><option value="portrait">Hochformat</option><option value="landscape">Querformat</option></select></div>
@@ -150,6 +151,6 @@
   </main>
 
   <script src="/viewer-assets/viewer-app/maplibre-gl-5.14.0.js"></script>
-  <script type="module" src="/viewer-assets/viewer-app/app.js?v=20260712-bkg-direct1"></script>
+  <script type="module" src="/viewer-assets/viewer-app/app.js?v=20260712-export-placement1"></script>
 </body>
 </html>

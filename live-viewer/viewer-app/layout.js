@@ -1,5 +1,5 @@
 export function createLayout({ app, map, store, elements }) {
-  const { exportSidebar, selectionDock, exportTool, selectTool, measureTool, mobileExportSettings } = elements;
+  const { exportSidebar, selectionDock, exportTool, selectTool, measureTool, exportPlacement, mobileExportSettings } = elements;
   let resizing = false;
   let layoutTransitionTimer = 0;
 
@@ -24,12 +24,15 @@ export function createLayout({ app, map, store, elements }) {
     app.dataset.tableOpen = layout.tableOpen ? 'true' : 'false';
     app.dataset.mobileExportSettings = layout.mobileExportSettings ? 'true' : 'false';
     app.dataset.activeTool = activeTool;
+    app.dataset.exportPlacement = state.export.placing ? 'true' : 'false';
     app.style.setProperty('--table-height-open', `${layout.tableHeight}px`);
     exportSidebar.setAttribute('aria-hidden', layout.sidebarOpen ? 'false' : 'true');
     selectionDock.setAttribute('aria-hidden', layout.tableOpen ? 'false' : 'true');
     exportTool.classList.toggle('is-active', layout.sidebarOpen);
     selectTool.classList.toggle('is-active', activeTool === 'select');
     measureTool.classList.toggle('is-active', activeTool === 'measure');
+    exportPlacement.setAttribute('aria-pressed', state.export.placing ? 'true' : 'false');
+    exportPlacement.textContent = state.export.placing ? 'Platzierung aktiv' : 'Ausschnitt setzen';
     mobileExportSettings.setAttribute('aria-pressed', layout.mobileExportSettings ? 'true' : 'false');
     if (reason !== 'boot') scheduleMapResize(reason);
   }
@@ -39,19 +42,25 @@ export function createLayout({ app, map, store, elements }) {
     const mobile = isMobile();
     let nextTool;
     let sidebarOpen = current.layout.sidebarOpen;
+    let placing = current.export.placing;
+
     if (activeTool === 'export') {
       if (!sidebarOpen) {
         sidebarOpen = true;
-        nextTool = current.activeTool === 'none' ? 'export' : current.activeTool;
+        placing = true;
       } else {
         sidebarOpen = false;
-        nextTool = current.activeTool === 'export' ? 'none' : current.activeTool;
+        placing = false;
       }
+      nextTool = current.activeTool;
     } else {
       nextTool = current.activeTool === activeTool ? 'none' : activeTool;
+      placing = false;
     }
+
     store.setState({
       activeTool: nextTool,
+      export: { ...current.export, placing },
       layout: {
         ...current.layout,
         sidebarOpen,
@@ -64,9 +73,16 @@ export function createLayout({ app, map, store, elements }) {
   function setSidebar(open) {
     const state = store.getState();
     store.setState({
-      activeTool: open ? 'export' : state.activeTool === 'export' ? 'none' : state.activeTool,
+      activeTool: state.activeTool,
+      export: { ...state.export, placing: open ? state.export.placing : false },
       layout: { ...state.layout, sidebarOpen: open, mobileExportSettings: open ? state.layout.mobileExportSettings : false }
     }, 'sidebar');
+  }
+
+  function toggleExportPlacement() {
+    const state = store.getState();
+    if (!state.layout.sidebarOpen) return;
+    store.setState({ export: { ...state.export, placing: !state.export.placing } }, 'export-placement');
   }
 
   function toggleMobileExportSettings() {
@@ -147,5 +163,5 @@ export function createLayout({ app, map, store, elements }) {
 
   store.subscribe(render);
   render(store.getState(), 'boot');
-  return { setTool, setSidebar, setTable, toggleMobileExportSettings, closeMobileExportSettings, closeExportPanel, beginTableResize };
+  return { setTool, setSidebar, setTable, toggleMobileExportSettings, closeMobileExportSettings, closeExportPanel, toggleExportPlacement, beginTableResize };
 }

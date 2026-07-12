@@ -301,7 +301,7 @@ export function createMeasureController({ map, store, elements, finish }) {
 
   map.on('load', addLayers);
   map.on('click', (event) => {
-    if (store.getState().activeTool !== 'measure') return;
+    if (store.getState().activeTool !== 'measure' || store.getState().export.placing) return;
     cursorPoint = event.point;
 
     if (!points.length) {

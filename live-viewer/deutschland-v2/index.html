@@ -4683,6 +4683,16 @@ body.ok-planer-mode.ok-planner-booting .maplibregl-ctrl-bottom-left {
   }
 }
 
+
+/* Selection close visual sync: keep table content visible while panel height collapses. */
+body.ok-planer-mode #selectionPanel[data-closing="true"] .selection-head,
+body.ok-planer-mode #selectionPanel[data-closing="true"] .selection-body,
+html body.ok-planer-mode section#selectionPanel.floating[data-closing="true"] .selection-head,
+html body.ok-planer-mode section#selectionPanel.floating[data-closing="true"] .selection-body {
+  opacity: 1 !important;
+  transition: none !important;
+}
+
   </style>
 </head>
 <body class="ok-planer-mode ok-planner-booting">
@@ -4911,7 +4921,7 @@ body.ok-planer-mode.ok-planner-booting .maplibregl-ctrl-bottom-left {
   <script>window.__okBootErrors=[];window.addEventListener("error",function(e){window.__okBootErrors.push({type:"error",message:e.message,source:e.filename,line:e.lineno,col:e.colno,error:e.error&&e.error.stack||String(e.error||"")});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+e.message;});window.addEventListener("unhandledrejection",function(e){var r=e.reason||{};var msg=r.message||String(r);window.__okBootErrors.push({type:"unhandledrejection",message:msg,stack:r.stack||""});var st=document.getElementById("status");if(st)st.textContent="Boot-Fehler: "+msg;});</script><script>window.__okClientLog=function(){};</script>
   <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js?v=20260704-maplibre5"></script>
   <script>window.__okClientLog&&window.__okClientLog("maplibre-script-loaded", {hasMaplibre:!!window.maplibregl, maplibreVersion:window.maplibregl&&window.maplibregl.version||""});</script>
-    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260710-selection-close-interval4"></script>
+    <script src="/viewer-assets/deutschland-v2/viewer.bundle.js?v=20260710-selection-slide-visible1"></script>
     <script>
       (function(){
         var params = new URLSearchParams(window.location.search);

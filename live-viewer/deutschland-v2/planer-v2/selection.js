@@ -3,13 +3,13 @@ import { addressLabel, escapeHtml, featureKey, formatArea, polygonAreaMeters } f
 const HIDDEN_DYNAMIC_FIELDS = new Set([
   'source_db', 'gml_id', 'id', 'geometry', 'bbox', 'center', 'addresses', 'address',
   'flurstueckskennzeichen',
+  'gebaeudekennzeichen',
   'zaehler', 'nenner', 'nutzungen', 'nutzung_haupt',
   'gemeinde', 'gemeindenummer', 'kreis', 'kreisnummer', 'land', 'landnummer', 'regierungsbezirk'
 ]);
 
 const FIELD_LABELS = {
   gemeindeteil: 'Gemeindeteil',
-  gebaeudekennzeichen: 'Gebäudekennzeichen',
   flurstuecksfolge: 'Flurstücksfolge'
 };
 

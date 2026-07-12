@@ -2,7 +2,6 @@ import { pointInGeometry } from './utils.js';
 
 const SOURCE_ID = 'alkis-v2';
 const DETAIL_ZOOM = 17;
-const HIDDEN_ROOF_FORM_LABELS = ['F', 'S', 'W', 'P', 'Z', 'K', 'M', 'T'];
 const BKG_SOURCES = new Set(['smarttiles_de', 'germany_geojson', 'states_geojson', 'state_labels_source', 'world_countries_geojson', 'europe_countries_geojson']);
 const AERIAL_STATES = new Set(['baden-wurttemberg', 'berlin', 'brandenburg', 'bremen', 'hamburg', 'hessen', 'mecklenburg-vorpommern', 'niedersachsen', 'nordrhein-westfalen', 'rheinland-pfalz', 'saarland', 'sachsen', 'schleswig-holstein', 'thueringen', 'thuringen']);
 
@@ -15,7 +14,7 @@ const GROUPS = {
   houseNumbers: ['alkis-house-numbers'],
   streetNames: ['alkis-street-names'],
   buildingLabels: ['alkis-building-labels'],
-  boundaryPoints: ['alkis-boundary-points'],
+  boundaryPoints: ['alkis-boundary-points', 'alkis-boundary-points-inner'],
   symbols: ['alkis-symbols']
 };
 
@@ -63,7 +62,12 @@ export function createLayerController({ map, store, elements }) {
 
   function addAlkisLayers() {
     if (map.getSource(SOURCE_ID)) return;
-    map.addSource(SOURCE_ID, { type: 'vector', url: '/api/v1/tilejson/deutschland.json?v=20260710-planer-v2' });
+    map.addSource(SOURCE_ID, {
+      type: 'vector',
+      tiles: [`${window.location.origin}/api/v1/tiles/deutschland/{z}/{x}/{y}.mvt?client=viewer`],
+      minzoom: 0,
+      maxzoom: 17
+    });
     const before = firstToolLayer();
     const add = (layer) => map.addLayer(layer, before);
     add({ id: 'alkis-surface-fills', type: 'fill', source: SOURCE_ID, 'source-layer': 'surfaces', minzoom: DETAIL_ZOOM,
@@ -93,11 +97,31 @@ export function createLayerController({ map, store, elements }) {
     add({ id: 'alkis-parcel-fractions', type: 'line', source: SOURCE_ID, 'source-layer': 'parcel_number_lines', minzoom: DETAIL_ZOOM,
       paint: { 'line-color': '#25282d', 'line-width': ['interpolate', ['linear'], ['zoom'], 17, .35, 20, .8], 'line-opacity': .86 } });
     add(labelLayer('alkis-parcel-labels', ['==', ['get', 'theme_index'], 0], 9, false));
-    add(labelLayer('alkis-house-numbers', ['all', ['==', ['get', 'theme_index'], 1], ['==', ['get', 'signaturnummer'], '4070']], 9, false));
-    add(labelLayer('alkis-building-labels', ['all', ['==', ['get', 'theme_index'], 1], ['!=', ['get', 'signaturnummer'], '4070'], ['!', ['in', ['get', 'text_content'], ['literal', HIDDEN_ROOF_FORM_LABELS]]]], 9, false));
+    add(labelLayer('alkis-house-numbers', ['all', ['==', ['get', 'theme_index'], 1], ['==', ['get', 'sub_thema'], 'Gebäude']], 9, false));
+    add(labelLayer('alkis-building-labels', ['all', ['==', ['get', 'theme_index'], 1], ['==', ['get', 'sub_thema'], 'Geschosse']], 9, false));
     add(labelLayer('alkis-street-names', ['==', ['get', 'theme_index'], 2], 10, true));
-    add({ id: 'alkis-boundary-points', type: 'fill', source: SOURCE_ID, 'source-layer': 'boundary_point_geometries', minzoom: 17.4,
-      paint: { 'fill-color': ['coalesce', ['get', 'fill_color'], '#ffffff'], 'fill-outline-color': ['coalesce', ['get', 'stroke_color'], '#111111'], 'fill-opacity': 1 } });
+    add({ id: 'alkis-boundary-points', type: 'circle', source: SOURCE_ID, 'source-layer': 'boundary_points', minzoom: DETAIL_ZOOM,
+      filter: ['in', ['get', 'signaturnummer'], ['literal', ['3020', '3021', '3022', '3023', '3024', '3025']]],
+      paint: {
+        'circle-color': '#ffffff',
+        'circle-opacity': 1,
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 17, 3, 19, 4, 20, 4.5],
+        'circle-stroke-color': ['match', ['get', 'signaturnummer'],
+          '3021', '#aaaaaa', '3023', '#aaaaaa',
+          '3024', '#ffffff', '3025', '#ffffff',
+          '#000000'],
+        'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 17, .9, 20, 1.2]
+      } });
+    add({ id: 'alkis-boundary-points-inner', type: 'circle', source: SOURCE_ID, 'source-layer': 'boundary_points', minzoom: DETAIL_ZOOM,
+      filter: ['in', ['get', 'signaturnummer'], ['literal', ['3022', '3023', '3024', '3025']]],
+      paint: {
+        'circle-color': ['match', ['get', 'signaturnummer'], '3023', '#aaaaaa', '3025', '#aaaaaa', '#000000'],
+        'circle-opacity': 1,
+        'circle-radius': ['interpolate', ['linear'], ['zoom'],
+          17, ['case', ['in', ['get', 'signaturnummer'], ['literal', ['3024', '3025']]], 1.8, 1.1],
+          19, ['case', ['in', ['get', 'signaturnummer'], ['literal', ['3024', '3025']]], 2.5, 1.5],
+          20, ['case', ['in', ['get', 'signaturnummer'], ['literal', ['3024', '3025']]], 2.9, 1.7]]
+      } });
     add({ id: 'alkis-symbols', type: 'fill', source: SOURCE_ID, 'source-layer': 'point_symbol_fills_simplified', minzoom: 17.4,
       paint: { 'fill-color': ['coalesce', ['get', 'fill_color'], '#111111'], 'fill-opacity': 1 } });
   }

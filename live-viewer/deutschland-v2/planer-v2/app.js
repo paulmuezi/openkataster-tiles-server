@@ -1,12 +1,12 @@
 import { createApi } from './api.js?v=20260711-free-preview1';
 import { createExportController } from './export.js?v=20260711-frame-interaction1';
-import { createLayerController } from './layers.js?v=20260711-layer-scroll-hint1';
+import { createLayerController } from './layers.js?v=20260712-brandenburg-labels1';
 import { createLayout } from './layout.js?v=20260711-export-toggle-preserve-tool1';
 import { createPlannerMap } from './map.js?v=20260711-germany-overview1';
 import { createMeasureController } from './measure.js?v=20260711-free-columns1';
 import { createPersistence, readPersistedState } from './persistence.js';
 import { createSearchController } from './search.js?v=20260711-search-highlight1';
-import { createSelectionController } from './selection.js?v=20260711-free-available1';
+import { createSelectionController } from './selection.js?v=20260712-hide-building-id1';
 import { createSourceController } from './sources.js?v=20260711-inline-sources1';
 import { createStore } from './store.js';
 

@@ -1,6 +1,6 @@
 import { centerFromResult, debounce, escapeHtml, resultLabel } from './utils.js?v=20260711-search-context1';
 
-export function createSearchController({ map, api, store, elements, selection }) {
+export function createSearchController({ map, api, store, layout, elements, selection }) {
   const {
     searchButton, searchPanel, searchClose, searchMode, addressFields, parcelFields,
     placeInput, streetInput, houseInput, gemarkungInput, flurInput, parcelInput,
@@ -184,8 +184,11 @@ export function createSearchController({ map, api, store, elements, selection })
     if (document.activeElement === gemarkungInput) suggestGemarkungen();
   }
 
-  searchButton.addEventListener('click', () => setOpen(searchPanel.hidden));
-  searchClose.addEventListener('click', () => setOpen(false));
+  searchButton.addEventListener('click', () => layout.setTool('search'));
+  searchClose.addEventListener('click', () => {
+    if (store.getState().activeTool === 'search') layout.setTool('search');
+    else setOpen(false);
+  });
   searchMode.addEventListener('change', () => setMode(searchMode.value));
   placeInput.addEventListener('input', () => handleAddressInput({ changedPlace: true }));
   streetInput.addEventListener('input', handleAddressInput);
@@ -207,6 +210,9 @@ export function createSearchController({ map, api, store, elements, selection })
     });
   }
   document.addEventListener('click', (event) => { if (!event.target.closest('.search-control')) clearSuggestions(); });
+  store.subscribe((state, reason) => {
+    if (reason === 'tool') setOpen(state.activeTool === 'search');
+  });
   setMode(searchMode.value);
   return { setOpen, submit };
 }

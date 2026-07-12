@@ -1,12 +1,12 @@
 import { createApi } from './api.js?v=20260711-free-preview1';
-import { createExportController } from './export.js?v=20260712-export-placement1';
+import { createExportController } from './export.js?v=20260712-exclusive-tools1';
 import { createLayerController } from './layers.js?v=20260712-brandenburg-labels1';
-import { createLayout } from './layout.js?v=20260712-export-placement1';
+import { createLayout } from './layout.js?v=20260712-exclusive-tools1';
 import { createPlannerMap } from './map.js?v=20260712-bkg-direct1';
-import { createMeasureController } from './measure.js?v=20260711-free-columns1';
+import { createMeasureController } from './measure.js?v=20260712-exclusive-tools1';
 import { createPersistence, readPersistedState } from './persistence.js';
-import { createSearchController } from './search.js?v=20260711-search-highlight1';
-import { createSelectionController } from './selection.js?v=20260712-hide-building-id1';
+import { createSearchController } from './search.js?v=20260712-exclusive-tools1';
+import { createSelectionController } from './selection.js?v=20260712-exclusive-tools1';
 import { createSourceController } from './sources.js?v=20260711-inline-sources1';
 import { createStore } from './store.js';
 
@@ -38,7 +38,7 @@ const store = createStore({
   },
   layers: { ...defaultLayers, ...(saved?.layers || {}) },
   selection: { parcels: saved?.selection?.parcels || [], buildings: saved?.selection?.buildings || [], loading: false },
-  export: { center: saved?.export?.center || null, placing: false },
+  export: { center: saved?.export?.center || null },
   notice: null
 });
 const api = createApi({ token: params.get('token') || '', fresh: params.get('fresh') || '' });
@@ -47,7 +47,7 @@ const elements = Object.fromEntries([
   'exportSidebar','selectionDock','exportTool','selectTool','measureTool','selectionResize','selectionClose','selectionContent','selectionCount',
   'layerButton','layerMenu','layerZoomNote','searchButton','searchPanel','searchClose','searchMode','addressFields','parcelFields','placeInput','streetInput','houseInput','gemarkungInput','flurInput','parcelInput','placeSuggestions','streetSuggestions','gemarkungSuggestions','searchSubmit','searchResults','searchStatus',
   'measurePanel','measureValues','measureLocked','measureDistance','measureAngle','measureCumulative','measureArea','sourceButton','sourcePanel','sourceList',
-  'exportFrame','exportPageBox','exportFrameBox','exportCenterMarker','exportOutput','exportPaper','exportOrientationField','exportOrientation','exportScale','exportLayout','exportHighlight','exportDxf','exportSummary','exportStatus','exportPreview','exportClose','exportPlacement','mobileExportSettings','mobileExportBackdrop',
+  'exportFrame','exportPageBox','exportFrameBox','exportCenterMarker','exportOutput','exportPaper','exportOrientationField','exportOrientation','exportScale','exportLayout','exportHighlight','exportDxf','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings','mobileExportBackdrop',
   'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge','exportProBadge'
 ].map((id) => [id, document.getElementById(id)]));
 elements.layerInputs = [...document.querySelectorAll('[data-layer]')];
@@ -55,7 +55,7 @@ elements.layerInputs = [...document.querySelectorAll('[data-layer]')];
 const layout = createLayout({ app, map, store, elements });
 const layers = createLayerController({ map, store, elements });
 const selection = createSelectionController({ map, api, store, layout, elements });
-const search = createSearchController({ map, api, store, elements, selection });
+const search = createSearchController({ map, api, store, layout, elements, selection });
 const measure = createMeasureController({ map, store, elements, finish: () => layout.setTool('measure') });
 const exportController = createExportController({ map, api, store, elements });
 const sources = createSourceController({ map, api, store, elements, layerController: layers });
@@ -80,7 +80,6 @@ elements.exportTool.addEventListener('click', () => {
 });
 elements.exportClose.addEventListener('click', layout.closeExportPanel);
 elements.mobileExportSettings.addEventListener('click', layout.toggleMobileExportSettings);
-elements.exportPlacement.addEventListener('click', layout.toggleExportPlacement);
 elements.mobileExportBackdrop.addEventListener('click', layout.closeMobileExportSettings);
 elements.selectionClose.addEventListener('click', selection.clear);
 elements.selectionResize.addEventListener('pointerdown', layout.beginTableResize);
@@ -89,9 +88,9 @@ elements.noticeClose.addEventListener('click', () => store.setState({ notice: nu
 store.subscribe((state, reason) => {
   elements.selectTool.setAttribute('aria-pressed', state.activeTool === 'select' ? 'true' : 'false');
   elements.measureTool.setAttribute('aria-pressed', state.activeTool === 'measure' ? 'true' : 'false');
-  elements.exportTool.setAttribute('aria-pressed', state.layout.sidebarOpen ? 'true' : 'false');
+  elements.exportTool.setAttribute('aria-pressed', state.activeTool === 'export' ? 'true' : 'false');
   document.body.dataset.access = state.access.pro ? 'pro' : 'free';
-  const mapCursor = state.export.placing || state.activeTool === 'measure' || state.activeTool === 'select' ? 'crosshair' : '';
+  const mapCursor = ['export', 'measure', 'select'].includes(state.activeTool) ? 'crosshair' : '';
   if (map.getCanvas().style.cursor !== mapCursor) map.getCanvas().style.cursor = mapCursor;
   if (reason === 'notice') {
     elements.noticePanel.hidden = !state.notice;

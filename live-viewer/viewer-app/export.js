@@ -149,7 +149,7 @@ export function createExportController({ map, api, store, elements }) {
         height: `${mapHeight}px`
       });
     }
-    exportFrameBox.style.pointerEvents = state.export.placing ? 'auto' : 'none';
+    exportFrameBox.style.pointerEvents = state.activeTool === 'export' ? 'auto' : 'none';
     const formatLabel = exportPaper.value === 'ratio43' ? '4:3' : exportPaper.value === 'square' ? '1:1' : exportPaper.value.toUpperCase();
     const outputs = [exportOutput.value.toUpperCase(), exportDxf.checked && 'DXF'].filter(Boolean);
     exportSummary.textContent = `${formatLabel} · 1:${exportScale.value} · ${outputs.join(' + ')}${exportLayout.checked ? ' · Layout' : ''}`;
@@ -344,15 +344,10 @@ export function createExportController({ map, api, store, elements }) {
     }
   }
 
-  map.on('click', (event) => {
-    const state = store.getState();
-    if (!state.export.placing || drag) return;
-    setCenter(event.lngLat);
-    store.setState({ export: { ...state.export, placing: false } }, 'export-placement');
-  });
+  map.on('click', (event) => { if (store.getState().activeTool === 'export' && !drag) setCenter(event.lngLat); });
   map.on('move', render);
   map.on('zoom', render);
-  store.subscribe((state, reason) => { if (['sidebar', 'tool', 'export', 'export-placement', 'restore', 'layers', 'selection', 'selection-clear'].includes(reason)) render(state); });
+  store.subscribe((state, reason) => { if (['sidebar', 'tool', 'export', 'restore', 'layers', 'selection', 'selection-clear'].includes(reason)) render(state); });
   exportFrameBox.addEventListener('pointerdown', beginDrag);
   exportFrameBox.addEventListener('pointermove', moveDrag);
   exportFrameBox.addEventListener('pointerup', endDrag);

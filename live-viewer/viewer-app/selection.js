@@ -431,8 +431,7 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   map.on('load', addLayers);
   map.on('click', (event) => {
-    const state = store.getState();
-    if (state.activeTool === 'select' && !state.export.placing) selectAt(event.lngLat, true);
+    if (store.getState().activeTool === 'select') selectAt(event.lngLat, true);
   });
   store.subscribe((state, reason) => { if (reason.startsWith('selection') || reason === 'restore') render(state); });
   return { selectAt, flash, clear, render };

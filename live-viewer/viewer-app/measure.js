@@ -1,4 +1,5 @@
-import { formatArea, formatDistance, haversineMeters, polygonAreaMeters } from './utils.js';
+import { polygonizeMeasurement } from './measure-geometry.mjs?v=20260712-polygonized-measure3';
+import { formatArea, formatDistance, haversineMeters } from './utils.js';
 
 const SNAP_LAYERS = [
   'alkis-building-fills', 'alkis-building-lines', 'alkis-parcel-lines',
@@ -153,31 +154,6 @@ export function createMeasureController({ map, store, elements, finish }) {
     return workingPoints();
   }
 
-  function coordinateKey(coordinate) {
-    return `${Number(coordinate[0]).toFixed(9)},${Number(coordinate[1]).toFixed(9)}`;
-  }
-
-  function areaParts(coordinates) {
-    const closedRings = [];
-    let active = [];
-    let positions = new Map();
-    for (const coordinate of coordinates) {
-      const key = coordinateKey(coordinate);
-      const repeatedAt = positions.get(key);
-      if (repeatedAt !== undefined && active.length - repeatedAt >= 3) {
-        const ring = [...active.slice(repeatedAt), coordinate];
-        closedRings.push(ring);
-        active = [coordinate];
-        positions = new Map([[key, 0]]);
-        continue;
-      }
-      if (repeatedAt === undefined) positions.set(key, active.length);
-      active.push(coordinate);
-    }
-    const activeRing = active.length >= 3 ? [...active, active[0]] : null;
-    return { closedRings, activeRing };
-  }
-
   function planarDelta(start, end) {
     if (!start || !end) return { dx: 0, dy: 0, distance: 0, angle: 0 };
     const latitude = ((start[1] + end[1]) / 2) * Math.PI / 180;
@@ -223,19 +199,16 @@ export function createMeasureController({ map, store, elements, finish }) {
     measurePanel.style.top = `${Math.max(margin, Math.min(top, container.clientHeight - height - margin))}px`;
   }
 
-  function metricsFor(working, line) {
+  function metricsFor(working, line, surface) {
     const currentDistance = working.length >= 2 ? haversineMeters(working[working.length - 2], working[working.length - 1]) : 0;
     const cumulative = line.slice(1).reduce((sum, point, index) => sum + haversineMeters(line[index], point), 0);
     const angle = angleValue(working);
-    const parts = areaParts(working);
-    const area = [...parts.closedRings, ...(parts.activeRing ? [parts.activeRing] : [])]
-      .reduce((sum, ring) => sum + polygonAreaMeters(ring.slice(0, -1)), 0);
     return {
       distance: formatDistance(currentDistance),
       cumulative: formatDistance(cumulative),
       angleLabel: angle.label,
       angle: `${angle.value.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}°`,
-      area: area > 0 ? formatArea(area) : '–'
+      area: surface.area > 0 ? formatArea(surface.area) : '–'
     };
   }
 
@@ -263,18 +236,18 @@ export function createMeasureController({ map, store, elements, finish }) {
     if (!map.getSource('measure-v2')) return;
     const working = workingPoints();
     const line = lineCoordinates();
+    const surface = polygonizeMeasurement(working);
     const features = [];
     points.forEach((coordinates) => features.push({
       type: 'Feature', properties: { kind: 'point' }, geometry: { type: 'Point', coordinates }
     }));
     if (line.length >= 2) features.unshift({ type: 'Feature', properties: { kind: 'line' }, geometry: { type: 'LineString', coordinates: line } });
-    const parts = areaParts(working);
-    for (const ring of [...parts.closedRings, ...(parts.activeRing ? [parts.activeRing] : [])]) {
-      features.unshift({ type: 'Feature', properties: { kind: 'area' }, geometry: { type: 'Polygon', coordinates: [ring] } });
-    }
+    surface.geometries.forEach((geometry) => features.unshift({
+      type: 'Feature', properties: { kind: 'area' }, geometry
+    }));
     map.getSource('measure-v2').setData(featureCollection(features));
 
-    if (pro) showMetrics(metricsFor(working, line));
+    if (pro) showMetrics(metricsFor(working, line, surface));
     else showLockedMetrics();
     measurePanel.dataset.snapped = snapped ? 'true' : 'false';
     positionPanel();

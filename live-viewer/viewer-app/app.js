@@ -3,7 +3,7 @@ import { createExportController } from './export.js?v=20260712-exclusive-tools1'
 import { createLayerController } from './layers.js?v=20260712-brandenburg-labels1';
 import { createLayout } from './layout.js?v=20260712-exclusive-tools1';
 import { createPlannerMap } from './map.js?v=20260712-bkg-direct1';
-import { createMeasureController } from './measure.js?v=20260712-exclusive-tools1';
+import { createMeasureController } from './measure.js?v=20260712-polygonized-measure3';
 import { createPersistence, readPersistedState } from './persistence.js';
 import { createSearchController } from './search.js?v=20260712-field-suggestions1';
 import { createSelectionController } from './selection.js?v=20260712-exclusive-tools1';

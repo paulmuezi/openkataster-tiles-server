@@ -1,0 +1,18 @@
+{
+  "name": "openkataster-viewer-geometry-build",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "esbuild measure-geometry.entry.js --bundle --format=esm --platform=browser --target=es2020 --minify --legal-comments=none --outfile=../viewer-app/measure-geometry.mjs",
+    "test": "npm run build && node ../../tests/measure-geometry.test.mjs"
+  },
+  "dependencies": {
+    "@turf/area": "7.3.1",
+    "@turf/helpers": "7.3.1",
+    "@turf/union": "7.3.1",
+    "@turf/unkink-polygon": "7.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

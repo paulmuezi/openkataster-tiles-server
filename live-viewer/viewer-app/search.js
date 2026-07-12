@@ -59,9 +59,11 @@ export function createSearchController({ map, api, store, layout, elements, sele
   }
 
   function renderSuggestions(container, results, onPick = chooseResult) {
-    container.hidden = true;
-    container.replaceChildren();
-    renderResults(results, onPick);
+    container.innerHTML = results.map((result, index) => `<button type="button" data-index="${index}">${escapeHtml(resultLabel(result))}</button>`).join('');
+    container.hidden = !results.length;
+    for (const button of container.querySelectorAll('button[data-index]')) {
+      button.addEventListener('click', () => onPick(results[Number(button.dataset.index)]));
+    }
   }
 
   const suggestPlaces = debounce(async () => {

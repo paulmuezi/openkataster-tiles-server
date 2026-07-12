@@ -51,6 +51,7 @@ tar -C / -czf "$backup_dir/runtime-config.tar.gz" \
     "opt/openkataster-tiles/.env" \
     "opt/openkataster-api/docker-compose.yml" \
     "opt/openkataster-api/.env" \
+    "etc/openkataster-secrets/pocketbase_admin_password" \
     "srv/openkataster-tiles/active/active" \
     "srv/openkataster-tiles/data/api_keys.json" \
     "srv/openkataster-tiles/data/deutschland.style.json" \

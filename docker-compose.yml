@@ -18,23 +18,35 @@ services:
       - /srv/openkataster-tiles/live-viewer:/srv/openkataster-tiles/live-viewer:ro
     expose:
       - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   caddy:
     image: caddy:2-alpine
     container_name: openkataster-tiles-caddy
     restart: unless-stopped
     depends_on:
-      - tiles-api
+      tiles-api:
+        condition: service_healthy
     ports:
       - "80:80"
       - "443:443"
       - "8081:8081"
-      - "8082:8082"
       - "8083:8083"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   caddy_data:

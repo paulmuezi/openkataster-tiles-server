@@ -5,15 +5,18 @@ tiles.openkataster.de {
 
 
 :8081 {
-	encode gzip zstd
-	reverse_proxy tiles-api:8080
-}
-
-:8082 {
-	encode gzip zstd
-	reverse_proxy openkataster-api:8000
+	@trusted remote_ip 46.224.214.20 127.0.0.1 ::1
+	handle @trusted {
+		encode gzip zstd
+		reverse_proxy tiles-api:8080
+	}
+	respond 403
 }
 
 :8083 {
-	reverse_proxy openkataster-pocketbase:8090
+	@trusted remote_ip 46.224.214.20 127.0.0.1 ::1
+	handle @trusted {
+		reverse_proxy openkataster-pocketbase:8090
+	}
+	respond 403
 }

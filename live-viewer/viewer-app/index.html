@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>OpenKataster Planer</title>
-  <link rel="icon" href="/viewer-assets/deutschland-v2/openkataster-logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.css">
-  <link rel="stylesheet" href="/viewer-assets/deutschland-v2/planer-v2/styles.css?v=20260711-search-tool-click1">
+  <title>OpenKataster Karte</title>
+  <link rel="icon" href="/viewer-assets/viewer-app/openkataster-logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/viewer-assets/viewer-app/maplibre-gl-5.14.0.css">
+  <link rel="stylesheet" href="/viewer-assets/viewer-app/styles.css?v=20260711-search-tool-click1">
   <script>document.documentElement.dataset.embed = new URLSearchParams(location.search).has('iframe') ? 'true' : 'false';</script>
 </head>
 <body>
   <header class="site-header">
-    <a class="site-brand" href="/" aria-label="OpenKataster Startseite"><img src="/logo.svg" alt=""><span>OpenKataster</span></a>
+    <a class="site-brand" href="/" aria-label="OpenKataster Startseite"><img src="/viewer-assets/viewer-app/openkataster-logo.svg" alt=""><span>OpenKataster</span></a>
     <nav class="site-nav" aria-label="Konto">
       <a id="headerProLink" class="site-pill site-pro" href="/pro">Pro</a>
       <a id="headerAccountLink" class="site-account" href="/login" aria-label="Anmelden">
@@ -20,7 +20,7 @@
     </nav>
   </header>
   <main id="plannerApp" class="planner-app" data-ready="false" data-sidebar-open="false" data-table-open="false" data-active-tool="none" data-resizing="false" data-layout-transitioning="false">
-    <section class="map-workspace" aria-label="OpenKataster Planer">
+    <section class="map-workspace" aria-label="OpenKataster Karte">
       <div id="mapPane" class="map-pane">
         <div id="map"></div>
 
@@ -57,7 +57,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 6h19M2.5 18h19M2.5 6v12M5.5 6v2.6M9 6v4.2M12.5 6v2.6M16 6v4.2M19.5 6v2.6"/><text x="9" y="16.3" text-anchor="middle">1</text><text x="16" y="16.3" text-anchor="middle">2</text></svg><span class="pro-badge">Pro</span>
           </button>
           <button id="exportTool" class="round-tool" type="button" aria-label="Karte exportieren" aria-pressed="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11"/><path d="m7.5 9.5 4.5 4.5 4.5-4.5"/><path d="M5 19h14"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11"/><path d="m7.5 9.5 4.5 4.5 4.5-4.5"/><path d="M5 19h14"/></svg><span id="exportProBadge" class="pro-badge" hidden>Pro</span>
           </button>
         </nav>
 
@@ -112,7 +112,7 @@
           <button id="sourceButton" class="source-button" type="button" aria-label="Quellen" aria-expanded="false">i</button>
           <section id="sourcePanel" class="source-panel ui-panel" hidden><ul id="sourceList"></ul></section>
         </div>
-        <div class="brand-mark"><img src="/viewer-assets/deutschland-v2/openkataster-logo.svg" alt=""><span>OpenKataster</span></div>
+        <div class="brand-mark"><img src="/viewer-assets/viewer-app/openkataster-logo.svg" alt=""><span>OpenKataster</span></div>
       </div>
 
       <section id="selectionDock" class="selection-dock" aria-label="Auswahl" aria-hidden="true">
@@ -149,7 +149,7 @@
     <section id="noticePanel" class="notice-panel ui-panel" hidden><button id="noticeClose" class="icon-button" type="button" aria-label="Hinweis schließen">×</button><strong id="noticeTitle">OpenKataster Pro</strong><p id="noticeText"></p><a class="primary-action" href="/pro" target="_top">Pro buchen</a></section>
   </main>
 
-  <script src="/viewer-assets/deutschland-v2/maplibre-gl-5.14.0.js"></script>
-  <script type="module" src="/viewer-assets/deutschland-v2/planer-v2/app.js?v=20260712-brandenburg-ui1"></script>
+  <script src="/viewer-assets/viewer-app/maplibre-gl-5.14.0.js"></script>
+  <script type="module" src="/viewer-assets/viewer-app/app.js?v=20260712-brandenburg-ui1"></script>
 </body>
 </html>

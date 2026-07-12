@@ -66,27 +66,30 @@ Important variables:
 
 ## Viewer
 
-The current viewer is tracked under:
+There is one canonical viewer application:
 
 ```text
-live-viewer/deutschland-v2
+live-viewer/viewer-app
 ```
 
-On the server it is mounted read-only at:
+It is deployed read-only to:
 
 ```text
-/srv/openkataster-tiles/live-viewer/deutschland-v2
+/srv/openkataster-tiles/live-viewer/viewer-app
 ```
 
-The API serves it at:
+The only public runtime route is:
 
 ```text
-/viewer/deutschland
-/embed
-/embed/onoffice
+/embed/deutschland
 ```
 
-Free/Pro behavior is handled by the viewer session API and configured tokens.
+`/planer` is a website shell that embeds this route. Free, Pro and future
+partner integrations use the same application and differ only through signed,
+short-lived session scopes. Partner-specific HTML copies are not created.
+
+Compatibility routes may redirect to the canonical embed during migration,
+but they must not serve an independent viewer build.
 
 ## Developer API and embeds
 
@@ -110,6 +113,16 @@ origin. Never place a project key in browser JavaScript or an iframe URL.
 
 Internal admin, upload and legacy routes are deliberately excluded from the
 public OpenAPI document.
+
+## Deployment boundary
+
+The production responsibilities are intentionally split:
+
+- the website service renders `/planer`, account and billing pages;
+- this service owns map/search/feature APIs and `/embed/deutschland`;
+- PMTiles and SQLite data stay outside Git under `/srv/openkataster-tiles`;
+- the website reverse proxy exposes the canonical routes and contains no API
+  secrets.
 
 ## Data Contract
 

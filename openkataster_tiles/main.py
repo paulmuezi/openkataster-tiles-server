@@ -579,11 +579,19 @@ def _verify_embed_session(token: str) -> dict | None:
         return None
 
 
-def _new_viewer_session(*, pro: bool = False, subject: str = "public-viewer", name: str | None = None) -> str:
+def _new_viewer_session(
+    *,
+    pro: bool = False,
+    subject: str = "public-viewer",
+    name: str | None = None,
+    allow_export: bool = False,
+) -> str:
     now = int(time.time())
     scopes = ["map:view", "search:basic", "layers:basic", "feature:preview"]
+    if allow_export:
+        scopes.extend(["export:map", "export:cadastre"])
     if pro:
-        scopes.extend(["layers:advanced", "feature:read", "measure", "export:map", "export:cadastre"])
+        scopes.extend(["layers:advanced", "feature:read", "measure"])
     return _sign_embed_claims(
         {
             "typ": "viewer",
@@ -12973,6 +12981,7 @@ def api_v1_create_internal_viewer_session(
         pro=payload.access == "pro",
         subject=payload.subject or "public-viewer",
         name=payload.name,
+        allow_export=True,
     )
     claims = _verify_embed_session(token) or {}
     return {"token": token, "expires_at": claims.get("exp")}
@@ -13853,58 +13862,47 @@ def embed_contract_javascript() -> Response:
 def viewer(
     request: Request,
     dataset: str,
-    key: Annotated[str | None, Query()] = None,
-    token: Annotated[str | None, Query()] = None,
-    session: Annotated[str | None, Query()] = None,
 ):
     if not is_virtual_germany_dataset(dataset):
         get_dataset(dataset)
-    supplied = session or token or key
-    session_claims = _verify_embed_session(supplied) if supplied else None
-    if session and not session_claims:
-        raise HTTPException(status_code=401, detail="invalid or expired embed session")
-    if session_claims and session_claims.get("dataset") and session_claims.get("dataset") != dataset:
-        raise HTTPException(status_code=403, detail="embed session is not valid for this dataset")
-    if not supplied:
-        params = dict(request.query_params)
-        params["token"] = _new_viewer_session()
-        return RedirectResponse(url=f"/viewer/{dataset}?{urllib.parse.urlencode(params)}", status_code=307)
-    static_index = VIEWER_ROOT / f"{dataset}-v2" / "index.html"
-    if static_index.is_file():
-        html = static_index.read_text(encoding="utf-8")
-        if "/embed-contract-v1.js" not in html:
-            html = html.replace("</body>", '<script src="/embed-contract-v1.js"></script></body>')
-        headers = {"Cache-Control": "no-cache", "Referrer-Policy": "strict-origin"}
-        origin = str((session_claims or {}).get("origin") or "")
-        if origin:
-            headers["Content-Security-Policy"] = f"frame-ancestors {origin}"
-        return HTMLResponse(content=html, headers=headers)
-    key_value = viewer_key(key)
-    return HTMLResponse(viewer_html(request, dataset, key_value))
+    query = urllib.parse.urlencode(dict(request.query_params), doseq=True)
+    target = f"/embed/{dataset}" + (f"?{query}" if query else "")
+    return RedirectResponse(url=target, status_code=308)
 
 
-def _viewer_redirect(request: Request, dataset: str, extra: dict[str, str] | None = None) -> RedirectResponse:
+def _canonical_embed_redirect(
+    request: Request,
+    dataset: str,
+    updates: dict[str, str | None],
+    *,
+    status_code: int = 307,
+) -> RedirectResponse:
     params = dict(request.query_params)
-    params.setdefault("iframe", "1")
-    for key, value in (extra or {}).items():
-        params[key] = value
+    for key, value in updates.items():
+        if value is None:
+            params.pop(key, None)
+        else:
+            params[key] = value
     query = urllib.parse.urlencode(params, doseq=True)
     return RedirectResponse(
-        url=f"/viewer/{dataset}" + (f"?{query}" if query else ""),
-        status_code=307,
+        url=f"/embed/{dataset}" + (f"?{query}" if query else ""),
+        status_code=status_code,
     )
 
 
-def _embed_runtime_redirect(request: Request, dataset: str, session: str, mode: str) -> RedirectResponse:
-    params = dict(request.query_params)
-    params.pop("session", None)
-    params.pop("key", None)
-    params.pop("api_key", None)
-    params["token"] = session
-    params["iframe"] = "1"
-    params["mode"] = mode
-    query = urllib.parse.urlencode(params, doseq=True)
-    return RedirectResponse(url=f"/embed-runtime/{dataset}?{query}", status_code=307)
+def _viewer_app_response(claims: dict) -> HTMLResponse:
+    index_path = VIEWER_ROOT / "viewer-app" / "index.html"
+    if not index_path.is_file():
+        raise HTTPException(status_code=503, detail="viewer app is not deployed")
+    headers = {
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "strict-origin",
+        "X-Content-Type-Options": "nosniff",
+    }
+    origin = str(claims.get("origin") or "")
+    if origin:
+        headers["Content-Security-Policy"] = f"frame-ancestors {origin}"
+    return HTMLResponse(content=index_path.read_text(encoding="utf-8"), headers=headers)
 
 
 @app.api_route("/embed-runtime/{dataset}", methods=["GET", "HEAD"], include_in_schema=False)
@@ -13916,47 +13914,65 @@ def embed_runtime_viewer(
     claims = _verify_embed_session(token)
     if not claims or claims.get("typ") != "embed" or claims.get("dataset") != dataset:
         raise HTTPException(status_code=403, detail="valid embed session required")
-    return viewer(request, dataset, token=token)
+    return _canonical_embed_redirect(
+        request,
+        dataset,
+        {"token": token, "session": None, "iframe": "1"},
+        status_code=308,
+    )
 
 
 @app.api_route("/embed/onoffice", methods=["GET", "HEAD"])
 def embed_onoffice_viewer(
     request: Request,
-    key: Annotated[str | None, Query()] = None,
-    token: Annotated[str | None, Query()] = None,
     session: Annotated[str | None, Query()] = None,
 ):
     if session:
         claims = _verify_embed_session(session)
         if not claims or claims.get("mode") != "onoffice":
             raise HTTPException(status_code=403, detail="valid onOffice embed session required")
-        return _embed_runtime_redirect(request, VIRTUAL_GERMANY_DATASET, session, "onoffice")
-    return _viewer_redirect(request, VIRTUAL_GERMANY_DATASET, {"mode": "onoffice"})
+    return _canonical_embed_redirect(
+        request,
+        VIRTUAL_GERMANY_DATASET,
+        {"session": session, "surface": "embed"},
+        status_code=308,
+    )
 
 
 @app.api_route("/embed/{dataset}", methods=["GET", "HEAD"])
 def embed_viewer(
     request: Request,
     dataset: str,
-    key: Annotated[str | None, Query()] = None,
     token: Annotated[str | None, Query()] = None,
     session: Annotated[str | None, Query()] = None,
 ):
     if not is_virtual_germany_dataset(dataset):
         get_dataset(dataset)
-    if session:
-        claims = _verify_embed_session(session)
-        if not claims or claims.get("dataset") != dataset:
-            raise HTTPException(status_code=403, detail="valid embed session required")
-        return _embed_runtime_redirect(request, dataset, session, str(claims.get("mode") or "standard"))
-    return _viewer_redirect(
-        request,
-        dataset,
-        {
-            "mode": "embed",
-            "token": _new_viewer_session(subject="public-embed"),
-        },
-    )
+    supplied = session or token
+    claims = _verify_embed_session(supplied) if supplied else None
+    if supplied and not claims:
+        raise HTTPException(status_code=401, detail="invalid or expired viewer session")
+    if claims and claims.get("dataset") and claims.get("dataset") != dataset:
+        raise HTTPException(status_code=403, detail="viewer session is not valid for this dataset")
+    if not supplied:
+        return _canonical_embed_redirect(
+            request,
+            dataset,
+            {
+                "token": _new_viewer_session(subject="public-embed"),
+                "session": None,
+                "iframe": "1",
+                "surface": "embed",
+            },
+        )
+    if session or request.query_params.get("iframe") != "1":
+        surface = "planner" if request.query_params.get("surface") == "planner" else "embed"
+        return _canonical_embed_redirect(
+            request,
+            dataset,
+            {"token": supplied, "session": None, "iframe": "1", "surface": surface},
+        )
+    return _viewer_app_response(claims or {})
 
 
 
@@ -14269,7 +14285,7 @@ def embed_documentation() -> HTMLResponse:
   title="OpenKataster"
   style="width:100%;height:720px;border:0"
 &gt;&lt;/iframe&gt;</code></pre>
-    <p>Das kostenlose Embed enthält Karte, Layer und Suche mit OpenKataster-Branding. Es benötigt kein API-Kontingent. Vollständige Objektdaten, Messwerte, Exporte und die Übergabe geschützter Daten bleiben Pro- beziehungsweise API-Funktionen.</p>
+    <p>Das kostenlose Embed enthält Karte, Layer und Suche mit OpenKataster-Branding. Es benötigt kein API-Kontingent. Vollständige Objektdaten, Messwerte und Exporte bleiben geschützte Funktionen.</p>
 
     <h2>Geschützte Funktionen freischalten</h2>
     <p>Für Pro- und Exportfunktionen verbindet eine kurzlebige Embed-Session ein Developer-Projekt mit einer freigeschalteten Domain. Der geheime API-Key bleibt auf Ihrem Server.</p>
@@ -14289,11 +14305,6 @@ def embed_documentation() -> HTMLResponse:
   style="width:100%;height:720px;border:0"
 &gt;&lt;/iframe&gt;</code></pre>
     <p>Session-Tokens sind kurzlebig und an die im Projekt freigeschaltete Origin gebunden.</p>
-
-    <h2>QGIS</h2>
-    <p>Ein iframe ist kein nativer QGIS-Layer. Die ALKIS-Vektorkacheln können jedoch als Vektorkachel-Verbindung eingebunden werden:</p>
-    <pre><code>https://tiles.openkataster.de/api/v1/tiles/deutschland/{z}/{x}/{y}.mvt</code></pre>
-    <p>QGIS benötigt dafür einen eigenen Layerstil. Suche, Objektinformationen und Exporte sind nicht Bestandteil des Vektorkachel-Layers und werden separat über die API beziehungsweise ein Plugin angebunden.</p>
 
     <h2>Nachrichten vom Viewer</h2>
     <table>

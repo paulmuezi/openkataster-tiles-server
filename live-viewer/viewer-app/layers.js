@@ -38,7 +38,7 @@ export function createLayerController({ map, store, elements }) {
 
   async function loadStateFeatures() {
     try {
-      const response = await fetch('/viewer-assets/deutschland-v2/overlays/states.json?v=20260710-planer-v2');
+      const response = await fetch('/viewer-assets/viewer-app/overlays/states.json?v=20260710-planer-v2');
       const data = await response.json();
       stateFeatures = data.features || [];
     } catch (error) {

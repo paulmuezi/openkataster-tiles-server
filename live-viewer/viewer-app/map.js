@@ -3,7 +3,7 @@ export function createPlannerMap({ container, savedView }) {
   const view = hashView || savedView || { lng: 10.45, lat: 51.16, zoom: 4.05 };
   const map = new maplibregl.Map({
     container,
-    style: '/viewer-assets/viewer-app/bkg-style.json?v=20260710-planer-v2-1',
+    style: '/viewer-assets/viewer-app/bkg-style.json?v=20260712-bkg-direct1',
     center: [view.lng, view.lat],
     zoom: view.zoom,
     bearing: 0,

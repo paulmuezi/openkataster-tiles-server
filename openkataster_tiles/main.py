@@ -13949,7 +13949,14 @@ def embed_viewer(
         if not claims or claims.get("dataset") != dataset:
             raise HTTPException(status_code=403, detail="valid embed session required")
         return _embed_runtime_redirect(request, dataset, session, str(claims.get("mode") or "standard"))
-    return _viewer_redirect(request, dataset)
+    return _viewer_redirect(
+        request,
+        dataset,
+        {
+            "mode": "embed",
+            "token": _new_viewer_session(subject="public-embed"),
+        },
+    )
 
 
 
@@ -14253,7 +14260,19 @@ def embed_documentation() -> HTMLResponse:
   <header><span>▧</span> OpenKataster Developer</header>
   <main>
     <h1>Karte einbetten</h1>
-    <p>Eine Embed-Session verbindet ein Projekt mit einer freigeschalteten Domain. Der geheime API-Key bleibt auf Ihrem Server.</p>
+    <p>Die OpenKataster-Karte und die Suche können ohne Konto und ohne API-Key kostenlos eingebettet werden.</p>
+
+    <h2>Kostenlos einbetten</h2>
+    <pre><code>&lt;iframe
+  id="openkataster-map"
+  src="https://tiles.openkataster.de/embed/deutschland"
+  title="OpenKataster"
+  style="width:100%;height:720px;border:0"
+&gt;&lt;/iframe&gt;</code></pre>
+    <p>Das kostenlose Embed enthält Karte, Layer und Suche mit OpenKataster-Branding. Es benötigt kein API-Kontingent. Vollständige Objektdaten, Messwerte, Exporte und die Übergabe geschützter Daten bleiben Pro- beziehungsweise API-Funktionen.</p>
+
+    <h2>Geschützte Funktionen freischalten</h2>
+    <p>Für Pro- und Exportfunktionen verbindet eine kurzlebige Embed-Session ein Developer-Projekt mit einer freigeschalteten Domain. Der geheime API-Key bleibt auf Ihrem Server.</p>
 
     <h2>1. Session serverseitig erstellen</h2>
     <pre><code>curl -X POST https://tiles.openkataster.de/api/v1/embed/sessions \
@@ -14270,6 +14289,11 @@ def embed_documentation() -> HTMLResponse:
   style="width:100%;height:720px;border:0"
 &gt;&lt;/iframe&gt;</code></pre>
     <p>Session-Tokens sind kurzlebig und an die im Projekt freigeschaltete Origin gebunden.</p>
+
+    <h2>QGIS</h2>
+    <p>Ein iframe ist kein nativer QGIS-Layer. Die ALKIS-Vektorkacheln können jedoch als Vektorkachel-Verbindung eingebunden werden:</p>
+    <pre><code>https://tiles.openkataster.de/api/v1/tiles/deutschland/{z}/{x}/{y}.mvt</code></pre>
+    <p>QGIS benötigt dafür einen eigenen Layerstil. Suche, Objektinformationen und Exporte sind nicht Bestandteil des Vektorkachel-Layers und werden separat über die API beziehungsweise ein Plugin angebunden.</p>
 
     <h2>Nachrichten vom Viewer</h2>
     <table>

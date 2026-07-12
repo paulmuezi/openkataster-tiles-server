@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily OpenKataster backup
+
+[Timer]
+OnCalendar=*-*-* 02:20:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=openkataster-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=OpenKataster critical data backup and restore verification
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/openkataster-backup
+User=root
+Group=root
+Nice=10

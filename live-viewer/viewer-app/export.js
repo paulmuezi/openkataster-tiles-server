@@ -1,5 +1,53 @@
 import { addressLabel } from './utils.js';
 
+const LOCATION_PLACEHOLDERS = new Set([
+  '',
+  '-',
+  '–',
+  'kartenausschnitt',
+  'unbekannter standort'
+]);
+
+function usableLocationLabel(value) {
+  const label = String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return LOCATION_PLACEHOLDERS.has(label.toLocaleLowerCase('de-DE')) ? '' : label;
+}
+
+function parcelLocationLabel(parcel) {
+  if (!parcel || typeof parcel !== 'object') return '';
+  const gemarkung = usableLocationLabel(parcel.gemarkung || parcel.gemarkungsname || parcel.gemarkungsnummer);
+  const flur = usableLocationLabel(parcel.flur);
+  const parcelNumber = usableLocationLabel(
+    parcel.flurstueck || [parcel.zaehler, parcel.nenner].filter((value) => value !== undefined && value !== null && value !== '').join('/')
+  );
+  return [
+    gemarkung && `Gemarkung ${gemarkung}`,
+    flur && `Flur ${flur}`,
+    parcelNumber && `Flurstück ${parcelNumber}`
+  ].filter(Boolean).join(', ');
+}
+
+export function locationLabelFromFeatures(features) {
+  const buildings = Array.isArray(features?.buildings) ? features.buildings : [];
+  const parcels = Array.isArray(features?.parcels) ? features.parcels : [];
+  for (const feature of [...buildings, ...parcels]) {
+    const label = usableLocationLabel(addressLabel(feature));
+    if (label) return label;
+  }
+  for (const parcel of parcels) {
+    const label = parcelLocationLabel(parcel);
+    if (label) return label;
+  }
+  return '';
+}
+
+function coordinateLocationLabel(value) {
+  const lat = Number(value?.lat);
+  const lon = Number(value?.lng ?? value?.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return 'Kartenausschnitt';
+  return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+}
+
 export function createExportController({ map, api, store, elements }) {
   const {
     exportFrame, exportPageBox, exportFrameBox, exportCenterMarker, exportOutput, exportPaper,
@@ -303,16 +351,25 @@ export function createExportController({ map, api, store, elements }) {
       .slice(0, 120);
   }
 
-  function selectedBuildingAddress(state) {
-    const building = state.selection.buildings.find((item) => {
-      const label = addressLabel(item);
-      return label && label !== '–';
+  async function resolveExportLocation(value) {
+    try {
+      const features = await api.featureAt(value.lng, value.lat);
+      const centerLabel = locationLabelFromFeatures(features);
+      return centerLabel || coordinateLocationLabel(value);
+    } catch (error) {
+      console.warn('[export] Standort am Exportzentrum konnte nicht aufgelöst werden.', error);
+    }
+
+    const selection = store.getState().selection;
+    const selectionLabel = locationLabelFromFeatures({
+      buildings: selection.buildings,
+      parcels: selection.parcels
     });
-    return building ? addressLabel(building) : '';
+    return selectionLabel || coordinateLocationLabel(value);
   }
 
-  function exportFilenamePrefix() {
-    const address = filenameSafe(selectedBuildingAddress(store.getState())) || 'Kartenausschnitt';
+  function exportFilenamePrefix(locationLabel) {
+    const address = filenameSafe(locationLabel) || 'Kartenausschnitt';
     const format = exportPaper.value === 'ratio43' ? '4-3' : exportPaper.value.toUpperCase();
     return 'OpenKataster_' + address + '_1-' + exportScale.value + '_' + format + '_' + exportDateStamp();
   }
@@ -341,8 +398,7 @@ export function createExportController({ map, api, store, elements }) {
 
   async function exportVectorFiles(options) {
     const value = center();
-    const first = [...store.getState().selection.buildings, ...store.getState().selection.parcels][0];
-    const addressDisplay = first ? addressLabel(first) : 'Kartenausschnitt';
+    const addressDisplay = await resolveExportLocation(value);
     const renderContext = plannerRender();
     renderContext.address = addressDisplay;
     const order = await api.createOrder({
@@ -364,7 +420,7 @@ export function createExportController({ map, api, store, elements }) {
       if (status.api_status === 'failed') throw new Error(status.message || 'Export-Erstellung fehlgeschlagen.');
       const outputs = status.outputs || {};
       if ((!(options.pdf || options.png) || outputs.pdf_url) && (!options.dxf || outputs.dxf_url)) {
-        const prefix = exportFilenamePrefix();
+        const prefix = exportFilenamePrefix(addressDisplay);
         return [
           options.pdf && { href: downloadUrl(order.order_id, order.guest_token, 'pdf'), filename: `${prefix}.pdf` },
           options.png && { href: downloadUrl(order.order_id, order.guest_token, 'png'), filename: `${prefix}.png` },

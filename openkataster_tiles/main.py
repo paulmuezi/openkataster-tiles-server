@@ -411,13 +411,6 @@ LOCAL_STATE_METADATA = {
         "quellenvermerk": "Datenquelle: LGL, www.lgl-bw.de, dl-de/by-2-0",
         "lizenz": "dl-de/by-2-0",
     },
-    "sachsen-anhalt": {
-        "bundesland": "Sachsen-Anhalt",
-        "datenstand": "01.06.2026",
-        "datenjahr": 2026,
-        "quellenvermerk": "© GeoBasis-DE / LVermGeo LSA, dl-de/by-2-0",
-        "lizenz": "dl-de/by-2-0",
-    }
 }
 
 

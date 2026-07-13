@@ -349,7 +349,9 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
   }
   .selection-head > div { display: grid; gap: 1px; }
   th, td { padding: 7px 10px; }
-  .selection-resize { cursor: default; }
+  .selection-dock { grid-template-rows: 28px 43px minmax(0,1fr); }
+  .selection-resize { height: 28px; cursor: ns-resize; }
+  .selection-resize span { top: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

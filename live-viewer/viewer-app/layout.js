@@ -104,7 +104,6 @@ export function createLayout({ app, map, store, elements }) {
   }
 
   function beginTableResize(event) {
-    if (window.matchMedia('(max-width: 760px)').matches) return;
     event.preventDefault();
     resizing = true;
     app.dataset.resizing = 'true';

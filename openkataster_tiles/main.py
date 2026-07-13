@@ -368,6 +368,7 @@ ACTIVE_VOLUME_ROOT = Path(os.environ.get("OPENKATASTER_TILE_ACTIVE_VOLUME_ROOT",
 VOLUME_UPLOAD_PART_BYTES = int(os.environ.get("OPENKATASTER_TILE_VOLUME_UPLOAD_PART_BYTES", str(64 * 1024 * 1024)))
 VOLUME_UPLOAD_MAX_PART_BYTES = int(os.environ.get("OPENKATASTER_TILE_VOLUME_UPLOAD_MAX_PART_BYTES", str(128 * 1024 * 1024)))
 VOLUME_REQUIRED_FILES = {"alkis.pmtiles", "features.sqlite", "search.sqlite"}
+VOLUME_UPLOAD_SESSION_MANIFEST = ".upload-session.json"
 VERSION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
 
 NATIONAL_STYLE_PATH = Path(
@@ -12357,29 +12358,136 @@ def _volume_upload_dir(state_slug: str, version_name: str) -> Path:
     return _volume_incoming_root() / state_slug / _safe_version_name(version_name)
 
 
-def _validate_volume_filenames(files: list[dict]) -> list[dict]:
-    names = [os.path.basename(str(item.get("filename") or "")) for item in files]
+def _validate_volume_filenames(files: list[dict], *, allow_subset: bool = False) -> list[dict]:
+    if not isinstance(files, list):
+        raise HTTPException(status_code=400, detail="files must be a list")
+    if not files:
+        raise HTTPException(status_code=400, detail="at least one tile file is required")
+    names = []
+    for item in files:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="invalid tile file declaration")
+        raw_filename = str(item.get("filename") or "")
+        filename = os.path.basename(raw_filename)
+        if not filename or filename != raw_filename:
+            raise HTTPException(status_code=400, detail=f"invalid tile filename: {raw_filename}")
+        names.append(filename)
     incoming = set(names)
     missing = sorted(VOLUME_REQUIRED_FILES - incoming)
     unexpected = sorted(incoming - VOLUME_REQUIRED_FILES)
     duplicates = sorted({name for name in names if names.count(name) > 1})
-    if missing or unexpected or duplicates:
+    if unexpected or duplicates or (missing and not allow_subset):
+        contract = "One or more of these standard tile state files are allowed" if allow_subset else "Exactly these 3 standard tile state files are required"
         raise HTTPException(
             status_code=400,
             detail=(
-                "Exactly these 3 standard tile state files are required: "
+                f"{contract}: "
                 f"{', '.join(sorted(VOLUME_REQUIRED_FILES))}. "
                 f"missing: {', '.join(missing)} unexpected: {', '.join(unexpected)} duplicates: {', '.join(duplicates)}"
             ),
         )
     result = []
     for item in files:
-        filename = os.path.basename(str(item.get("filename") or ""))
-        size_bytes = int(item.get("size_bytes") or 0)
+        filename = str(item["filename"])
+        try:
+            size_bytes = int(item.get("size_bytes") or 0)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"invalid file size for {filename}") from exc
         if size_bytes <= 0:
             raise HTTPException(status_code=400, detail=f"empty upload file: {filename}")
         result.append({"filename": filename, "size_bytes": size_bytes})
     return sorted(result, key=lambda item: item["filename"])
+
+
+def _volume_upload_session_manifest_path(upload_dir: Path) -> Path:
+    return upload_dir / VOLUME_UPLOAD_SESSION_MANIFEST
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _read_volume_upload_session_manifest(
+    upload_dir: Path,
+    *,
+    state_slug: str | None = None,
+    version_name: str | None = None,
+) -> dict:
+    manifest_path = _volume_upload_session_manifest_path(upload_dir)
+    if not manifest_path.is_file():
+        raise HTTPException(status_code=409, detail="upload session manifest not found; create the upload session first")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="invalid upload session manifest") from exc
+    if not isinstance(manifest, dict) or manifest.get("format") != "openkataster-tile-upload-session-v2":
+        raise HTTPException(status_code=409, detail="invalid upload session manifest")
+    if state_slug is not None and manifest.get("state_slug") != state_slug:
+        raise HTTPException(status_code=409, detail="upload session state does not match request")
+    if version_name is not None and manifest.get("version_name") != version_name:
+        raise HTTPException(status_code=409, detail="upload session version does not match request")
+    base_version = manifest.get("base_version")
+    if base_version is not None:
+        base_version = _safe_version_name(str(base_version))
+    files = _validate_volume_filenames(list(manifest.get("files") or []), allow_subset=base_version is not None)
+    mode = "partial" if base_version is not None else "full"
+    if manifest.get("mode") != mode:
+        raise HTTPException(status_code=409, detail="invalid upload session mode")
+    return {
+        **manifest,
+        "base_version": base_version,
+        "mode": mode,
+        "files": files,
+    }
+
+
+def _write_volume_upload_session_manifest(
+    upload_dir: Path,
+    *,
+    state_slug: str,
+    version_name: str,
+    bundesland: str,
+    base_version: str | None,
+    files: list[dict],
+) -> dict:
+    manifest = {
+        "format": "openkataster-tile-upload-session-v2",
+        "state_slug": state_slug,
+        "bundesland": bundesland,
+        "version_name": version_name,
+        "mode": "partial" if base_version is not None else "full",
+        "base_version": base_version,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "files": files,
+    }
+    _write_json_atomic(_volume_upload_session_manifest_path(upload_dir), manifest)
+    return manifest
+
+
+def _volume_destination_must_be_available(state_slug: str, version_name: str) -> Path:
+    version_dir = _volume_version_dir(state_slug, version_name)
+    if os.path.lexists(version_dir):
+        raise HTTPException(status_code=409, detail=f"tile version already exists: {version_name}")
+    return version_dir
+
+
+def _validated_volume_base_dir(state_slug: str, base_version: str) -> Path:
+    base_dir = _volume_version_dir(state_slug, base_version)
+    if not base_dir.is_dir():
+        raise HTTPException(status_code=400, detail=f"base tile version not found: {base_version}; use a full upload")
+    try:
+        _validate_volume_state_dir(base_dir)
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"base tile version is incomplete or invalid: {base_version}; use a full upload ({exc.detail})",
+        ) from exc
+    return base_dir
 
 
 def _volume_upload_file_status(upload_dir: Path, item: dict) -> dict:
@@ -12389,6 +12497,13 @@ def _volume_upload_file_status(upload_dir: Path, item: dict) -> dict:
     final_path = upload_dir / filename
     partial_bytes = partial_path.stat().st_size if partial_path.is_file() else 0
     final_bytes = final_path.stat().st_size if final_path.is_file() else 0
+    if partial_bytes and final_bytes:
+        raise HTTPException(status_code=409, detail=f"upload session contains both partial and completed data for {filename}")
+    if final_bytes and final_bytes != size_bytes:
+        raise HTTPException(
+            status_code=409,
+            detail=f"completed upload size mismatch for {filename}: expected {size_bytes}, got {final_bytes}",
+        )
     uploaded_bytes = final_bytes if final_bytes else partial_bytes
     if uploaded_bytes > size_bytes:
         raise HTTPException(
@@ -12415,6 +12530,16 @@ def _volume_upload_sessions(state_slug: str) -> list[dict]:
     for upload_dir in sorted(state_dir.iterdir(), key=lambda path: path.stat().st_mtime, reverse=True):
         if not upload_dir.is_dir():
             continue
+        manifest = None
+        manifest_error = None
+        try:
+            manifest = _read_volume_upload_session_manifest(upload_dir, state_slug=state_slug, version_name=upload_dir.name)
+        except HTTPException as exc:
+            manifest_error = str(exc.detail)
+        expected_sizes = {
+            item["filename"]: int(item["size_bytes"])
+            for item in (manifest or {}).get("files", [])
+        }
         files = []
         uploaded_total = 0
         for filename in sorted(VOLUME_REQUIRED_FILES):
@@ -12426,19 +12551,30 @@ def _volume_upload_sessions(state_slug: str) -> list[dict]:
             uploaded_total += uploaded_bytes
             files.append({
                 "filename": filename,
+                "selected": filename in expected_sizes,
+                "size_bytes": expected_sizes.get(filename),
                 "uploaded_bytes": uploaded_bytes,
                 "partial_bytes": partial_bytes,
                 "final_bytes": final_bytes,
-                "complete": final_bytes > 0 and partial_bytes == 0,
+                "complete": (
+                    filename in expected_sizes
+                    and final_bytes == expected_sizes[filename]
+                    and partial_bytes == 0
+                ),
             })
-        if uploaded_total <= 0:
+        if uploaded_total <= 0 and manifest is None:
             continue
-        stat = upload_dir.stat()
+        mtimes = [upload_dir.stat().st_mtime]
+        mtimes.extend(path.stat().st_mtime for path in upload_dir.iterdir() if path.is_file())
         sessions.append({
             "version_name": upload_dir.name,
+            "mode": (manifest or {}).get("mode", "legacy"),
+            "base_version": (manifest or {}).get("base_version"),
+            "expected_sizes": expected_sizes,
             "uploaded_bytes": uploaded_total,
-            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime)),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(max(mtimes))),
             "files": files,
+            **({"manifest_error": manifest_error} if manifest_error else {}),
         })
     return sessions
 
@@ -12459,18 +12595,61 @@ def _validate_volume_state_dir(path: Path) -> dict:
     return {"files": len(VOLUME_REQUIRED_FILES), "bytes_total": total}
 
 
-def _write_volume_upload_manifest(path: Path, *, state_slug: str, bundesland: str, version_name: str, files: list[dict]) -> None:
+def _inherit_volume_file(source: Path, destination: Path) -> str:
+    if not source.is_file():
+        raise HTTPException(status_code=400, detail=f"missing base file: {source.name}; use a full upload")
+    destination.unlink(missing_ok=True)
+    try:
+        os.link(source, destination)
+        return "hardlink"
+    except OSError:
+        try:
+            shutil.copy2(source, destination)
+            return "copy"
+        except OSError as exc:
+            destination.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"could not inherit base file {source.name}: {exc}") from exc
+
+
+def _write_volume_upload_manifest(
+    path: Path,
+    *,
+    state_slug: str,
+    bundesland: str,
+    version_name: str,
+    uploaded_files: list[dict],
+    base_version: str | None,
+    inherited_storage: dict[str, str],
+) -> None:
+    uploaded_names = {item["filename"] for item in uploaded_files}
+    file_details = []
+    for filename in sorted(VOLUME_REQUIRED_FILES):
+        file_path = path / filename
+        inherited = filename not in uploaded_names
+        file_details.append({
+            "filename": filename,
+            "size_bytes": file_path.stat().st_size,
+            "source": "inherited" if inherited else "uploaded",
+            "source_version": base_version if inherited else None,
+            "storage": inherited_storage.get(filename, "upload"),
+        })
     manifest = {
         "format": "openkataster-tile-state-folder",
         "bundesland": bundesland,
         "state_slug": state_slug,
         "version_name": version_name,
         "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "files": len(files),
-        "bytes_total": sum(int(item["size_bytes"]) for item in files),
+        "mode": "partial" if base_version is not None else "full",
+        "base_version": base_version,
+        "files": len(file_details),
+        "bytes_total": sum(int(item["size_bytes"]) for item in file_details),
+        "file_details": file_details,
+        "uploaded_files": sorted(uploaded_names),
+        "inherited_files": sorted(VOLUME_REQUIRED_FILES - uploaded_names),
         "upload_contract": "standard-maplibre-pmtiles-features-search-v1",
+        "provenance_contract": "openkataster-tile-version-provenance-v1",
     }
-    (path / "state_upload_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_json_atomic(path / "state_upload_manifest.json", manifest)
 
 
 def _active_volume_state_dir(state_slug: str) -> Path:
@@ -13976,21 +14155,63 @@ async def create_volume_upload_session(
     request: Request,
     version: Annotated[str, Query(min_length=1)],
     bundesland: Annotated[str | None, Query()] = None,
+    base_version: Annotated[str | None, Query()] = None,
 ) -> dict:
     if not DATASET_RE.match(state_slug):
         raise HTTPException(status_code=400, detail="invalid state slug")
     version_name = _safe_version_name(version)
     payload = await request.json()
-    files = _validate_volume_filenames(list(payload.get("files") or []))
+    payload_base_version = payload.get("base_version")
+    if payload_base_version is not None:
+        payload_base_version = _safe_version_name(str(payload_base_version))
+    if base_version is not None:
+        base_version = _safe_version_name(base_version)
+    if base_version is not None and payload_base_version is not None and base_version != payload_base_version:
+        raise HTTPException(status_code=400, detail="base_version differs between query and upload payload")
+    selected_base_version = base_version or payload_base_version
+    if selected_base_version == version_name:
+        raise HTTPException(status_code=400, detail="base_version and target version must differ")
+    files = _validate_volume_filenames(
+        list(payload.get("files") or []),
+        allow_subset=selected_base_version is not None,
+    )
+    _volume_destination_must_be_available(state_slug, version_name)
+    if selected_base_version is not None:
+        _validated_volume_base_dir(state_slug, selected_base_version)
+
     upload_dir = _volume_upload_dir(state_slug, version_name)
+    display_name = bundesland or state_slug.replace("-", " ").title()
+    existing_manifest = None
+    if upload_dir.is_dir() and _volume_upload_session_manifest_path(upload_dir).is_file():
+        existing_manifest = _read_volume_upload_session_manifest(
+            upload_dir,
+            state_slug=state_slug,
+            version_name=version_name,
+        )
+        if existing_manifest["base_version"] != selected_base_version or existing_manifest["files"] != files:
+            raise HTTPException(status_code=409, detail="upload session already exists with a different file selection or size")
+    elif upload_dir.is_dir() and selected_base_version is not None and any(upload_dir.iterdir()):
+        raise HTTPException(status_code=409, detail="legacy upload session cannot be reused for a partial upload; delete it first")
+
     upload_dir.mkdir(parents=True, exist_ok=True)
+    if existing_manifest is None:
+        existing_manifest = _write_volume_upload_session_manifest(
+            upload_dir,
+            state_slug=state_slug,
+            version_name=version_name,
+            bundesland=display_name,
+            base_version=selected_base_version,
+            files=files,
+        )
     session_files = [_volume_upload_file_status(upload_dir, item) for item in files]
     return {
         "status": "success",
         "target": "tile-volume",
         "state_slug": state_slug,
-        "bundesland": bundesland or state_slug.replace("-", " ").title(),
+        "bundesland": existing_manifest.get("bundesland") or display_name,
         "version_name": version_name,
+        "mode": existing_manifest["mode"],
+        "base_version": existing_manifest["base_version"],
         "part_size": VOLUME_UPLOAD_PART_BYTES,
         "resume": any(int(item.get("uploaded_bytes") or 0) > 0 for item in session_files),
         "files": session_files,
@@ -14010,6 +14231,75 @@ def list_volume_upload_sessions(
     }
 
 
+@app.get("/admin/volume-version-files/{state_slug}")
+def list_volume_version_files(
+    state_slug: str,
+    _: Annotated[str, Depends(require_openkataster_admin_token)],
+    version: Annotated[str, Query(min_length=1)],
+) -> dict:
+    if not DATASET_RE.match(state_slug):
+        raise HTTPException(status_code=400, detail="invalid state slug")
+    version_name = _safe_version_name(version)
+    version_dir = _volume_version_dir(state_slug, version_name)
+    if not version_dir.is_dir():
+        raise HTTPException(status_code=404, detail="tile version not found")
+    files = []
+    for filename in sorted(VOLUME_REQUIRED_FILES):
+        file_path = version_dir / filename
+        present = file_path.is_file()
+        stat = file_path.stat() if present else None
+        files.append({
+            "filename": filename,
+            "present": present,
+            "size_bytes": stat.st_size if stat else None,
+            "modified_at": (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime))
+                if stat
+                else None
+            ),
+        })
+    try:
+        _validate_volume_state_dir(version_dir)
+        complete = True
+    except HTTPException:
+        complete = False
+    return {
+        "status": "success",
+        "target": "tile-volume",
+        "state_slug": state_slug,
+        "version_name": version_name,
+        "complete": complete,
+        "files": files,
+    }
+
+
+@app.delete("/admin/volume-upload-session/{state_slug}")
+def delete_volume_upload_session(
+    state_slug: str,
+    _: Annotated[str, Depends(require_openkataster_admin_token)],
+    version: Annotated[str, Query(min_length=1)],
+) -> dict:
+    if not DATASET_RE.match(state_slug):
+        raise HTTPException(status_code=400, detail="invalid state slug")
+    version_name = _safe_version_name(version)
+    upload_dir = _volume_upload_dir(state_slug, version_name)
+    if not upload_dir.is_dir():
+        raise HTTPException(status_code=404, detail="upload session not found")
+    shutil.rmtree(upload_dir)
+    state_dir = upload_dir.parent
+    try:
+        state_dir.rmdir()
+    except OSError:
+        pass
+    return {
+        "status": "success",
+        "target": "tile-volume",
+        "state_slug": state_slug,
+        "version_name": version_name,
+        "deleted": True,
+    }
+
+
 @app.put("/admin/volume-upload-part/{state_slug}")
 async def upload_volume_part(
     request: Request,
@@ -14025,7 +14315,7 @@ async def upload_volume_part(
         raise HTTPException(status_code=400, detail="invalid state slug")
     version_name = _safe_version_name(version)
     safe_filename = os.path.basename(filename)
-    if safe_filename not in VOLUME_REQUIRED_FILES:
+    if safe_filename != filename or safe_filename not in VOLUME_REQUIRED_FILES:
         raise HTTPException(status_code=400, detail=f"unexpected tile file: {filename}")
     if end <= start or end > total_size:
         raise HTTPException(status_code=400, detail="invalid upload byte range")
@@ -14033,9 +14323,30 @@ async def upload_volume_part(
     if expected_chunk_size > VOLUME_UPLOAD_MAX_PART_BYTES:
         raise HTTPException(status_code=413, detail="volume upload part too large")
 
+    _volume_destination_must_be_available(state_slug, version_name)
     upload_dir = _volume_upload_dir(state_slug, version_name)
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    if not upload_dir.is_dir():
+        raise HTTPException(status_code=409, detail="upload session not found; create the upload session first")
+    manifest = _read_volume_upload_session_manifest(
+        upload_dir,
+        state_slug=state_slug,
+        version_name=version_name,
+    )
+    expected_sizes = {item["filename"]: int(item["size_bytes"]) for item in manifest["files"]}
+    if safe_filename not in expected_sizes:
+        raise HTTPException(status_code=409, detail=f"file is not part of this upload session: {safe_filename}")
+    if total_size != expected_sizes[safe_filename]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"upload size does not match session for {safe_filename}: expected {expected_sizes[safe_filename]}, got {total_size}",
+        )
     target_path = upload_dir / f"{safe_filename}.partial"
+    final_path = upload_dir / safe_filename
+    if final_path.is_file():
+        final_size = final_path.stat().st_size
+        if final_size != total_size:
+            raise HTTPException(status_code=409, detail=f"completed upload size mismatch for {safe_filename}")
+        return {"status": "success", "already_uploaded": True, "uploaded_bytes": final_size, "size_bytes": 0}
     current_size = target_path.stat().st_size if target_path.exists() else 0
     if current_size >= end:
         return {"status": "success", "already_uploaded": True, "uploaded_bytes": current_size, "size_bytes": 0}
@@ -14085,15 +14396,41 @@ async def complete_volume_upload(
     request: Request,
     version: Annotated[str, Query(min_length=1)],
     bundesland: Annotated[str | None, Query()] = None,
+    base_version: Annotated[str | None, Query()] = None,
 ) -> dict:
     if not DATASET_RE.match(state_slug):
         raise HTTPException(status_code=400, detail="invalid state slug")
     version_name = _safe_version_name(version)
     payload = await request.json()
-    files = _validate_volume_filenames(list(payload.get("files") or []))
+    payload_base_version = payload.get("base_version")
+    if payload_base_version is not None:
+        payload_base_version = _safe_version_name(str(payload_base_version))
+    if base_version is not None:
+        base_version = _safe_version_name(base_version)
+    if base_version is not None and payload_base_version is not None and base_version != payload_base_version:
+        raise HTTPException(status_code=400, detail="base_version differs between query and upload payload")
+    selected_base_version = base_version or payload_base_version
+    if selected_base_version == version_name:
+        raise HTTPException(status_code=400, detail="base_version and target version must differ")
+    files = _validate_volume_filenames(
+        list(payload.get("files") or []),
+        allow_subset=selected_base_version is not None,
+    )
+    version_dir = _volume_destination_must_be_available(state_slug, version_name)
     upload_dir = _volume_upload_dir(state_slug, version_name)
     if not upload_dir.is_dir():
         raise HTTPException(status_code=400, detail="upload session not found")
+    manifest = _read_volume_upload_session_manifest(
+        upload_dir,
+        state_slug=state_slug,
+        version_name=version_name,
+    )
+    if manifest["base_version"] != selected_base_version or manifest["files"] != files:
+        raise HTTPException(status_code=409, detail="completion payload does not match upload session")
+
+    base_dir = None
+    if selected_base_version is not None:
+        base_dir = _validated_volume_base_dir(state_slug, selected_base_version)
 
     for item in files:
         filename = item["filename"]
@@ -14109,17 +14446,42 @@ async def complete_volume_upload(
         if final_path.stat().st_size != int(item["size_bytes"]):
             raise HTTPException(status_code=400, detail=f"size mismatch for {filename}: expected {item['size_bytes']}, got {final_path.stat().st_size}")
 
-    validation = _validate_volume_state_dir(upload_dir)
-    display_name = bundesland or state_slug.replace("-", " ").title()
-    _write_volume_upload_manifest(upload_dir, state_slug=state_slug, bundesland=display_name, version_name=version_name, files=files)
+    uploaded_names = {item["filename"] for item in files}
+    inherited_storage = {}
+    for filename in sorted(VOLUME_REQUIRED_FILES - uploaded_names):
+        if base_dir is None:
+            raise HTTPException(status_code=400, detail=f"missing uploaded file: {filename}")
+        (upload_dir / f"{filename}.partial").unlink(missing_ok=True)
+        inherited_storage[filename] = _inherit_volume_file(base_dir / filename, upload_dir / filename)
 
-    version_dir = _volume_version_dir(state_slug, version_name)
+    validation = _validate_volume_state_dir(upload_dir)
+    display_name = bundesland or manifest.get("bundesland") or state_slug.replace("-", " ").title()
+    _write_volume_upload_manifest(
+        upload_dir,
+        state_slug=state_slug,
+        bundesland=display_name,
+        version_name=version_name,
+        uploaded_files=files,
+        base_version=selected_base_version,
+        inherited_storage=inherited_storage,
+    )
+
     version_dir.parent.mkdir(parents=True, exist_ok=True)
     tmp_version_dir = version_dir.with_name(f".{version_dir.name}.{os.getpid()}.tmp")
     shutil.rmtree(tmp_version_dir, ignore_errors=True)
     os.replace(upload_dir, tmp_version_dir)
-    shutil.rmtree(version_dir, ignore_errors=True)
-    os.replace(tmp_version_dir, version_dir)
+    if os.path.lexists(version_dir):
+        os.replace(tmp_version_dir, upload_dir)
+        raise HTTPException(status_code=409, detail=f"tile version already exists: {version_name}")
+    try:
+        os.rename(tmp_version_dir, version_dir)
+    except OSError as exc:
+        if not upload_dir.exists() and tmp_version_dir.exists():
+            os.replace(tmp_version_dir, upload_dir)
+        if os.path.lexists(version_dir):
+            raise HTTPException(status_code=409, detail=f"tile version already exists: {version_name}") from exc
+        raise HTTPException(status_code=500, detail=f"could not publish tile version: {exc}") from exc
+    _volume_upload_session_manifest_path(version_dir).unlink(missing_ok=True)
     _clear_data_caches()
     return {
         "status": "success",
@@ -14127,6 +14489,10 @@ async def complete_volume_upload(
         "state_slug": state_slug,
         "bundesland": display_name,
         "version_name": version_name,
+        "mode": manifest["mode"],
+        "base_version": selected_base_version,
+        "uploaded_files": sorted(uploaded_names),
+        "inherited_files": sorted(VOLUME_REQUIRED_FILES - uploaded_names),
         "active": False,
         "validation": validation,
         "remote_version_path": str(version_dir),

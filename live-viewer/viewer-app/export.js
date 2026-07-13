@@ -4,7 +4,7 @@ export function createExportController({ map, api, store, elements }) {
   const {
     exportFrame, exportPageBox, exportFrameBox, exportCenterMarker, exportOutput, exportPaper,
     exportOrientationField, exportOrientation, exportScale, exportLayout, exportHighlight,
-    exportDxf, exportSummary, exportStatus, exportPreview
+    exportSummary, exportStatus, exportPreview
   } = elements;
   let drag = null;
   let pinch = null;
@@ -107,8 +107,10 @@ export function createExportController({ map, api, store, elements }) {
     }
     if (pdf && !isDocumentFormat()) exportPaper.value = 'a4';
     exportOrientationField.hidden = !isDocumentFormat();
-    exportLayout.disabled = !isDocumentFormat();
-    if (!isDocumentFormat()) exportLayout.checked = false;
+    const layoutAvailable = pdf && isDocumentFormat();
+    exportLayout.disabled = !layoutAvailable;
+    exportLayout.closest('label').hidden = !layoutAvailable;
+    if (!layoutAvailable) exportLayout.checked = false;
     const selection = store.getState().selection;
     const hasSelection = selection.parcels.length + selection.buildings.length > 0;
     exportHighlight.disabled = !hasSelection;
@@ -151,7 +153,7 @@ export function createExportController({ map, api, store, elements }) {
     }
     exportFrameBox.style.pointerEvents = state.activeTool === 'export' ? 'auto' : 'none';
     const formatLabel = exportPaper.value === 'ratio43' ? '4:3' : exportPaper.value === 'square' ? '1:1' : exportPaper.value.toUpperCase();
-    const outputs = [exportOutput.value.toUpperCase(), exportDxf.checked && 'DXF'].filter(Boolean);
+    const outputs = [exportOutput.value.toUpperCase()];
     exportSummary.textContent = `${formatLabel} · 1:${exportScale.value} · ${outputs.join(' + ')}${exportLayout.checked ? ' · Layout' : ''}`;
   }
 
@@ -268,16 +270,61 @@ export function createExportController({ map, api, store, elements }) {
       width_m: frameBounds.size.width,
       height_m: frameBounds.size.height,
       layout: exportLayout.checked,
-      output: exportOutput.value === 'png' ? 'pdf' : exportOutput.value,
+      output: exportOutput.value,
       format: exportPaper.value,
       center: { lng: frameBounds.center.lng, lat: frameBounds.center.lat }
     };
   }
 
+  function canExport() {
+    return store.getState().access.pro;
+  }
+
+  function exportDateStamp() {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Berlin',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date());
+    const value = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+    return value.year + '-' + value.month + '-' + value.day;
+  }
+
+  function filenameSafe(value) {
+    return String(value || '')
+      .replaceAll('ß', 'ss')
+      .replaceAll('ẞ', 'SS')
+      .replaceAll('&', ' und ')
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Za-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 120);
+  }
+
+  function selectedBuildingAddress(state) {
+    const building = state.selection.buildings.find((item) => {
+      const label = addressLabel(item);
+      return label && label !== '–';
+    });
+    return building ? addressLabel(building) : '';
+  }
+
+  function exportFilenamePrefix() {
+    const address = filenameSafe(selectedBuildingAddress(store.getState())) || 'Kartenausschnitt';
+    const format = exportPaper.value === 'ratio43' ? '4-3' : exportPaper.value.toUpperCase();
+    return 'OpenKataster_' + address + '_1-' + exportScale.value + '_' + format + '_' + exportDateStamp();
+  }
+
   async function preview() {
+    if (!canExport()) {
+      exportStatus.textContent = 'Kartenexporte sind in Pro verfügbar.';
+      return;
+    }
     const wantsPdf = exportOutput.value === 'pdf';
     const wantsPng = exportOutput.value === 'png';
-    const wantsDxf = exportDxf.checked;
+    const wantsDxf = exportOutput.value === 'dxf';
     exportPreview.disabled = true;
     exportStatus.textContent = 'Export wird vorbereitet …';
     try {
@@ -295,16 +342,21 @@ export function createExportController({ map, api, store, elements }) {
   async function exportVectorFiles(options) {
     const value = center();
     const first = [...store.getState().selection.buildings, ...store.getState().selection.parcels][0];
+    const addressDisplay = first ? addressLabel(first) : 'Kartenausschnitt';
+    const renderContext = plannerRender();
+    renderContext.address = addressDisplay;
     const order = await api.createOrder({
-      address_display: first ? addressLabel(first) : 'Kartenausschnitt',
+      address_display: addressDisplay,
       center: { lat: value.lat, lon: value.lng },
-      paper_format: exportPaper.value.toUpperCase(),
+      // Content-only image and DXF formats still carry their exact dimensions in planner_render.
+      // The layout API itself accepts only DIN page formats.
+      paper_format: isDocumentFormat() ? exportPaper.value.toUpperCase() : 'A4',
       orientation: exportOrientation.value === 'landscape' ? 'Querformat' : 'Hochformat',
       scale: Number(exportScale.value),
       include_pdf: options.pdf || options.png,
       include_dxf: options.dxf,
       include_luftbild: false,
-      planner_render: plannerRender()
+      planner_render: renderContext
     });
     for (let attempt = 0; attempt < 60; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, attempt < 8 ? 1000 : 2000));
@@ -312,10 +364,11 @@ export function createExportController({ map, api, store, elements }) {
       if (status.api_status === 'failed') throw new Error(status.message || 'Export-Erstellung fehlgeschlagen.');
       const outputs = status.outputs || {};
       if ((!(options.pdf || options.png) || outputs.pdf_url) && (!options.dxf || outputs.dxf_url)) {
+        const prefix = exportFilenamePrefix();
         return [
-          options.pdf && { href: downloadUrl(order.order_id, order.guest_token, 'pdf'), filename: `openkataster-${exportPaper.value}.pdf` },
-          options.png && { href: downloadUrl(order.order_id, order.guest_token, 'png'), filename: `openkataster-${exportPaper.value}.png` },
-          options.dxf && { href: downloadUrl(order.order_id, order.guest_token, 'dxf'), filename: 'openkataster.dxf' }
+          options.pdf && { href: downloadUrl(order.order_id, order.guest_token, 'pdf'), filename: `${prefix}.pdf` },
+          options.png && { href: downloadUrl(order.order_id, order.guest_token, 'png'), filename: `${prefix}.png` },
+          options.dxf && { href: downloadUrl(order.order_id, order.guest_token, 'dxf'), filename: `${prefix}.dxf` }
         ].filter(Boolean);
       }
     }
@@ -353,7 +406,7 @@ export function createExportController({ map, api, store, elements }) {
   exportFrameBox.addEventListener('pointerup', endDrag);
   exportFrameBox.addEventListener('pointercancel', endDrag);
   exportFrameBox.addEventListener('wheel', forwardWheelToMap, { passive: false });
-  for (const control of [exportOutput, exportPaper, exportOrientation, exportScale, exportLayout, exportHighlight, exportDxf]) control.addEventListener('change', render);
+  for (const control of [exportOutput, exportPaper, exportOrientation, exportScale, exportLayout, exportHighlight]) control.addEventListener('change', render);
   exportPreview.addEventListener('click', preview);
   return { render, setCenter, preview };
 }

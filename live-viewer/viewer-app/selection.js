@@ -162,7 +162,7 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'] }
     ]));
     if (!sections.length) return '';
-    return `${sections.join('')}<div class="selection-pro-lock"><span>Objektinformationen sind in Pro verfügbar.</span><a href="/pro" target="_top">Pro buchen</a></div>`;
+    return `${sections.join('')}<div class="selection-pro-lock"><span class="selection-pro-lock-copy"><strong>Objektdaten freischalten</strong><small>Gebäude- und Flurstücksdaten vollständig anzeigen.</small></span><a href="/pro" target="_top">Pro buchen</a></div>`;
   }
 
   function lockedPreviewTable(title, items, definitions) {

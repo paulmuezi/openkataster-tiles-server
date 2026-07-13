@@ -1,12 +1,12 @@
 import { createApi } from './api.js?v=20260711-free-preview1';
-import { createExportController } from './export.js?v=20260712-exclusive-tools1';
+import { createExportController } from './export.js?v=20260713-export-audit1';
 import { createLayerController } from './layers.js?v=20260712-brandenburg-labels1';
 import { createLayout } from './layout.js?v=20260713-mobile-table-min1';
-import { createPlannerMap } from './map.js?v=20260712-bkg-direct1';
+import { createPlannerMap } from './map.js?v=20260712-sa-mask1';
 import { createMeasureController } from './measure.js?v=20260712-polygonized-measure3';
 import { createPersistence, readPersistedState } from './persistence.js';
 import { createSearchController } from './search.js?v=20260712-field-suggestions1';
-import { createSelectionController } from './selection.js?v=20260712-exclusive-tools1';
+import { createSelectionController } from './selection.js?v=20260713-selection-pro-cta1';
 import { createSourceController } from './sources.js?v=20260711-inline-sources1';
 import { createStore } from './store.js';
 
@@ -47,8 +47,8 @@ const elements = Object.fromEntries([
   'exportSidebar','selectionDock','exportTool','selectTool','measureTool','selectionResize','selectionClose','selectionContent','selectionCount',
   'layerButton','layerMenu','layerZoomNote','searchButton','searchPanel','searchClose','searchMode','addressFields','parcelFields','placeInput','streetInput','houseInput','gemarkungInput','flurInput','parcelInput','placeSuggestions','streetSuggestions','gemarkungSuggestions','searchSubmit','searchResults','searchStatus',
   'measurePanel','measureValues','measureLocked','measureDistance','measureAngle','measureCumulative','measureArea','sourceButton','sourcePanel','sourceList',
-  'exportFrame','exportPageBox','exportFrameBox','exportCenterMarker','exportOutput','exportPaper','exportOrientationField','exportOrientation','exportScale','exportLayout','exportHighlight','exportDxf','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings','mobileExportBackdrop',
-  'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge','exportProBadge'
+  'exportFrame','exportPageBox','exportFrameBox','exportCenterMarker','exportOutput','exportPaper','exportOrientationField','exportOrientation','exportScale','exportLayout','exportHighlight','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings','mobileExportBackdrop',
+  'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge','exportProBadge','exportLocked'
 ].map((id) => [id, document.getElementById(id)]));
 elements.layerInputs = [...document.querySelectorAll('[data-layer]')];
 
@@ -61,21 +61,14 @@ const exportController = createExportController({ map, api, store, elements });
 const sources = createSourceController({ map, api, store, elements, layerController: layers });
 createPersistence({ map, store });
 
+function canExport(state = store.getState()) {
+  return state.access.pro;
+}
+
 elements.selectTool.addEventListener('click', () => layout.setTool('select'));
 elements.measureTool.addEventListener('click', () => layout.setTool('measure'));
 elements.exportTool.addEventListener('click', () => {
-  const state = store.getState();
-  const scopes = new Set(state.access.session?.scopes || []);
-  const canExport = scopes.has('export:map') || scopes.has('export:cadastre');
-  if (!canExport) {
-    store.setState({
-      notice: {
-        title: 'OpenKataster Pro',
-        text: 'Kartenexporte sind mit einem Pro- oder API-Zugang verfügbar.'
-      }
-    }, 'notice');
-    return;
-  }
+  // Free users can inspect the export workflow, but only Pro can start an order.
   layout.setTool('export');
 });
 elements.exportClose.addEventListener('click', layout.closeExportPanel);
@@ -96,9 +89,10 @@ store.subscribe((state, reason) => {
     elements.noticePanel.hidden = !state.notice;
     if (state.notice) { elements.noticeTitle.textContent = state.notice.title; elements.noticeText.textContent = state.notice.text; }
   }
-  const scopes = new Set(state.access.session?.scopes || []);
-  const canExport = scopes.has('export:map') || scopes.has('export:cadastre');
-  if (elements.exportProBadge) elements.exportProBadge.hidden = canExport;
+  const exportAllowed = canExport(state);
+  if (elements.exportProBadge) elements.exportProBadge.hidden = exportAllowed;
+  if (elements.exportPreview) elements.exportPreview.hidden = !exportAllowed;
+  if (elements.exportLocked) elements.exportLocked.hidden = exportAllowed;
   if (reason.startsWith('selection')) publishSelection();
 });
 

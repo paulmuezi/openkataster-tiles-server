@@ -1,10 +1,21 @@
 export function createLayout({ app, map, store, elements }) {
-  const { exportSidebar, selectionDock, exportTool, selectTool, measureTool, mobileExportSettings } = elements;
+  const { exportSidebar, selectionDock, selectionResize, exportTool, selectTool, measureTool, mobileExportSettings } = elements;
   let resizing = false;
   let layoutTransitionTimer = 0;
 
   function isMobile() {
     return window.matchMedia('(max-width: 760px)').matches;
+  }
+
+  function minimumTableHeight(layout = store.getState().layout) {
+    if (!isMobile()) return 150;
+    const header = selectionDock.querySelector('.selection-head');
+    const handleHeight = selectionResize.getBoundingClientRect().height || 28;
+    const headerHeight = header ? header.getBoundingClientRect().height : 43;
+    const exportOverlayHeight = layout.sidebarOpen && !layout.mobileExportSettings
+      ? exportSidebar.getBoundingClientRect().height
+      : 0;
+    return Math.ceil(Math.max(150, handleHeight + headerHeight + exportOverlayHeight + 12));
   }
 
   function scheduleMapResize(reason) {
@@ -24,7 +35,7 @@ export function createLayout({ app, map, store, elements }) {
     app.dataset.tableOpen = layout.tableOpen ? 'true' : 'false';
     app.dataset.mobileExportSettings = layout.mobileExportSettings ? 'true' : 'false';
     app.dataset.activeTool = activeTool;
-    app.style.setProperty('--table-height-open', `${layout.tableHeight}px`);
+    app.style.setProperty('--table-height-open', String(Math.max(layout.tableHeight, minimumTableHeight(layout))) + 'px');
     exportSidebar.setAttribute('aria-hidden', layout.sidebarOpen ? 'false' : 'true');
     selectionDock.setAttribute('aria-hidden', layout.tableOpen ? 'false' : 'true');
     exportTool.classList.toggle('is-active', activeTool === 'export');
@@ -108,16 +119,18 @@ export function createLayout({ app, map, store, elements }) {
     resizing = true;
     app.dataset.resizing = 'true';
     const startY = event.clientY;
-    const startHeight = store.getState().layout.tableHeight;
+    const initialLayout = store.getState().layout;
+    const startHeight = Math.max(initialLayout.tableHeight, minimumTableHeight(initialLayout));
     const pointerId = event.pointerId;
     const handle = event.currentTarget;
     handle.setPointerCapture(pointerId);
 
     const move = (moveEvent) => {
       if (!resizing) return;
-      const maxHeight = Math.max(180, app.clientHeight * 0.66);
-      const tableHeight = Math.min(maxHeight, Math.max(150, startHeight + startY - moveEvent.clientY));
       const state = store.getState();
+      const minHeight = minimumTableHeight(state.layout);
+      const maxHeight = Math.max(minHeight, app.clientHeight * 0.66);
+      const tableHeight = Math.min(maxHeight, Math.max(minHeight, startHeight + startY - moveEvent.clientY));
       store.setState({ layout: { ...state.layout, tableHeight } }, 'resize');
     };
     const finish = () => {

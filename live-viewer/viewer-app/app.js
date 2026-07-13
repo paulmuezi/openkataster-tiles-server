@@ -1,7 +1,7 @@
 import { createApi } from './api.js?v=20260711-free-preview1';
 import { createExportController } from './export.js?v=20260712-exclusive-tools1';
 import { createLayerController } from './layers.js?v=20260712-brandenburg-labels1';
-import { createLayout } from './layout.js?v=20260713-mobile-table-drag1';
+import { createLayout } from './layout.js?v=20260713-mobile-table-min1';
 import { createPlannerMap } from './map.js?v=20260712-bkg-direct1';
 import { createMeasureController } from './measure.js?v=20260712-polygonized-measure3';
 import { createPersistence, readPersistedState } from './persistence.js';

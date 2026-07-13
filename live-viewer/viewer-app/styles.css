@@ -142,25 +142,29 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .selection-pro-lock {
   position: sticky;
   z-index: 4;
-  left: 0;
-  bottom: 0;
+  left: 50%;
+  bottom: 12px;
+  width: min(430px, calc(100vw - 32px));
+  transform: translateX(-50%);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
-  min-height: 54px;
-  padding: 8px 13px 8px 16px;
-  border-top: 1px solid rgba(248,109,20,.28);
-  background: #fff9f5;
-  box-shadow: inset 3px 0 0 var(--ok-orange), 0 -7px 18px rgba(24,30,39,.06);
+  justify-items: center;
+  gap: 9px;
+  margin: 14px 0 12px;
+  padding: 13px 16px 14px;
+  border: 1px solid rgba(248,109,20,.3);
+  border-radius: 10px;
+  background: rgba(255,255,255,.97);
+  box-shadow: 0 10px 28px rgba(24,30,39,.13), 0 0 0 3px rgba(248,109,20,.05);
+  text-align: center;
 }
-.selection-pro-lock-copy { min-width: 0; display: grid; gap: 1px; }
-.selection-pro-lock strong { color: #303640; font-size: 12.5px; font-weight: 600; }
-.selection-pro-lock small { color: #6d7480; font-size: 11.5px; line-height: 1.35; }
+.selection-pro-lock-copy { min-width: 0; display: grid; justify-items: center; gap: 2px; }
+.selection-pro-lock strong { color: #303640; font-size: 13px; font-weight: 650; }
+.selection-pro-lock small { color: #6d7480; font-size: 12px; line-height: 1.4; }
 .selection-pro-lock a {
-  min-height: 32px;
-  padding: 0 13px;
-  border-radius: 4px;
+  min-width: 132px;
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 5px;
   background: var(--ok-orange);
   color: #fff;
   display: inline-flex;
@@ -172,7 +176,7 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
   white-space: nowrap;
 }
 .selection-pro-lock a:hover { background: #e95e08; }
-.preview-table td { height: 34px; color: #a0a6ae; }
+.preview-table td { height: 38px; color: #a0a6ae; }
 .locked-cell { font-weight: 500; }
 .layer-control { position: absolute; z-index: 25; right: 13px; top: 13px; display: grid; justify-items: end; gap: 8px; }
 .layer-menu { width: 226px; max-height: calc(100vh - 84px); overflow: auto; padding: 12px; scrollbar-width: thin; scrollbar-color: rgba(89,97,108,.54) transparent; }
@@ -248,15 +252,22 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .selection-head span { color: var(--ok-muted); font-size: 12px; }
 .selection-content { min-width: 0; min-height: 0; overflow: auto; display: grid; align-content: start; }
 .selection-section + .selection-section { border-top: 1px solid var(--ok-border); }
-.selection-section-title { padding: 6px 13px; background: #fff; font-weight: 600; }
+.selection-section-title { position: sticky; left: 0; z-index: 2; padding: 7px 13px; border-bottom: 1px solid var(--ok-border-soft); background: #fff; color: #303640; font-size: 13px; font-weight: 650; }
 .selection-table-wrap { min-width: 0; overflow: visible; }
-table { width: 100%; min-width: 760px; border-collapse: collapse; table-layout: auto; white-space: nowrap; font-size: 12px; }
-th, td { padding: 8px 13px; border-bottom: 1px solid var(--ok-border-soft); text-align: left; vertical-align: top; }
-th { position: sticky; top: 0; z-index: 1; background: #fbfaf8; color: #66707d; font-weight: 550; }
-th.compact, td.compact { width: 1%; white-space: nowrap; }
-td.strong { font-weight: 600; }
-tfoot td { border-top: 1px solid var(--ok-border); border-bottom: 0; background: #fbfaf8; }
-tfoot .summary-label, tfoot .summary-value { font-weight: 600; color: #343a43; }
+.selection-data-table { width: 100%; min-width: 760px; border-collapse: separate; border-spacing: 0; table-layout: auto; white-space: nowrap; font-size: 12.5px; line-height: 1.4; }
+.selection-data-table tr { --selection-row-bg: #fff; }
+.selection-data-table tbody tr:nth-child(even) { --selection-row-bg: #fcfbfa; }
+.selection-data-table tbody tr:hover { --selection-row-bg: #fff8f4; }
+.selection-data-table th, .selection-data-table td { padding: 9px 13px; border-bottom: 1px solid var(--ok-border-soft); background: var(--selection-row-bg); color: #343a43; text-align: left; vertical-align: top; }
+.selection-data-table th { position: sticky; top: 0; z-index: 1; border-bottom-color: var(--ok-border); background: #f7f5f2; color: #59616d; font-weight: 600; }
+.selection-data-table th:first-child, .selection-data-table td:first-child { position: sticky; left: 0; z-index: 2; box-shadow: 1px 0 0 var(--ok-border-soft); }
+.selection-data-table th:first-child { z-index: 3; }
+.selection-data-table th.compact, .selection-data-table td.compact { width: 1%; white-space: nowrap; }
+.selection-data-table td:not(.compact) { max-width: 280px; white-space: normal; overflow-wrap: anywhere; }
+.selection-data-table td.strong { font-weight: 600; }
+.selection-data-table tfoot tr { --selection-row-bg: #f7f5f2; }
+.selection-data-table tfoot td { border-top: 1px solid var(--ok-border); border-bottom: 0; }
+.selection-data-table tfoot .summary-label, .selection-data-table tfoot .summary-value { font-weight: 600; color: #343a43; }
 .address-chip { display: block; }
 
 .export-sidebar { width: var(--sidebar-open); min-width: var(--sidebar-open); height: 100%; border-left: 1px solid var(--ok-border); background: #fff; display: grid; grid-template-rows: 58px minmax(0,1fr) auto; overflow: hidden; opacity: 0; transform: translateX(12px); visibility: hidden; transition: opacity var(--motion-duration) var(--motion-easing), transform var(--motion-duration) var(--motion-easing), visibility 0s linear var(--motion-duration); }
@@ -385,7 +396,8 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
     pointer-events: none;
   }
   .selection-head > div { display: grid; gap: 1px; }
-  th, td { padding: 7px 10px; }
+  .selection-data-table th, .selection-data-table td { padding: 8px 10px; }
+  .selection-pro-lock { bottom: 10px; width: calc(100vw - 24px); margin-top: 12px; padding: 12px 14px 13px; }
   .selection-dock { grid-template-rows: 28px 43px minmax(0,1fr); }
   .selection-resize { height: 28px; cursor: ns-resize; }
   .selection-resize span { top: 12px; }

@@ -162,7 +162,7 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'] }
     ]));
     if (!sections.length) return '';
-    return `${sections.join('')}<div class="selection-pro-lock"><span class="selection-pro-lock-copy"><strong>Objektdaten freischalten</strong><small>Gebäude- und Flurstücksdaten vollständig anzeigen.</small></span><a href="/pro" target="_top">Pro buchen</a></div>`;
+    return `${sections.join('')}<div class="selection-pro-lock" role="note" aria-label="Pro-Objektdaten"><span class="selection-pro-lock-copy"><strong>Vollständige Objektdaten</strong><small>Alle Gebäude- und Flurstücksdaten anzeigen.</small></span><a href="/pro" target="_top">Pro buchen</a></div>`;
   }
 
   function lockedPreviewTable(title, items, definitions) {
@@ -170,7 +170,7 @@ export function createSelectionController({ map, api, store, layout, elements })
     const columns = definitions.filter((column) => column.keys.some((key) => available.has(key)));
     const headers = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('');
     const cells = columns.map(() => '<td><span class="locked-cell">–</span></td>').join('');
-    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="preview-table"><thead><tr>${headers}</tr></thead><tbody><tr>${cells}</tr></tbody></table></div></section>`;
+    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody><tr>${cells}</tr></tbody></table></div></section>`;
   }
 
   function display(value) {
@@ -290,7 +290,7 @@ export function createSelectionController({ map, api, store, layout, elements })
       const values = items.map((item) => Number(columnValue(column, item))).filter(Number.isFinite);
       return `<td class="summary-value${column.compact ? ' compact' : ''}">${values.length ? formatCell(values.reduce((sum, value) => sum + value, 0), column.format) : '–'}</td>`;
     }).join('')}</tr></tfoot>` : '';
-    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody>${totals}</table></div></section>`;
+    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody>${totals}</table></div></section>`;
   }
 
   function buildingTable(buildings) {

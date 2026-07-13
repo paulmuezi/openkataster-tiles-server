@@ -259,6 +259,8 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
 
 @media (max-width: 760px) {
   :root { --sidebar-open: 0px; --table-height-open: min(42vh, 300px); --mobile-export-bar-height: 142px; }
+  .maplibregl-ctrl-bottom-left, .brand-mark, .zoom-badge { bottom: 8px; }
+  .source-control { bottom: 3px; }
   .planner-app,
   .planner-app[data-sidebar-open="true"],
   .planner-app[data-sidebar-open="true"][data-mobile-export-settings="true"] {
@@ -298,7 +300,7 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
   .export-sidebar > header, .export-sidebar .sidebar-scroll { min-height: 0; padding-top: 0; padding-bottom: 0; border: 0; opacity: 0; visibility: hidden; overflow: hidden; }
   .export-sidebar footer { min-height: var(--mobile-export-bar-height); align-content: center; padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); background: rgba(255,255,255,.985); }
   .mobile-export-settings { width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--ok-orange-soft); color: var(--ok-orange); display: grid; place-items: center; cursor: pointer; }
-  .mobile-export-settings svg { width: 21px; height: 21px; display: block; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; transform: translate(-1px, -.5px); }
+  .mobile-export-settings svg { width: 22px; height: 22px; display: block; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
   .planner-app[data-mobile-export-settings="true"] .export-sidebar { height: min(80svh, 650px); border-radius: 22px 22px 0 0; grid-template-rows: 58px minmax(0,1fr) auto; }
   .planner-app[data-mobile-export-settings="true"] .export-sidebar > header,
   .planner-app[data-mobile-export-settings="true"] .export-sidebar .sidebar-scroll { padding-top: revert; padding-bottom: revert; opacity: 1; visibility: visible; }
@@ -320,10 +322,10 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
     transition: opacity 180ms ease, visibility 0s linear 180ms;
   }
   .planner-app[data-mobile-export-settings="true"] .mobile-export-backdrop { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity 180ms ease, visibility 0s; }
-  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"] .maplibregl-ctrl-bottom-left,
-  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"] .source-control,
-  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"] .brand-mark { bottom: calc(var(--mobile-export-bar-height) + env(safe-area-inset-bottom, 0px)); }
-  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"] .zoom-badge { bottom: calc(var(--mobile-export-bar-height) + 10px + env(safe-area-inset-bottom, 0px)); }
+  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .maplibregl-ctrl-bottom-left,
+  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .source-control,
+  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .brand-mark { bottom: calc(var(--mobile-export-bar-height) + env(safe-area-inset-bottom, 0px)); }
+  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .zoom-badge { bottom: calc(var(--mobile-export-bar-height) + 10px + env(safe-area-inset-bottom, 0px)); }
   .planner-app[data-sidebar-open="true"][data-table-open="true"] .selection-content { padding-bottom: var(--mobile-export-bar-height); }
   .maplibregl-ctrl-bottom-left, .source-control, .brand-mark, .zoom-badge { transition: bottom 220ms var(--motion-easing); }
   .search-panel { max-height: calc(100vh - 24px); overflow: auto; }

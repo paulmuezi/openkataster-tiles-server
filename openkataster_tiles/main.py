@@ -14,6 +14,7 @@ import shutil
 import sqlite3
 import subprocess
 import threading
+import traceback
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -367,6 +368,7 @@ GLYPHS_DIR = Path(os.environ.get("OPENKATASTER_TILE_GLYPHS_DIR", str(DATA_DIR / 
 ACTIVE_VOLUME_ROOT = Path(os.environ.get("OPENKATASTER_TILE_ACTIVE_VOLUME_ROOT", "/mnt/HC_Volume_105964091/openkataster-active"))
 VOLUME_UPLOAD_PART_BYTES = int(os.environ.get("OPENKATASTER_TILE_VOLUME_UPLOAD_PART_BYTES", str(64 * 1024 * 1024)))
 VOLUME_UPLOAD_MAX_PART_BYTES = int(os.environ.get("OPENKATASTER_TILE_VOLUME_UPLOAD_MAX_PART_BYTES", str(128 * 1024 * 1024)))
+VOLUME_UPLOAD_SESSION_TTL_SECONDS = int(os.environ.get("OPENKATASTER_TILE_VOLUME_UPLOAD_SESSION_TTL_SECONDS", str(7 * 24 * 60 * 60)))
 VOLUME_REQUIRED_FILES = {"alkis.pmtiles", "features.sqlite", "search.sqlite"}
 VOLUME_UPLOAD_SESSION_MANIFEST = ".upload-session.json"
 VERSION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
@@ -12358,6 +12360,53 @@ def _volume_upload_dir(state_slug: str, version_name: str) -> Path:
     return _volume_incoming_root() / state_slug / _safe_version_name(version_name)
 
 
+def _prune_stale_volume_upload_sessions(
+    state_slug: str | None = None,
+    *,
+    now: float | None = None,
+) -> dict:
+    incoming_root = _volume_incoming_root()
+    if not incoming_root.is_dir():
+        return {"sessions": 0, "bytes_total": 0}
+    if state_slug is not None:
+        if not DATASET_RE.match(state_slug):
+            raise HTTPException(status_code=400, detail="invalid state slug")
+        state_dirs = [incoming_root / state_slug]
+    else:
+        state_dirs = [path for path in incoming_root.iterdir() if path.is_dir() and not path.is_symlink()]
+
+    cutoff = (time.time() if now is None else now) - max(3600, VOLUME_UPLOAD_SESSION_TTL_SECONDS)
+    removed_sessions = 0
+    removed_bytes = 0
+    for state_dir in state_dirs:
+        if not state_dir.is_dir() or state_dir.is_symlink():
+            continue
+        for upload_dir in list(state_dir.iterdir()):
+            if not upload_dir.is_dir() or upload_dir.is_symlink():
+                continue
+            try:
+                file_stats = [
+                    path.stat()
+                    for path in upload_dir.iterdir()
+                    if path.is_file() and not path.is_symlink()
+                ]
+                updated_at = max(
+                    [upload_dir.stat().st_mtime, *(stat.st_mtime for stat in file_stats)],
+                )
+            except FileNotFoundError:
+                continue
+            if updated_at >= cutoff:
+                continue
+            removed_bytes += sum(stat.st_size for stat in file_stats)
+            shutil.rmtree(upload_dir)
+            removed_sessions += 1
+        try:
+            state_dir.rmdir()
+        except OSError:
+            pass
+    return {"sessions": removed_sessions, "bytes_total": removed_bytes}
+
+
 def _validate_volume_filenames(files: list[dict], *, allow_subset: bool = False) -> list[dict]:
     if not isinstance(files, list):
         raise HTTPException(status_code=400, detail="files must be a list")
@@ -12523,6 +12572,7 @@ def _volume_upload_file_status(upload_dir: Path, item: dict) -> dict:
 def _volume_upload_sessions(state_slug: str) -> list[dict]:
     if not DATASET_RE.match(state_slug):
         raise HTTPException(status_code=400, detail="invalid state slug")
+    _prune_stale_volume_upload_sessions(state_slug)
     state_dir = _volume_incoming_root() / state_slug
     if not state_dir.is_dir():
         return []
@@ -12571,7 +12621,11 @@ def _volume_upload_sessions(state_slug: str) -> list[dict]:
             "mode": (manifest or {}).get("mode", "legacy"),
             "base_version": (manifest or {}).get("base_version"),
             "expected_sizes": expected_sizes,
+            "expected_bytes": sum(expected_sizes.values()),
             "uploaded_bytes": uploaded_total,
+            "complete": bool(expected_sizes) and all(
+                item["complete"] for item in files if item["selected"]
+            ),
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(max(mtimes))),
             "files": files,
             **({"manifest_error": manifest_error} if manifest_error else {}),
@@ -12684,6 +12738,10 @@ def health() -> dict:
 
 @app.on_event("startup")
 def warm_search_indexes() -> None:
+    try:
+        _prune_stale_volume_upload_sessions()
+    except Exception:
+        traceback.print_exc()
     try:
         states = set(active_bucket_state_keys())
         exact_place_context_index(gn250_places_signature())
@@ -14159,6 +14217,7 @@ async def create_volume_upload_session(
 ) -> dict:
     if not DATASET_RE.match(state_slug):
         raise HTTPException(status_code=400, detail="invalid state slug")
+    _prune_stale_volume_upload_sessions(state_slug)
     version_name = _safe_version_name(version)
     payload = await request.json()
     payload_base_version = payload.get("base_version")
@@ -14348,6 +14407,8 @@ async def upload_volume_part(
             raise HTTPException(status_code=409, detail=f"completed upload size mismatch for {safe_filename}")
         return {"status": "success", "already_uploaded": True, "uploaded_bytes": final_size, "size_bytes": 0}
     current_size = target_path.stat().st_size if target_path.exists() else 0
+    if current_size > total_size:
+        raise HTTPException(status_code=409, detail=f"partial upload exceeds session size for {safe_filename}")
     if current_size >= end:
         return {"status": "success", "already_uploaded": True, "uploaded_bytes": current_size, "size_bytes": 0}
     if current_size != start:

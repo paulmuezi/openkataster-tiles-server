@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -250,6 +251,31 @@ class VolumeUploadVersionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as missing_error:
             main.delete_volume_upload_session(self.state_slug, "admin", "delete-v2")
         self.assertEqual(missing_error.exception.status_code, 404)
+
+    def test_stale_incoming_sessions_are_pruned_after_ttl(self):
+        state_dir = self.root / ".incoming" / self.state_slug
+        stale_dir = state_dir / "stale-v1"
+        fresh_dir = state_dir / "fresh-v1"
+        stale_dir.mkdir(parents=True)
+        fresh_dir.mkdir()
+        stale_file = stale_dir / "alkis.pmtiles.partial"
+        fresh_file = fresh_dir / "alkis.pmtiles.partial"
+        stale_file.write_bytes(b"stale")
+        fresh_file.write_bytes(b"fresh")
+        os.utime(stale_file, (100, 100))
+        os.utime(stale_dir, (100, 100))
+        os.utime(fresh_file, (9_999, 9_999))
+        os.utime(fresh_dir, (9_999, 9_999))
+
+        with mock.patch.object(main, "VOLUME_UPLOAD_SESSION_TTL_SECONDS", 3_600):
+            result = main._prune_stale_volume_upload_sessions(
+                self.state_slug,
+                now=10_000,
+            )
+
+        self.assertEqual(result, {"sessions": 1, "bytes_total": len(b"stale")})
+        self.assertFalse(stale_dir.exists())
+        self.assertTrue(fresh_dir.is_dir())
 
     def test_inherit_falls_back_to_copy_when_hardlink_is_unavailable(self):
         source = self.root / "source.sqlite"

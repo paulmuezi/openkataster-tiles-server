@@ -9,6 +9,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      OPENKATASTER_ADMIN_API_BASE_URL: http://openkataster-api:8000
     volumes:
       - /srv/openkataster-tiles/data:/srv/openkataster-tiles/data
       - /srv/openkataster-tiles/active:/srv/openkataster-tiles/active

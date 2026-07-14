@@ -17,6 +17,8 @@ assert.match(
   /\.measure-panel \{[^}]*left: 66px;[^}]*top: 126px;[^}]*width: 226px;[^}]*padding: 7px 9px 8px;/,
   'Die Desktop-Messanzeige darf durch die Mobile-Anpassung nicht verändert werden.'
 );
+assert.match(desktopCss, /\.measure-panel \{[^}]*pointer-events: none;/, 'Das mitbewegte Desktop-Panel muss nicht-interaktiv bleiben.');
+assert.match(desktopCss, /\.measure-upgrade-link \{ display: none; \}/, 'Desktop darf den Upgrade-Link nicht anzeigen.');
 assert.match(mobileCss, /--mobile-measure-bar-height: 85px;/);
 assert.match(mobileCss, /\.measure-panel \{[^}]*bottom: 0;[^}]*padding: 14px 16px calc\(14px \+ env\(safe-area-inset-bottom, 0px\)\);/);
 assert.match(mobileCss, /border-top: 1px solid rgba\(89,97,108,\.28\);/);
@@ -26,7 +28,8 @@ assert.match(mobileCss, /\.measure-cell \{ grid-template-columns: 18px minmax\(0
 assert.match(mobileCss, /\.measure-cell span:not\(\.measure-symbol\) \{ font-size: 13px; line-height: 1\.25; \}/);
 assert.match(mobileCss, /\.measure-cell strong \{ font-size: 14px; font-weight: 600; line-height: 1\.2; \}/);
 assert.match(mobileCss, /\.measure-symbol \{ font-size: 14px; \}/);
-assert.match(mobileCss, /\.measure-pro-lock \{ min-height: 56px; font-size: 13px; line-height: 1\.45;/);
+assert.match(mobileCss, /\.measure-pro-lock \{ min-height: 56px;[^}]*display: flex;[^}]*flex-wrap: wrap;[^}]*gap: 4px 10px;/);
+assert.match(mobileCss, /\.measure-upgrade-link \{ min-height: 32px;[^}]*display: inline-flex;[^}]*pointer-events: auto;[^}]*touch-action: manipulation;/);
 
 for (const selector of ['maplibregl-ctrl-bottom-left', 'zoom-badge', 'source-control', 'brand-mark']) {
   assert.match(
@@ -39,5 +42,8 @@ for (const selector of ['maplibregl-ctrl-bottom-left', 'zoom-badge', 'source-con
 assert.match(measureSource, /measurePanel\.hidden = !active \|\| !points\.length;/);
 assert.match(measureSource, /setAttribute\('data-measure-panel-open', measurePanel\.hidden \? 'false' : 'true'\)/);
 assert.equal((indexSource.match(/class="measure-cell"/g) || []).length, 4, 'Alle vier Messwertarten müssen in der Leiste bleiben.');
-assert.match(indexSource, /styles\.css\?v=20260715-mobile-measure-bar1/);
+assert.match(indexSource, /<a class="measure-upgrade-link" href="\/pro" target="_top">Pro freischalten<\/a>/);
+assert.match(measureSource, /measureValues\.hidden = !pro;/);
+assert.match(measureSource, /measureLocked\.hidden = pro;/);
+assert.match(indexSource, /styles\.css\?v=20260715-mobile-measure-upgrade1/);
 console.log('mobile-measure-bar-tests=ok');

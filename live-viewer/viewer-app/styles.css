@@ -285,7 +285,7 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
 .maplibregl-ctrl-group { box-shadow: 0 2px 9px rgba(24,30,39,.12); }
 
 @media (max-width: 760px) {
-  :root { --sidebar-open: 0px; --table-height-open: min(42vh, 300px); --mobile-export-bar-height: 142px; --mobile-measure-bar-height: 68px; }
+  :root { --sidebar-open: 0px; --table-height-open: min(42vh, 300px); --mobile-export-bar-height: 142px; --mobile-measure-bar-height: 85px; }
   .maplibregl-ctrl-bottom-left, .brand-mark, .zoom-badge { bottom: 8px; }
   .source-control { bottom: 3px; }
   .planner-app,
@@ -370,15 +370,19 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
     bottom: 0;
     width: auto;
     min-width: 0;
-    padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+    padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0px));
     border: 0;
-    border-top: 1px solid var(--ok-border);
+    border-top: 1px solid rgba(89,97,108,.28);
     border-radius: 0;
-    background: rgba(255,255,255,.985);
-    box-shadow: 0 -5px 18px rgba(24,30,39,.11);
+    background: rgba(255,255,255,.995);
+    box-shadow: 0 -7px 22px rgba(24,30,39,.14);
   }
-  .measure-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; }
-  .measure-pro-lock { min-height: 45px; display: grid; place-items: center; text-align: center; }
+  .measure-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; }
+  .measure-cell { grid-template-columns: 18px minmax(0,1fr) max-content; gap: 8px; min-height: 24px; }
+  .measure-cell span:not(.measure-symbol) { font-size: 13px; line-height: 1.25; }
+  .measure-cell strong { font-size: 14px; font-weight: 600; line-height: 1.2; }
+  .measure-symbol { font-size: 14px; }
+  .measure-pro-lock { min-height: 56px; font-size: 13px; line-height: 1.45; display: grid; place-items: center; text-align: center; }
   .layer-menu { max-height: 62vh; }
   .layer-control[data-layer-overflow="true"]::after {
     content: "Weitere Ebenen ↓";

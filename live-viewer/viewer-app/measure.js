@@ -182,8 +182,8 @@ export function createMeasureController({ map, store, elements, finish }) {
   function positionPanel() {
     if (measurePanel.hidden || !cursorPoint) return;
     if (window.matchMedia('(max-width: 760px)').matches) {
-      measurePanel.style.left = '65px';
-      measurePanel.style.top = '126px';
+      measurePanel.style.removeProperty('left');
+      measurePanel.style.removeProperty('top');
       return;
     }
     const container = map.getContainer();
@@ -231,6 +231,7 @@ export function createMeasureController({ map, store, elements, finish }) {
     const active = store.getState().activeTool === 'measure';
     const pro = store.getState().access.pro;
     measurePanel.hidden = !active || !points.length;
+    measurePanel.closest('.planner-app')?.setAttribute('data-measure-panel-open', measurePanel.hidden ? 'false' : 'true');
     measureValues.hidden = !pro;
     measureLocked.hidden = pro;
     if (!map.getSource('measure-v2')) return;

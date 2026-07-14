@@ -284,7 +284,7 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
 .maplibregl-ctrl-group { box-shadow: 0 2px 9px rgba(24,30,39,.12); }
 
 @media (max-width: 760px) {
-  :root { --sidebar-open: 0px; --table-height-open: min(42vh, 300px); --mobile-export-bar-height: 142px; }
+  :root { --sidebar-open: 0px; --table-height-open: min(42vh, 300px); --mobile-export-bar-height: 142px; --mobile-measure-bar-height: 68px; }
   .maplibregl-ctrl-bottom-left, .brand-mark, .zoom-badge { bottom: 8px; }
   .source-control { bottom: 3px; }
   .planner-app,
@@ -353,12 +353,31 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
   .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .brand-mark { bottom: calc(var(--mobile-export-bar-height) + env(safe-area-inset-bottom, 0px)); }
   .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .zoom-badge { bottom: calc(var(--mobile-export-bar-height) + 10px + env(safe-area-inset-bottom, 0px)); }
   .planner-app[data-sidebar-open="true"][data-table-open="true"] .selection-content { padding-bottom: var(--mobile-export-bar-height); }
+  .planner-app[data-measure-panel-open="true"] .maplibregl-ctrl-bottom-left,
+  .planner-app[data-measure-panel-open="true"] .zoom-badge { bottom: calc(var(--mobile-measure-bar-height) + 20px + env(safe-area-inset-bottom, 0px)); }
+  .planner-app[data-measure-panel-open="true"] .source-control { bottom: calc(var(--mobile-measure-bar-height) + 15px + env(safe-area-inset-bottom, 0px)); }
+  .planner-app[data-measure-panel-open="true"] .brand-mark { bottom: calc(var(--mobile-measure-bar-height) + 12px + env(safe-area-inset-bottom, 0px)); }
   .maplibregl-ctrl-bottom-left, .source-control, .brand-mark, .zoom-badge { transition: bottom 220ms var(--motion-easing); }
   .search-panel { max-height: calc(100vh - 24px); overflow: auto; }
   /* iOS Safari zooms the page when a focused form control is smaller than 16px. */
   .search-panel input,
   .search-panel select { font-size: 16px; }
-  .measure-panel { left: 65px; right: 13px; width: auto; min-width: 0; }
+  .measure-panel {
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    width: auto;
+    min-width: 0;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+    border: 0;
+    border-top: 1px solid var(--ok-border);
+    border-radius: 0;
+    background: rgba(255,255,255,.985);
+    box-shadow: 0 -5px 18px rgba(24,30,39,.11);
+  }
+  .measure-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; }
+  .measure-pro-lock { min-height: 45px; display: grid; place-items: center; text-align: center; }
   .layer-menu { max-height: 62vh; }
   .layer-control[data-layer-overflow="true"]::after {
     content: "Weitere Ebenen ↓";
@@ -367,6 +386,7 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
     right: 0;
     bottom: 0;
     width: 226px;
+    box-sizing: border-box;
     padding: 14px 10px 7px;
     background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,.97) 45%);
     color: #707780;

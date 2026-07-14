@@ -24,6 +24,6 @@ assert.doesNotMatch(stylesSource, /\.measure-pro-lock a\b/);
 assert.match(appSource, /\.\/measure\.js\?v=20260714-mobile-ui1/);
 assert.match(appSource, /\.\/selection\.js\?v=20260714-free-preview-row1/);
 assert.match(indexSource, /styles\.css\?v=20260714-free-preview-row1/);
-assert.match(indexSource, /app\.js\?v=20260714-free-preview-row1/);
+assert.match(indexSource, /app\.js\?v=20260715-no-world-blue1/);
 
 console.log('pro-plan-notice-tests=ok');

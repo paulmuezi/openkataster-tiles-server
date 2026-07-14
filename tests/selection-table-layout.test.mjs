@@ -127,8 +127,18 @@ const freeSelectionHtml = renderSelection({
   }]
 }, false);
 
-assert.equal((freeSelectionHtml.match(/Diese Tabelle ist im Pro-Plan verfügbar\./g) || []).length, 1, 'Der ruhige Pro-Hinweis darf bei mehreren Tabellen nur einmal erscheinen.');
+assert.equal((freeSelectionHtml.match(/Diese Tabelle ist im Pro-Plan verfügbar\./g) || []).length, 2, 'Gebäude und Flurstücke müssen jeweils einen Pro-Hinweis zeigen.');
 assert.match(freeSelectionHtml, /<tr class="selection-pro-notice"><td colspan="\d+"><span class="selection-pro-notice-copy"><span>Diese Tabelle ist im Pro-Plan verfügbar\.<\/span><a href="\/pro" target="_top">Pro freischalten<\/a><\/span><\/td><\/tr>/);
+for (const kind of ['building', 'parcel']) {
+  const sectionStart = freeSelectionHtml.indexOf(`<section class="selection-section" data-selection-kind="${kind}">`);
+  const sectionEnd = freeSelectionHtml.indexOf('</section>', sectionStart);
+  assert.notEqual(sectionStart, -1, `Tabelle für ${kind} fehlt.`);
+  const section = freeSelectionHtml.slice(sectionStart, sectionEnd);
+  const bodyStart = section.indexOf('<tbody>') + '<tbody>'.length;
+  const body = section.slice(bodyStart, section.indexOf('</tbody>', bodyStart));
+  assert.match(body, /^<tr class="selection-pro-notice">/, `Der Pro-Hinweis für ${kind} muss die erste Tabellenzeile sein.`);
+  assert.match(body, /<\/tr><tr>/, `Unter dem Pro-Hinweis für ${kind} muss die gesperrte Datenzeile folgen.`);
+}
 assert.doesNotMatch(freeSelectionHtml, /selection-pro-lock|Pro buchen/, 'Die alte überlagernde Pro-Fläche darf nicht mehr gerendert werden.');
 
 const selectionSource = readFileSync(new URL('../live-viewer/viewer-app/selection.js', import.meta.url), 'utf8');

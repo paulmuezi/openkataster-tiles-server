@@ -222,7 +222,7 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Zustand', keys: ['zustand_text', 'zustand'] },
       { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
       { label: 'Flächen', keys: ['geschossflaeche_m2', ...BUILDING_OFFICIAL_AREA_KEYS, ...BUILDING_GEOMETRIC_AREA_KEYS], alwaysVisible: true, slot: 'areas' }
-    ], 'building', !parcels.length));
+    ], 'building', true));
     if (parcels.length) sections.push(lockedPreviewTable('Flurstücke', parcels, [
       { label: 'Gem.-Schl.', keys: ['gemarkungsschluessel', 'gemarkung_key'] },
       { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'] },
@@ -262,7 +262,7 @@ export function createSelectionController({ map, api, store, layout, elements })
     const notice = showProNotice
       ? `<tr class="selection-pro-notice"><td colspan="${columns.length}"><span class="selection-pro-notice-copy"><span>Diese Tabelle ist im Pro-Plan verfügbar.</span><a href="/pro" target="_top">Pro freischalten</a></span></td></tr>`
       : '';
-    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody>${rows}${notice}</tbody></table></div></section>`;
+    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody>${notice}${rows}</tbody></table></div></section>`;
   }
 
   function display(value) {

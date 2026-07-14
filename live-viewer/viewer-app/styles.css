@@ -177,7 +177,7 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 }
 .selection-pro-lock a:hover { background: #e95e08; }
 .preview-table td { height: 38px; color: #a0a6ae; }
-.locked-cell { font-weight: 500; }
+.locked-cell { font-weight: 400; }
 .layer-control { position: absolute; z-index: 25; right: 13px; top: 13px; display: grid; justify-items: end; gap: 8px; }
 .layer-menu { width: 226px; max-height: calc(100vh - 84px); overflow: auto; padding: 12px; scrollbar-width: thin; scrollbar-color: rgba(89,97,108,.54) transparent; }
 .layer-menu::-webkit-scrollbar { width: 7px; }
@@ -264,11 +264,14 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .selection-data-table th:first-child { z-index: 3; }
 .selection-data-table th.compact, .selection-data-table td.compact { width: 1%; white-space: nowrap; }
 .selection-data-table td:not(.compact) { max-width: 280px; white-space: normal; overflow-wrap: anywhere; }
-.selection-data-table td.strong { font-weight: 600; }
+.selection-data-table tbody td { font-weight: 400; }
+.selection-data-table th.numeric, .selection-data-table td.numeric { text-align: right; font-variant-numeric: tabular-nums; }
 .selection-data-table tfoot tr { --selection-row-bg: #f7f5f2; }
 .selection-data-table tfoot td { border-top: 1px solid var(--ok-border); border-bottom: 0; }
 .selection-data-table tfoot .summary-label, .selection-data-table tfoot .summary-value { font-weight: 600; color: #343a43; }
-.address-chip { display: block; }
+.selection-data-table tfoot .summary-label { text-align: right; }
+.address-list { display: grid; gap: 2px; }
+.address-chip { display: block; font-weight: 400; }
 
 .export-sidebar { width: var(--sidebar-open); min-width: var(--sidebar-open); height: 100%; border-left: 1px solid var(--ok-border); background: #fff; display: grid; grid-template-rows: 58px minmax(0,1fr) auto; overflow: hidden; opacity: 0; transform: translateX(12px); visibility: hidden; transition: opacity var(--motion-duration) var(--motion-easing), transform var(--motion-duration) var(--motion-easing), visibility 0s linear var(--motion-duration); }
 .planner-app[data-sidebar-open="true"] .export-sidebar { opacity: 1; transform: translateX(0); visibility: visible; transition: opacity 180ms ease, transform var(--motion-duration) var(--motion-easing); }

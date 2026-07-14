@@ -13,6 +13,85 @@ const FIELD_LABELS = {
   flurstuecksfolge: 'Flurstücksfolge'
 };
 
+const BUILDING_OFFICIAL_AREA_KEYS = ['amtliche_flaeche_m2', 'grundflaeche_m2'];
+const BUILDING_GEOMETRIC_AREA_KEYS = ['geometrische_flaeche_m2'];
+
+function hasValue(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  return typeof value !== 'object' || Object.keys(value).length > 0;
+}
+
+function geometryArea(geometry) {
+  if (!geometry) return 0;
+  const polygon = (coordinates) => {
+    if (!coordinates?.length) return 0;
+    const outer = polygonAreaMeters(coordinates[0]);
+    const holes = coordinates.slice(1).reduce((sum, ring) => sum + polygonAreaMeters(ring), 0);
+    return Math.max(0, outer - holes);
+  };
+  if (geometry.type === 'Polygon') return polygon(geometry.coordinates);
+  if (geometry.type === 'MultiPolygon') return geometry.coordinates.reduce((sum, coordinates) => sum + polygon(coordinates), 0);
+  return 0;
+}
+
+function firstPresentValue(item, keys) {
+  for (const key of keys) if (hasValue(item?.[key])) return item[key];
+  return null;
+}
+
+function buildingOfficialArea(item) {
+  return firstPresentValue(item, BUILDING_OFFICIAL_AREA_KEYS);
+}
+
+function buildingGeometricArea(item) {
+  if (hasValue(buildingOfficialArea(item))) return null;
+  const stored = firstPresentValue(item, BUILDING_GEOMETRIC_AREA_KEYS);
+  if (hasValue(stored)) return stored;
+  const calculated = geometryArea(item?.geometry);
+  return calculated > 0 ? calculated : null;
+}
+
+export function buildingAreaVisibility(buildings = [], { preview = false } = {}) {
+  const states = buildings.map((item) => {
+    if (preview) {
+      const available = new Set(Array.isArray(item?.available_fields) ? item.available_fields : []);
+      return {
+        official: BUILDING_OFFICIAL_AREA_KEYS.some((key) => available.has(key)),
+        geometric: BUILDING_GEOMETRIC_AREA_KEYS.some((key) => available.has(key)) || Boolean(item?.geometry)
+      };
+    }
+    return {
+      official: hasValue(buildingOfficialArea(item)),
+      geometric: hasValue(buildingGeometricArea(item))
+    };
+  });
+  return {
+    showOfficial: states.some((state) => state.official),
+    showGeometric: states.some((state) => !state.official && state.geometric)
+  };
+}
+
+export function selectionAddressLabels(item = {}) {
+  const entries = Array.isArray(item.addresses) && item.addresses.length
+    ? item.addresses
+    : [item.address].filter(hasValue);
+  const labels = entries.map((address) => {
+    if (typeof address === 'string') return address.trim();
+    if (!address || typeof address !== 'object') return '';
+    const streetLine = address.street_house || [address.street, address.house_number].filter(Boolean).join(' ');
+    const placeLine = [
+      address.post_code || address.postal_code || address.postcode,
+      address.city || address.municipality || address.place
+    ].filter(Boolean).join(' ');
+    return String(address.label || [streetLine, placeLine].filter(Boolean).join(', ')).trim();
+  }).filter(Boolean);
+  const fallback = addressLabel(item);
+  if (!labels.length && fallback && fallback !== '–') labels.push(fallback);
+  return [...new Set(labels)];
+}
+
 export function createSelectionController({ map, api, store, layout, elements }) {
   const { selectionContent, selectionCount, selectTool, selectionDock } = elements;
   let request = null;
@@ -125,6 +204,7 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function freePreviewTable(buildings, parcels) {
     const sections = [];
+    const buildingAreas = buildingAreaVisibility(buildings, { preview: true });
     if (buildings.length) sections.push(lockedPreviewTable('Gebäude', buildings, [
       { label: 'Gebäudefunktion', keys: ['gebaeudefunktion_text', 'gebaeudefunktion'] },
       { label: 'Name', keys: ['name'] },
@@ -135,23 +215,22 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Dachgeschossausbau', keys: ['dachgeschossausbau_text', 'dachgeschossausbau'] },
       { label: 'Bauweise', keys: ['bauweise_text', 'bauweise'] },
       { label: 'Baujahr', keys: ['baujahr'] },
-      { label: 'Grundfläche', keys: ['grundflaeche_m2'] },
-      { label: 'Geschossfläche', keys: ['geschossflaeche_m2'] },
-      { label: 'Geometrische Fläche', keys: ['geometrische_flaeche_m2'] },
       { label: 'Umbauter Raum', keys: ['umbauter_raum_m3'] },
       { label: 'Objekthöhe', keys: ['objekthoehe_m'] },
       { label: 'Lage', keys: ['lage_zur_erdoberflaeche_text', 'lage_zur_erdoberflaeche'] },
       { label: 'Hochhaus', keys: ['hochhaus'] },
       { label: 'Weitere Gebäudefunktion', keys: ['weitere_gebaeudefunktion_text', 'weitere_gebaeudefunktion'] },
       { label: 'Zustand', keys: ['zustand_text', 'zustand'] },
-      { label: 'Adressen', keys: ['addresses', 'address'] }
+      { label: 'Adressen', keys: ['addresses', 'address'] },
+      { label: 'Geschossfläche', keys: ['geschossflaeche_m2'] },
+      { label: 'Amtliche Fläche', keys: BUILDING_OFFICIAL_AREA_KEYS, visible: buildingAreas.showOfficial },
+      { label: 'Geometrische Fläche', keys: BUILDING_GEOMETRIC_AREA_KEYS, visible: buildingAreas.showGeometric }
     ]));
     if (parcels.length) sections.push(lockedPreviewTable('Flurstücke', parcels, [
       { label: 'Gem.-Schl.', keys: ['gemarkungsschluessel', 'gemarkung_key'] },
       { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'] },
       { label: 'Flur', keys: ['flur'] },
       { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'] },
-      { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] },
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'] },
       { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
       { label: 'Flurstücksfolge', keys: ['flurstuecksfolge'] },
@@ -159,7 +238,8 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'] },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'] },
       { label: 'Adressen', keys: ['addresses', 'address'] },
-      { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'] }
+      { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'] },
+      { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
     ]));
     if (!sections.length) return '';
     return `${sections.join('')}<div class="selection-pro-lock" role="note" aria-label="Pro-Objektdaten"><span class="selection-pro-lock-copy"><strong>Vollständige Objektdaten</strong><small>Alle Gebäude- und Flurstücksdaten anzeigen.</small></span><a href="/pro" target="_top">Pro buchen</a></div>`;
@@ -167,7 +247,7 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function lockedPreviewTable(title, items, definitions) {
     const available = new Set(items.flatMap((item) => item.available_fields || []));
-    const columns = definitions.filter((column) => column.keys.some((key) => available.has(key)));
+    const columns = definitions.filter((column) => column.visible !== false && column.keys.some((key) => available.has(key)));
     const headers = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('');
     const cells = columns.map(() => '<td><span class="locked-cell">–</span></td>').join('');
     return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody><tr>${cells}</tr></tbody></table></div></section>`;
@@ -177,22 +257,9 @@ export function createSelectionController({ map, api, store, layout, elements })
     return value === null || value === undefined || value === '' ? '–' : escapeHtml(value);
   }
 
-  function hasValue(value) {
-    if (value === null || value === undefined) return false;
-    if (typeof value === 'string') return value.trim() !== '';
-    if (Array.isArray(value)) return value.length > 0;
-    return typeof value !== 'object' || Object.keys(value).length > 0;
-  }
-
-  function addressLabels(item) {
-    return Array.isArray(item.addresses) && item.addresses.length
-      ? item.addresses.map((address) => address?.label || [address?.street, address?.house_number].filter(Boolean).join(' ')).filter(Boolean)
-      : [addressLabel(item)].filter((label) => label && label !== '–');
-  }
-
   function addressChips(item) {
-    const labels = addressLabels(item);
-    return labels.length ? labels.map((label) => `<span class="address-chip">${escapeHtml(label)}</span>`).join('') : '–';
+    const labels = selectionAddressLabels(item);
+    return labels.length ? `<span class="address-list">${labels.map((label) => `<span class="address-chip">${escapeHtml(label)}</span>`).join('')}</span>` : '–';
   }
 
   function parcelUsage(item) {
@@ -203,19 +270,6 @@ export function createSelectionController({ map, api, store, layout, elements })
       return Number.isFinite(share) && share > 0 ? `${name} ${Math.round(share * 100)}%` : name;
     }).join(', ');
     return item.nutzung_haupt || item.nutzung || item.tatsaechliche_nutzung || item.thema || '';
-  }
-
-  function geometryArea(geometry) {
-    if (!geometry) return 0;
-    const polygon = (coordinates) => {
-      if (!coordinates?.length) return 0;
-      const outer = polygonAreaMeters(coordinates[0]);
-      const holes = coordinates.slice(1).reduce((sum, ring) => sum + polygonAreaMeters(ring), 0);
-      return Math.max(0, outer - holes);
-    };
-    if (geometry.type === 'Polygon') return polygon(geometry.coordinates);
-    if (geometry.type === 'MultiPolygon') return geometry.coordinates.reduce((sum, coordinates) => sum + polygon(coordinates), 0);
-    return 0;
   }
 
   function pick(item, keys) {
@@ -270,8 +324,12 @@ export function createSelectionController({ map, api, store, layout, elements })
   }
 
   function dynamicTable(title, items, definitions) {
-    const columns = [...definitions, ...extraColumns(items, definitions)].filter((column) => items.some((item) => hasValue(columnValue(column, item))));
-    const columnClass = (column) => [column.compact ? 'compact' : '', column.strong ? 'strong' : ''].filter(Boolean).join(' ');
+    const visibleDefinitions = definitions.filter((column) => column.visible !== false);
+    const extra = extraColumns(items, definitions);
+    const firstAreaIndex = visibleDefinitions.findIndex((column) => column.sum);
+    const orderedDefinitions = firstAreaIndex < 0 ? [...visibleDefinitions, ...extra] : [...visibleDefinitions.slice(0, firstAreaIndex), ...extra, ...visibleDefinitions.slice(firstAreaIndex)];
+    const columns = orderedDefinitions.filter((column) => items.some((item) => hasValue(columnValue(column, item))));
+    const columnClass = (column) => [column.compact ? 'compact' : '', column.numeric ? 'numeric' : ''].filter(Boolean).join(' ');
     const headers = columns.map((column) => {
       const className = columnClass(column);
       const fullLabel = column.title || column.label;
@@ -283,19 +341,21 @@ export function createSelectionController({ map, api, store, layout, elements })
       const className = columnClass(column);
       return `<td${className ? ` class="${className}"` : ''}>${content}</td>`;
     }).join('')}</tr>`).join('');
-    const hasTotals = items.length > 1 && columns.some((column) => column.sum);
-    const totals = hasTotals ? `<tfoot><tr>${columns.map((column, index) => {
-      if (index === 0) return '<td class="summary-label">Summe</td>';
+    const firstSumIndex = columns.findIndex((column) => column.sum);
+    const hasTotals = items.length > 1 && firstSumIndex >= 0;
+    const totals = hasTotals ? `<tfoot><tr><td class="summary-label" colspan="${firstSumIndex}">Summe</td>${columns.slice(firstSumIndex).map((column) => {
       if (!column.sum) return '<td></td>';
-      const values = items.map((item) => Number(columnValue(column, item))).filter(Number.isFinite);
-      return `<td class="summary-value${column.compact ? ' compact' : ''}">${values.length ? formatCell(values.reduce((sum, value) => sum + value, 0), column.format) : '–'}</td>`;
+      const values = items.map((item) => columnValue(column, item)).filter(hasValue).map(Number).filter(Number.isFinite);
+      const className = ['summary-value', columnClass(column)].filter(Boolean).join(' ');
+      return `<td class="${className}">${values.length ? formatCell(values.reduce((sum, value) => sum + value, 0), column.format) : '–'}</td>`;
     }).join('')}</tr></tfoot>` : '';
     return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody>${totals}</table></div></section>`;
   }
 
   function buildingTable(buildings) {
+    const areaVisibility = buildingAreaVisibility(buildings);
     const columns = [
-      { label: 'Gebäudefunktion', keys: ['gebaeudefunktion_text', 'gebaeudefunktion'], strong: true },
+      { label: 'Gebäudefunktion', keys: ['gebaeudefunktion_text', 'gebaeudefunktion'] },
       { label: 'Name', keys: ['name'] },
       { label: 'Vollgeschosse', keys: ['geschosse_oberirdisch'], compact: true },
       { label: 'Unterirdische Geschosse', keys: ['geschosse_unterirdisch'], compact: true },
@@ -304,16 +364,16 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Dachgeschossausbau', keys: ['dachgeschossausbau_text', 'dachgeschossausbau'] },
       { label: 'Bauweise', keys: ['bauweise_text', 'bauweise'] },
       { label: 'Baujahr', keys: ['baujahr'], compact: true },
-      { label: 'Grundfläche', keys: ['grundflaeche_m2'], format: 'area', sum: true, compact: true },
-      { label: 'Geschossfläche', keys: ['geschossflaeche_m2'], format: 'area', sum: true, compact: true },
-      { label: 'Geometrische Fläche', keys: ['geometrische_flaeche_m2'], value: (item) => item.geometrische_flaeche_m2 || geometryArea(item.geometry), format: 'area', sum: true, compact: true },
       { label: 'Umbauter Raum', keys: ['umbauter_raum_m3'], format: 'volume', compact: true },
       { label: 'Objekthöhe', keys: ['objekthoehe_m'], format: 'length', compact: true },
       { label: 'Lage', keys: ['lage_zur_erdoberflaeche_text', 'lage_zur_erdoberflaeche'] },
       { label: 'Hochhaus', keys: ['hochhaus'], format: 'boolean', compact: true },
       { label: 'Weitere Gebäudefunktion', keys: ['weitere_gebaeudefunktion_text', 'weitere_gebaeudefunktion'] },
       { label: 'Zustand', keys: ['zustand_text', 'zustand'] },
-      { label: 'Adressen', keys: ['addresses', 'address'], value: addressLabels, html: (item) => addressChips(item) }
+      { label: 'Adressen', keys: ['addresses', 'address'], value: selectionAddressLabels, html: (item) => addressChips(item) },
+      { label: 'Geschossfläche', keys: ['geschossflaeche_m2'], format: 'area', sum: true, compact: true, numeric: true },
+      { label: 'Amtliche Fläche', keys: BUILDING_OFFICIAL_AREA_KEYS, value: buildingOfficialArea, format: 'area', sum: true, compact: true, numeric: true, visible: areaVisibility.showOfficial },
+      { label: 'Geometrische Fläche', keys: BUILDING_GEOMETRIC_AREA_KEYS, value: buildingGeometricArea, format: 'area', sum: true, compact: true, numeric: true, visible: areaVisibility.showGeometric }
     ];
     return dynamicTable('Gebäude', buildings, columns);
   }
@@ -323,16 +383,16 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Gem.-Schl.', title: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'], compact: true },
       { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], value: (item) => item.gemarkung && item.gemarkungsnummer ? `${item.gemarkung} (${item.gemarkungsnummer})` : item.gemarkung || item.gemarkungsnummer },
       { label: 'Flur', keys: ['flur'], compact: true },
-      { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], value: (item) => item.flurstueck || [item.zaehler, item.nenner].filter(Boolean).join('/'), strong: true, compact: true },
-      { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'], format: 'area', sum: true, compact: true },
+      { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], value: (item) => item.flurstueck || [item.zaehler, item.nenner].filter(Boolean).join('/'), compact: true },
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'], value: parcelUsage },
       { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
       { label: 'Flurstücksfolge', keys: ['flurstuecksfolge'] },
       { label: 'Abweichender Rechtszustand', keys: ['abweichender_rechtszustand'], format: 'boolean' },
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'], format: 'boolean' },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'], format: 'boolean' },
-      { label: 'Adressen', keys: ['addresses', 'address'], value: addressLabels, html: (item) => addressChips(item) },
-      { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], format: 'date', compact: true }
+      { label: 'Adressen', keys: ['addresses', 'address'], value: selectionAddressLabels, html: (item) => addressChips(item) },
+      { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], format: 'date', compact: true },
+      { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'], format: 'area', sum: true, compact: true, numeric: true }
     ];
     return dynamicTable('Flurstücke', parcels, columns);
   }

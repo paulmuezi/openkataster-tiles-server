@@ -17,10 +17,9 @@ assert.match(stylesSource, /\.selection-data-table \.selection-pro-notice td \{ 
 assert.match(stylesSource, /\.selection-pro-notice a \{ color: var\(--ok-orange\); font-weight: 500; text-decoration: none;/);
 assert.doesNotMatch(stylesSource, /\.measure-pro-lock a\b/);
 
-for (const moduleName of ['measure', 'selection']) {
-  assert.match(appSource, new RegExp(`\\./${moduleName}\\.js\\?v=20260714-pro-plan-notices1`));
-}
-assert.match(indexSource, /styles\.css\?v=20260714-pro-plan-notices1/);
-assert.match(indexSource, /app\.js\?v=20260714-pro-plan-notices1/);
+assert.match(appSource, /\.\/measure\.js\?v=20260714-pro-plan-notices1/);
+assert.match(appSource, /\.\/selection\.js\?v=20260714-aligned-table-columns1/);
+assert.match(indexSource, /styles\.css\?v=20260714-aligned-table-columns1/);
+assert.match(indexSource, /app\.js\?v=20260714-aligned-table-columns1/);
 
 console.log('pro-plan-notice-tests=ok');

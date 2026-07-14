@@ -6,7 +6,7 @@ import { createPlannerMap } from './map.js?v=20260712-sa-mask1';
 import { createMeasureController } from './measure.js?v=20260714-pro-plan-notices1';
 import { createPersistence, readPersistedState } from './persistence.js';
 import { createSearchController } from './search.js?v=20260712-field-suggestions1';
-import { createSelectionController } from './selection.js?v=20260714-pro-plan-notices1';
+import { createSelectionController } from './selection.js?v=20260714-aligned-table-columns1';
 import { createSourceController } from './sources.js?v=20260711-inline-sources1';
 import { createStore } from './store.js';
 

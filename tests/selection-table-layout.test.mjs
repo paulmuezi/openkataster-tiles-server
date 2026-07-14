@@ -93,13 +93,28 @@ const mixedBuildingHtml = renderSelection({
   ]
 });
 
-assert.match(mixedBuildingHtml, /<th class="compact numeric"[^>]*>Amtliche Fläche<\/th><th class="compact numeric"[^>]*>Geometrische Fläche<\/th>/);
-assert.match(mixedBuildingHtml, /Sondermerkmal<\/th><th class="compact numeric"[^>]*>Amtliche Fläche<\/th><th class="compact numeric"[^>]*>Geometrische Fläche<\/th><\/tr><\/thead>/, 'Dynamische Felder dürfen den rechtsbündigen Flächenblock nicht verdrängen.');
+assert.match(mixedBuildingHtml, /Sondermerkmal<\/th><th class="selection-column-address" data-selection-column="address"[^>]*>Adressen<\/th><th class="selection-column-areas" data-selection-column="areas"[^>]*>Flächen<\/th>/, 'Dynamische Felder müssen vor den gemeinsam ausgerichteten Schluss-Spalten bleiben.');
 assert.match(mixedBuildingHtml, /<span class="address-list"><span class="address-chip">Am Markt 1<\/span><span class="address-chip">Am Markt 2<\/span><\/span>/);
-assert.match(mixedBuildingHtml, /<td class="compact numeric">100 m²<\/td><td class="compact numeric">–<\/td>/, 'Bei amtlicher Fläche darf derselbe Eintrag nicht zusätzlich geometrisch ausgewiesen werden.');
-assert.match(mixedBuildingHtml, /<td class="compact numeric">–<\/td><td class="compact numeric">40 m²<\/td>/, 'Rein geometrische Gebäude müssen in der gemischten Auswahl ihre eigene Spalte behalten.');
-assert.match(mixedBuildingHtml, /<tfoot><tr><td class="summary-label" colspan="\d+">Summe<\/td>/);
+assert.match(mixedBuildingHtml, /Amtliche Fläche<\/span><span class="selection-area-value">100 m²<\/span><span class="selection-area-label">Geometrische Fläche<\/span><span class="selection-area-value">–<\/span>/, 'Bei amtlicher Fläche darf derselbe Eintrag nicht zusätzlich geometrisch ausgewiesen werden.');
+assert.match(mixedBuildingHtml, /Amtliche Fläche<\/span><span class="selection-area-value">–<\/span><span class="selection-area-label">Geometrische Fläche<\/span><span class="selection-area-value">40 m²<\/span>/, 'Rein geometrische Gebäude müssen in der gemischten Auswahl ihren eigenen Wert behalten.');
+assert.match(mixedBuildingHtml, /<tfoot><tr><td class="summary-label" colspan="\d+">Summe<\/td><td class="summary-value selection-column-areas" data-selection-column="areas">[\s\S]*100 m²[\s\S]*40 m²/);
 assert.doesNotMatch(mixedBuildingHtml, /class="[^"]*strong/, 'Gerenderte Datenzellen dürfen keine Hervorhebungsklasse enthalten.');
+
+const alignedSelectionHtml = renderSelection({
+  buildings: [{ preview_id: 'aligned-building', grundflaeche_m2: 100, addresses: ['Gebäudeweg 1'] }],
+  parcels: [{ preview_id: 'aligned-parcel', flurstueck: '1/2', amtliche_flaeche_m2: 500, addresses: ['Flurweg 2'] }]
+});
+
+function trailingSlots(html, kind) {
+  const section = html.match(new RegExp(`<section class="selection-section" data-selection-kind="${kind}">[\\s\\S]*?<thead><tr>([\\s\\S]*?)<\\/tr>`));
+  assert.ok(section, `Tabelle für ${kind} fehlt.`);
+  return [...section[1].matchAll(/data-selection-column="([^"]+)"/g)].map((match) => match[1]);
+}
+
+assert.deepEqual(trailingSlots(alignedSelectionHtml, 'building'), ['address', 'areas']);
+assert.deepEqual(trailingSlots(alignedSelectionHtml, 'parcel'), ['address', 'areas']);
+assert.match(alignedSelectionHtml, /data-selection-kind="building"[\s\S]*?selection-area-label">Amtliche Fläche<\/span><span class="selection-area-value">100 m²/);
+assert.match(alignedSelectionHtml, /data-selection-kind="parcel"[\s\S]*?selection-area-label">Amtliche Fläche<\/span><span class="selection-area-value">500 m²/);
 
 const freeSelectionHtml = renderSelection({
   buildings: [{
@@ -121,12 +136,16 @@ const stylesSource = readFileSync(new URL('../live-viewer/viewer-app/styles.css'
 const buildingBlock = selectionSource.slice(selectionSource.indexOf('function buildingTable'), selectionSource.indexOf('function parcelTable'));
 const parcelBlock = selectionSource.slice(selectionSource.indexOf('function parcelTable'), selectionSource.indexOf('async function selectAt'));
 
-assert.ok(buildingBlock.indexOf("label: 'Adressen'") < buildingBlock.indexOf("label: 'Geschossfläche'"));
+assert.ok(buildingBlock.indexOf("label: 'Adressen'") < buildingBlock.indexOf('areaColumn(['));
 assert.ok(buildingBlock.indexOf("label: 'Geschossfläche'") < buildingBlock.indexOf("label: 'Amtliche Fläche'"));
 assert.ok(buildingBlock.indexOf("label: 'Amtliche Fläche'") < buildingBlock.indexOf("label: 'Geometrische Fläche'"));
-assert.ok(parcelBlock.indexOf("label: 'Entstehung'") < parcelBlock.indexOf("label: 'Amtliche Fläche'"));
+assert.ok(parcelBlock.indexOf("label: 'Entstehung'") < parcelBlock.indexOf("label: 'Adressen'"));
+assert.ok(parcelBlock.indexOf("label: 'Adressen'") < parcelBlock.indexOf('areaColumn(['));
 assert.doesNotMatch(selectionSource, /strong:\s*true/, 'Datenzellen dürfen nicht zufällig fett markiert werden.');
 assert.match(selectionSource, /colspan="\$\{firstSumIndex(?: \+ 1)?\}"/, 'Die Summenbezeichnung muss direkt an den Flächenblock anschließen.');
-assert.match(stylesSource, /th\.numeric, \.selection-data-table td\.numeric \{ text-align: right;/, 'Flächenwerte müssen rechtsbündig sein.');
+assert.match(stylesSource, /grid-template-columns: minmax\(100%, max-content\)/, 'Beide Tabellen müssen dieselbe Gesamtbreite teilen.');
+assert.match(stylesSource, /selection-column-address[^}]*width: 220px[^}]*min-width: 220px[^}]*max-width: 220px/, 'Adressspalten müssen dieselbe Ankerbreite haben.');
+assert.match(stylesSource, /selection-column-areas[^}]*width: 250px[^}]*min-width: 250px[^}]*max-width: 250px/, 'Flächenspalten müssen dieselbe Ankerbreite haben.');
+assert.match(stylesSource, /selection-area-value \{ text-align: right;/, 'Flächenwerte müssen rechtsbündig sein.');
 
 console.log('selection-table-layout-tests=ok');

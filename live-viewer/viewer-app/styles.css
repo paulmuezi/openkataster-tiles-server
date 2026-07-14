@@ -211,7 +211,8 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .selection-head > div { display: flex; align-items: baseline; gap: 10px; }
 .selection-head strong { font-weight: 600; }
 .selection-head span { color: var(--ok-muted); font-size: 12px; }
-.selection-content { min-width: 0; min-height: 0; overflow: auto; display: grid; align-content: start; }
+.selection-content { min-width: 0; min-height: 0; overflow: auto; display: grid; grid-template-columns: minmax(100%, max-content); align-content: start; }
+.selection-section { min-width: 100%; }
 .selection-section + .selection-section { border-top: 1px solid var(--ok-border); }
 .selection-section-title { position: sticky; left: 0; z-index: 2; padding: 7px 13px; border-bottom: 1px solid var(--ok-border-soft); background: #fff; color: #303640; font-size: 13px; font-weight: 650; }
 .selection-table-wrap { min-width: 0; overflow: visible; }
@@ -225,6 +226,12 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .selection-data-table th:first-child { z-index: 3; }
 .selection-data-table th.compact, .selection-data-table td.compact { width: 1%; white-space: nowrap; }
 .selection-data-table td:not(.compact) { max-width: 280px; white-space: normal; overflow-wrap: anywhere; }
+.selection-data-table th.selection-column-address, .selection-data-table td.selection-column-address { width: 220px; min-width: 220px; max-width: 220px; }
+.selection-data-table th.selection-column-areas, .selection-data-table td.selection-column-areas { width: 250px; min-width: 250px; max-width: 250px; }
+.selection-area-list { display: grid; grid-template-columns: minmax(0,1fr) max-content; gap: 2px 12px; align-items: baseline; width: 100%; }
+.selection-area-label { color: #69717b; white-space: normal; }
+.selection-area-value { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.selection-data-table tfoot .selection-area-label { color: #4f5661; }
 .selection-data-table tbody td { font-weight: 400; }
 .selection-data-table th.numeric, .selection-data-table td.numeric { text-align: right; font-variant-numeric: tabular-nums; }
 .selection-data-table tfoot tr { --selection-row-bg: #f7f5f2; }

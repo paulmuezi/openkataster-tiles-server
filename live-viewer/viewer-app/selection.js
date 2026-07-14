@@ -204,7 +204,6 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function freePreviewTable(buildings, parcels) {
     const sections = [];
-    const buildingAreas = buildingAreaVisibility(buildings, { preview: true });
     if (buildings.length) sections.push(lockedPreviewTable('Gebäude', buildings, [
       { label: 'Gebäudefunktion', keys: ['gebaeudefunktion_text', 'gebaeudefunktion'] },
       { label: 'Name', keys: ['name'] },
@@ -221,11 +220,9 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Hochhaus', keys: ['hochhaus'] },
       { label: 'Weitere Gebäudefunktion', keys: ['weitere_gebaeudefunktion_text', 'weitere_gebaeudefunktion'] },
       { label: 'Zustand', keys: ['zustand_text', 'zustand'] },
-      { label: 'Adressen', keys: ['addresses', 'address'] },
-      { label: 'Geschossfläche', keys: ['geschossflaeche_m2'] },
-      { label: 'Amtliche Fläche', keys: BUILDING_OFFICIAL_AREA_KEYS, visible: buildingAreas.showOfficial },
-      { label: 'Geometrische Fläche', keys: BUILDING_GEOMETRIC_AREA_KEYS, visible: buildingAreas.showGeometric }
-    ], !parcels.length));
+      { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
+      { label: 'Flächen', keys: ['geschossflaeche_m2', ...BUILDING_OFFICIAL_AREA_KEYS, ...BUILDING_GEOMETRIC_AREA_KEYS], alwaysVisible: true, slot: 'areas' }
+    ], 'building', !parcels.length));
     if (parcels.length) sections.push(lockedPreviewTable('Flurstücke', parcels, [
       { label: 'Gem.-Schl.', keys: ['gemarkungsschluessel', 'gemarkung_key'] },
       { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'] },
@@ -237,24 +234,35 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Abweichender Rechtszustand', keys: ['abweichender_rechtszustand'] },
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'] },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'] },
-      { label: 'Adressen', keys: ['addresses', 'address'] },
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'] },
-      { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
-    ], true));
+      { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
+      { label: 'Flächen', keys: ['amtliche_flaeche_m2'], alwaysVisible: true, slot: 'areas' }
+    ], 'parcel', true));
     if (!sections.length) return '';
     return sections.join('');
   }
 
-  function lockedPreviewTable(title, items, definitions, showProNotice = false) {
+  function tableColumnAttributes(column, additionalClasses = []) {
+    const className = [
+      ...additionalClasses,
+      column.compact ? 'compact' : '',
+      column.numeric ? 'numeric' : '',
+      column.slot ? `selection-column-${column.slot}` : ''
+    ].filter(Boolean).join(' ');
+    const slot = column.slot ? ` data-selection-column="${escapeHtml(column.slot)}"` : '';
+    return `${className ? ` class="${className}"` : ''}${slot}`;
+  }
+
+  function lockedPreviewTable(title, items, definitions, kind, showProNotice = false) {
     const available = new Set(items.flatMap((item) => item.available_fields || []));
-    const columns = definitions.filter((column) => column.visible !== false && column.keys.some((key) => available.has(key)));
-    const headers = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('');
-    const cells = columns.map(() => '<td><span class="locked-cell">–</span></td>').join('');
+    const columns = definitions.filter((column) => column.visible !== false && (column.alwaysVisible || column.keys.some((key) => available.has(key))));
+    const headers = columns.map((column) => `<th${tableColumnAttributes(column)}>${escapeHtml(column.label)}</th>`).join('');
+    const cells = columns.map((column) => `<td${tableColumnAttributes(column)}><span class="locked-cell">–</span></td>`).join('');
     const rows = `<tr>${cells}</tr>`;
     const notice = showProNotice
       ? `<tr class="selection-pro-notice"><td colspan="${columns.length}"><span class="selection-pro-notice-copy"><span>Diese Tabelle ist im Pro-Plan verfügbar.</span><a href="/pro" target="_top">Pro freischalten</a></span></td></tr>`
       : '';
-    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody>${rows}${notice}</tbody></table></div></section>`;
+    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody>${rows}${notice}</tbody></table></div></section>`;
   }
 
   function display(value) {
@@ -327,37 +335,59 @@ export function createSelectionController({ map, api, store, layout, elements })
     }).sort((a, b) => humanizeField(a).localeCompare(humanizeField(b), 'de')).map((key) => ({ label: humanizeField(key), keys: [key] }));
   }
 
-  function dynamicTable(title, items, definitions) {
+  function areaList(rows) {
+    if (!rows.length) return '–';
+    return `<span class="selection-area-list">${rows.map((row) => `<span class="selection-area-label">${escapeHtml(row.label)}</span><span class="selection-area-value">${formatCell(row.value, 'area')}</span>`).join('')}</span>`;
+  }
+
+  function areaColumn(rows) {
+    const visibleRows = rows.filter((row) => row.visible !== false);
+    const rowValue = (row, item) => row.value ? row.value(item) : pick(item, row.keys);
+    return {
+      label: 'Flächen',
+      keys: visibleRows.flatMap((row) => row.keys || []),
+      alwaysVisible: true,
+      slot: 'areas',
+      value: (item) => visibleRows.map((row) => rowValue(row, item)).filter(hasValue),
+      html: (item) => areaList(visibleRows.map((row) => ({ label: row.label, value: rowValue(row, item) }))),
+      summary: (items) => areaList(visibleRows.map((row) => {
+        const values = items.map((item) => rowValue(row, item)).filter(hasValue).map(Number).filter(Number.isFinite);
+        return { label: row.label, value: values.length ? values.reduce((sum, value) => sum + value, 0) : null };
+      }))
+    };
+  }
+
+  function dynamicTable(title, items, definitions, kind) {
     const visibleDefinitions = definitions.filter((column) => column.visible !== false);
     const extra = extraColumns(items, definitions);
-    const firstAreaIndex = visibleDefinitions.findIndex((column) => column.sum);
-    const orderedDefinitions = firstAreaIndex < 0 ? [...visibleDefinitions, ...extra] : [...visibleDefinitions.slice(0, firstAreaIndex), ...extra, ...visibleDefinitions.slice(firstAreaIndex)];
-    const columns = orderedDefinitions.filter((column) => items.some((item) => hasValue(columnValue(column, item))));
-    const columnClass = (column) => [column.compact ? 'compact' : '', column.numeric ? 'numeric' : ''].filter(Boolean).join(' ');
+    const firstTrailingIndex = visibleDefinitions.findIndex((column) => column.slot);
+    const orderedDefinitions = firstTrailingIndex < 0
+      ? [...visibleDefinitions, ...extra]
+      : [...visibleDefinitions.slice(0, firstTrailingIndex), ...extra, ...visibleDefinitions.slice(firstTrailingIndex)];
+    const columns = orderedDefinitions.filter((column) => column.alwaysVisible || items.some((item) => hasValue(columnValue(column, item))));
     const headers = columns.map((column) => {
-      const className = columnClass(column);
       const fullLabel = column.title || column.label;
-      return `<th${className ? ` class="${className}"` : ''} title="${escapeHtml(fullLabel)}">${escapeHtml(column.label)}</th>`;
+      return `<th${tableColumnAttributes(column)} title="${escapeHtml(fullLabel)}">${escapeHtml(column.label)}</th>`;
     }).join('');
     const rows = items.map((item) => `<tr>${columns.map((column) => {
       const value = columnValue(column, item);
       const content = column.html ? column.html(item, value) : formatCell(value, column.format);
-      const className = columnClass(column);
-      return `<td${className ? ` class="${className}"` : ''}>${content}</td>`;
+      return `<td${tableColumnAttributes(column)}>${content}</td>`;
     }).join('')}</tr>`).join('');
-    const firstSumIndex = columns.findIndex((column) => column.sum);
+    const firstSumIndex = columns.findIndex((column) => column.sum || column.summary);
     const hasTotals = items.length > 1 && firstSumIndex >= 0;
     const totals = hasTotals ? `<tfoot><tr><td class="summary-label" colspan="${firstSumIndex}">Summe</td>${columns.slice(firstSumIndex).map((column) => {
+      if (column.summary) return `<td${tableColumnAttributes(column, ['summary-value'])}>${column.summary(items)}</td>`;
       if (!column.sum) return '<td></td>';
       const values = items.map((item) => columnValue(column, item)).filter(hasValue).map(Number).filter(Number.isFinite);
-      const className = ['summary-value', columnClass(column)].filter(Boolean).join(' ');
-      return `<td class="${className}">${values.length ? formatCell(values.reduce((sum, value) => sum + value, 0), column.format) : '–'}</td>`;
+      return `<td${tableColumnAttributes(column, ['summary-value'])}>${values.length ? formatCell(values.reduce((sum, value) => sum + value, 0), column.format) : '–'}</td>`;
     }).join('')}</tr></tfoot>` : '';
-    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody>${totals}</table></div></section>`;
+    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody>${totals}</table></div></section>`;
   }
 
   function buildingTable(buildings) {
     const areaVisibility = buildingAreaVisibility(buildings);
+    const showFloorArea = buildings.some((item) => hasValue(item.geschossflaeche_m2));
     const columns = [
       { label: 'Gebäudefunktion', keys: ['gebaeudefunktion_text', 'gebaeudefunktion'] },
       { label: 'Name', keys: ['name'] },
@@ -374,12 +404,19 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Hochhaus', keys: ['hochhaus'], format: 'boolean', compact: true },
       { label: 'Weitere Gebäudefunktion', keys: ['weitere_gebaeudefunktion_text', 'weitere_gebaeudefunktion'] },
       { label: 'Zustand', keys: ['zustand_text', 'zustand'] },
-      { label: 'Adressen', keys: ['addresses', 'address'], value: selectionAddressLabels, html: (item) => addressChips(item) },
-      { label: 'Geschossfläche', keys: ['geschossflaeche_m2'], format: 'area', sum: true, compact: true, numeric: true },
-      { label: 'Amtliche Fläche', keys: BUILDING_OFFICIAL_AREA_KEYS, value: buildingOfficialArea, format: 'area', sum: true, compact: true, numeric: true, visible: areaVisibility.showOfficial },
-      { label: 'Geometrische Fläche', keys: BUILDING_GEOMETRIC_AREA_KEYS, value: buildingGeometricArea, format: 'area', sum: true, compact: true, numeric: true, visible: areaVisibility.showGeometric }
+      { label: 'Adressen', keys: ['addresses', 'address'], value: selectionAddressLabels, html: (item) => addressChips(item), alwaysVisible: true, slot: 'address' },
+      areaColumn([
+        { label: 'Geschossfläche', keys: ['geschossflaeche_m2'], visible: showFloorArea },
+        { label: 'Amtliche Fläche', keys: BUILDING_OFFICIAL_AREA_KEYS, value: buildingOfficialArea, visible: areaVisibility.showOfficial },
+        {
+          label: 'Geometrische Fläche',
+          keys: BUILDING_GEOMETRIC_AREA_KEYS,
+          value: buildingGeometricArea,
+          visible: areaVisibility.showGeometric
+        }
+      ])
     ];
-    return dynamicTable('Gebäude', buildings, columns);
+    return dynamicTable('Gebäude', buildings, columns, 'building');
   }
 
   function parcelTable(parcels) {
@@ -394,11 +431,13 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Abweichender Rechtszustand', keys: ['abweichender_rechtszustand'], format: 'boolean' },
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'], format: 'boolean' },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'], format: 'boolean' },
-      { label: 'Adressen', keys: ['addresses', 'address'], value: selectionAddressLabels, html: (item) => addressChips(item) },
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], format: 'date', compact: true },
-      { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'], format: 'area', sum: true, compact: true, numeric: true }
+      { label: 'Adressen', keys: ['addresses', 'address'], value: selectionAddressLabels, html: (item) => addressChips(item), alwaysVisible: true, slot: 'address' },
+      areaColumn([
+        { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
+      ])
     ];
-    return dynamicTable('Flurstücke', parcels, columns);
+    return dynamicTable('Flurstücke', parcels, columns, 'parcel');
   }
 
   async function selectAt(lngLat, additive = false, preferredKind = null) {

@@ -204,21 +204,51 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function freePreviewTable(buildings, parcels) {
     const sections = [];
-    if (buildings.length) sections.push(freeInfoSection(
-      'Gebäude',
-      'Gebäudeinfos sind im Pro-Plan verfügbar.',
-      'building'
-    ));
-    if (parcels.length) sections.push(freeInfoSection(
-      'Flurstücke',
-      'Flurstücksinfos sind im Pro-Plan verfügbar.',
-      'parcel'
-    ));
+    if (buildings.length) sections.push(lockedPreviewTable('Gebäude', buildings, [
+      { label: 'Gebäudefunktion', keys: ['gebaeudefunktion_text', 'gebaeudefunktion'] },
+      { label: 'Name', keys: ['name'] },
+      { label: 'Vollgeschosse', keys: ['geschosse_oberirdisch'], compact: true },
+      { label: 'Unterirdische Geschosse', keys: ['geschosse_unterirdisch'], compact: true },
+      { label: 'Dachform', keys: ['dachform_text', 'dachform'] },
+      { label: 'Dachart', keys: ['dachart'] },
+      { label: 'Dachgeschossausbau', keys: ['dachgeschossausbau_text', 'dachgeschossausbau'] },
+      { label: 'Bauweise', keys: ['bauweise_text', 'bauweise'] },
+      { label: 'Baujahr', keys: ['baujahr'], compact: true },
+      { label: 'Umbauter Raum', keys: ['umbauter_raum_m3'], compact: true },
+      { label: 'Objekthöhe', keys: ['objekthoehe_m'], compact: true },
+      { label: 'Lage', keys: ['lage_zur_erdoberflaeche_text', 'lage_zur_erdoberflaeche'] },
+      { label: 'Hochhaus', keys: ['hochhaus'], compact: true },
+      { label: 'Weitere Gebäudefunktion', keys: ['weitere_gebaeudefunktion_text', 'weitere_gebaeudefunktion'] },
+      { label: 'Zustand', keys: ['zustand_text', 'zustand'] },
+      { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
+      { label: 'Flächen', keys: ['geschossflaeche_m2', ...BUILDING_OFFICIAL_AREA_KEYS, ...BUILDING_GEOMETRIC_AREA_KEYS], alwaysVisible: true, slot: 'areas' }
+    ], 'building', 'Gebäudeinfos sind im Pro-Plan verfügbar.'));
+    if (parcels.length) sections.push(lockedPreviewTable('Flurstücke', parcels, [
+      { label: 'Gem.-Schl.', title: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'], compact: true },
+      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'] },
+      { label: 'Flur', keys: ['flur'], compact: true },
+      { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], compact: true },
+      { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'] },
+      { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
+      { label: 'Abweichender Rechtszustand', keys: ['abweichender_rechtszustand'] },
+      { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'] },
+      { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'] },
+      { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], compact: true },
+      { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
+      { label: 'Flächen', keys: ['amtliche_flaeche_m2'], alwaysVisible: true, slot: 'areas' }
+    ], 'parcel', 'Flurstücksinfos sind im Pro-Plan verfügbar.'));
     return sections.join('');
   }
 
-  function freeInfoSection(title, message, kind) {
-    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-pro-notice" role="note"><span class="selection-pro-notice-copy"><span>${escapeHtml(message)}</span><a href="/pro" target="_top">Pro freischalten</a></span></div></section>`;
+  function lockedPreviewTable(title, items, definitions, kind, message) {
+    const available = new Set(items.flatMap((item) => Array.isArray(item.available_fields) ? item.available_fields : []));
+    const columns = definitions.filter((column) => column.visible !== false && (column.alwaysVisible || column.keys.some((key) => available.has(key))));
+    const headers = columns.map((column) => {
+      const fullLabel = column.title || column.label;
+      return `<th${tableColumnAttributes(column)} title="${escapeHtml(fullLabel)}">${escapeHtml(column.label)}</th>`;
+    }).join('');
+    const notice = `<tr class="selection-pro-notice"><td colspan="${Math.max(columns.length, 1)}"><span class="selection-pro-notice-copy" role="note"><span>${escapeHtml(message)}</span><a href="/pro" target="_top">Pro freischalten</a></span></td></tr>`;
+    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody>${notice}</tbody></table></div></section>`;
   }
 
   function tableColumnAttributes(column, additionalClasses = []) {

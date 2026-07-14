@@ -17,13 +17,13 @@ assert.match(exportNotice, /<a class="primary-action" href="\/pro" target="_top"
 assert.doesNotMatch(exportNotice, />Pro buchen</);
 
 assert.doesNotMatch(stylesSource, /\.selection-pro-lock\b/, 'Das alte Floating-Panel darf nicht mehr gestylt werden.');
-assert.match(stylesSource, /\.selection-section > \.selection-pro-notice \{ min-width: 100%;/);
+assert.match(stylesSource, /\.selection-data-table \.selection-pro-notice td \{ position: static;[^}]*text-align: center;/);
 assert.match(stylesSource, /\.selection-pro-notice a \{ color: var\(--ok-orange\); font-weight: 500; text-decoration: none;/);
 assert.doesNotMatch(stylesSource, /\.measure-pro-lock a\b/);
 
-assert.match(appSource, /\.\/measure\.js\?v=20260714-pro-plan-notices1/);
-assert.match(appSource, /\.\/selection\.js\?v=20260714-free-info-sections1/);
-assert.match(indexSource, /styles\.css\?v=20260714-free-info-sections1/);
-assert.match(indexSource, /app\.js\?v=20260714-free-info-sections1/);
+assert.match(appSource, /\.\/measure\.js\?v=20260714-mobile-ui1/);
+assert.match(appSource, /\.\/selection\.js\?v=20260714-free-preview-row1/);
+assert.match(indexSource, /styles\.css\?v=20260714-free-preview-row1/);
+assert.match(indexSource, /app\.js\?v=20260714-free-preview-row1/);
 
 console.log('pro-plan-notice-tests=ok');

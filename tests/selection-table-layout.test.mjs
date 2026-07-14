@@ -137,17 +137,27 @@ assert.equal((freeSelectionHtml.match(/Gebäudeinfos sind im Pro-Plan verfügbar
 assert.equal((freeSelectionHtml.match(/Flurstücksinfos sind im Pro-Plan verfügbar\./g) || []).length, 1);
 assert.equal((freeSelectionHtml.match(/>Pro freischalten<\/a>/g) || []).length, 2);
 assert.doesNotMatch(freeSelectionHtml, /Diese Tabelle ist im Pro-Plan verfügbar\./);
-for (const kind of ['building', 'parcel']) {
+
+function freeSection(kind) {
   const sectionStart = freeSelectionHtml.indexOf(`<section class="selection-section" data-selection-kind="${kind}">`);
   const sectionEnd = freeSelectionHtml.indexOf('</section>', sectionStart);
-  assert.notEqual(sectionStart, -1, `Hinweis für ${kind} fehlt.`);
-  const section = freeSelectionHtml.slice(sectionStart, sectionEnd);
-  assert.match(section, /<div class="selection-pro-notice" role="note">/);
-  assert.doesNotMatch(
-    section,
-    /<table\b|<thead\b|<tbody\b|<tr\b|locked-cell|selection-item-remove|data-selection-remove-key/,
-    `Free darf für ${kind} keine Tabelle oder ausgewählten Objektzeilen rendern.`
-  );
+  assert.notEqual(sectionStart, -1, `Free-Tabelle für ${kind} fehlt.`);
+  return freeSelectionHtml.slice(sectionStart, sectionEnd);
+}
+
+const freeBuildingSection = freeSection('building');
+const freeParcelSection = freeSection('parcel');
+assert.match(freeBuildingSection, /<thead><tr>[\s\S]*>Gebäudefunktion<\/th>[\s\S]*data-selection-column="address"[\s\S]*>Adressen<\/th>[\s\S]*data-selection-column="areas"[\s\S]*>Flächen<\/th><\/tr><\/thead>/);
+assert.doesNotMatch(freeBuildingSection, />Name<\/th>/, 'Nicht verfügbare Gebäudespalten dürfen nicht erscheinen.');
+assert.match(freeParcelSection, /<thead><tr>[\s\S]*>Flurstück<\/th>[\s\S]*data-selection-column="address"[\s\S]*>Adressen<\/th>[\s\S]*data-selection-column="areas"[\s\S]*>Flächen<\/th><\/tr><\/thead>/);
+assert.doesNotMatch(freeParcelSection, />Flur<\/th>/, 'Nicht verfügbare Flurstücksspalten dürfen nicht erscheinen.');
+for (const [kind, section, message] of [
+  ['building', freeBuildingSection, 'Gebäudeinfos sind im Pro-Plan verfügbar.'],
+  ['parcel', freeParcelSection, 'Flurstücksinfos sind im Pro-Plan verfügbar.']
+]) {
+  assert.equal((section.match(/<tbody>[\s\S]*?<tr\b/g) || []).length, 1, `Free darf für ${kind} nur die Hinweiszeile rendern.`);
+  assert.match(section, new RegExp(`<tbody><tr class="selection-pro-notice"><td colspan="3"><span class="selection-pro-notice-copy" role="note"><span>${message.replace('.', '\\.')}`));
+  assert.doesNotMatch(section, /locked-cell|selection-item-remove|data-selection-remove-key|>–</, `Free darf für ${kind} keine leeren Objektzeilen rendern.`);
 }
 assert.doesNotMatch(freeSelectionHtml, /selection-pro-lock|Pro buchen/, 'Die alte überlagernde Pro-Fläche darf nicht mehr gerendert werden.');
 

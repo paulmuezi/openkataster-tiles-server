@@ -120,24 +120,34 @@ const freeSelectionHtml = renderSelection({
   buildings: [{
     preview_id: 'preview-building',
     available_fields: ['gebaeudefunktion_text', 'grundflaeche_m2']
+  }, {
+    preview_id: 'preview-building-2',
+    available_fields: ['gebaeudefunktion_text']
   }],
   parcels: [{
     preview_id: 'preview-parcel',
     available_fields: ['flurstueck', 'amtliche_flaeche_m2']
+  }, {
+    preview_id: 'preview-parcel-2',
+    available_fields: ['flurstueck']
   }]
 }, false);
 
-assert.equal((freeSelectionHtml.match(/Diese Tabelle ist im Pro-Plan verfügbar\./g) || []).length, 2, 'Gebäude und Flurstücke müssen jeweils einen Pro-Hinweis zeigen.');
-assert.match(freeSelectionHtml, /<tr class="selection-pro-notice"><td colspan="\d+"><span class="selection-pro-notice-copy"><span>Diese Tabelle ist im Pro-Plan verfügbar\.<\/span><a href="\/pro" target="_top">Pro freischalten<\/a><\/span><\/td><\/tr>/);
+assert.equal((freeSelectionHtml.match(/Gebäudeinfos sind im Pro-Plan verfügbar\./g) || []).length, 1);
+assert.equal((freeSelectionHtml.match(/Flurstücksinfos sind im Pro-Plan verfügbar\./g) || []).length, 1);
+assert.equal((freeSelectionHtml.match(/>Pro freischalten<\/a>/g) || []).length, 2);
+assert.doesNotMatch(freeSelectionHtml, /Diese Tabelle ist im Pro-Plan verfügbar\./);
 for (const kind of ['building', 'parcel']) {
   const sectionStart = freeSelectionHtml.indexOf(`<section class="selection-section" data-selection-kind="${kind}">`);
   const sectionEnd = freeSelectionHtml.indexOf('</section>', sectionStart);
-  assert.notEqual(sectionStart, -1, `Tabelle für ${kind} fehlt.`);
+  assert.notEqual(sectionStart, -1, `Hinweis für ${kind} fehlt.`);
   const section = freeSelectionHtml.slice(sectionStart, sectionEnd);
-  const bodyStart = section.indexOf('<tbody>') + '<tbody>'.length;
-  const body = section.slice(bodyStart, section.indexOf('</tbody>', bodyStart));
-  assert.match(body, /^<tr class="selection-pro-notice">/, `Der Pro-Hinweis für ${kind} muss die erste Tabellenzeile sein.`);
-  assert.match(body, /<\/tr><tr>/, `Unter dem Pro-Hinweis für ${kind} muss die gesperrte Datenzeile folgen.`);
+  assert.match(section, /<div class="selection-pro-notice" role="note">/);
+  assert.doesNotMatch(
+    section,
+    /<table\b|<thead\b|<tbody\b|<tr\b|locked-cell|selection-item-remove|data-selection-remove-key/,
+    `Free darf für ${kind} keine Tabelle oder ausgewählten Objektzeilen rendern.`
+  );
 }
 assert.doesNotMatch(freeSelectionHtml, /selection-pro-lock|Pro buchen/, 'Die alte überlagernde Pro-Fläche darf nicht mehr gerendert werden.');
 

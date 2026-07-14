@@ -204,42 +204,21 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function freePreviewTable(buildings, parcels) {
     const sections = [];
-    if (buildings.length) sections.push(lockedPreviewTable('Gebäude', buildings, [
-      { label: 'Gebäudefunktion', keys: ['gebaeudefunktion_text', 'gebaeudefunktion'] },
-      { label: 'Name', keys: ['name'] },
-      { label: 'Vollgeschosse', keys: ['geschosse_oberirdisch'] },
-      { label: 'Unterirdische Geschosse', keys: ['geschosse_unterirdisch'] },
-      { label: 'Dachform', keys: ['dachform_text', 'dachform'] },
-      { label: 'Dachart', keys: ['dachart'] },
-      { label: 'Dachgeschossausbau', keys: ['dachgeschossausbau_text', 'dachgeschossausbau'] },
-      { label: 'Bauweise', keys: ['bauweise_text', 'bauweise'] },
-      { label: 'Baujahr', keys: ['baujahr'] },
-      { label: 'Umbauter Raum', keys: ['umbauter_raum_m3'] },
-      { label: 'Objekthöhe', keys: ['objekthoehe_m'] },
-      { label: 'Lage', keys: ['lage_zur_erdoberflaeche_text', 'lage_zur_erdoberflaeche'] },
-      { label: 'Hochhaus', keys: ['hochhaus'] },
-      { label: 'Weitere Gebäudefunktion', keys: ['weitere_gebaeudefunktion_text', 'weitere_gebaeudefunktion'] },
-      { label: 'Zustand', keys: ['zustand_text', 'zustand'] },
-      { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
-      { label: 'Flächen', keys: ['geschossflaeche_m2', ...BUILDING_OFFICIAL_AREA_KEYS, ...BUILDING_GEOMETRIC_AREA_KEYS], alwaysVisible: true, slot: 'areas' }
-    ], 'building', true));
-    if (parcels.length) sections.push(lockedPreviewTable('Flurstücke', parcels, [
-      { label: 'Gem.-Schl.', keys: ['gemarkungsschluessel', 'gemarkung_key'] },
-      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'] },
-      { label: 'Flur', keys: ['flur'] },
-      { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'] },
-      { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'] },
-      { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
-      { label: 'Flurstücksfolge', keys: ['flurstuecksfolge'] },
-      { label: 'Abweichender Rechtszustand', keys: ['abweichender_rechtszustand'] },
-      { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'] },
-      { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'] },
-      { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'] },
-      { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
-      { label: 'Flächen', keys: ['amtliche_flaeche_m2'], alwaysVisible: true, slot: 'areas' }
-    ], 'parcel', true));
-    if (!sections.length) return '';
+    if (buildings.length) sections.push(freeInfoSection(
+      'Gebäude',
+      'Gebäudeinfos sind im Pro-Plan verfügbar.',
+      'building'
+    ));
+    if (parcels.length) sections.push(freeInfoSection(
+      'Flurstücke',
+      'Flurstücksinfos sind im Pro-Plan verfügbar.',
+      'parcel'
+    ));
     return sections.join('');
+  }
+
+  function freeInfoSection(title, message, kind) {
+    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-pro-notice" role="note"><span class="selection-pro-notice-copy"><span>${escapeHtml(message)}</span><a href="/pro" target="_top">Pro freischalten</a></span></div></section>`;
   }
 
   function tableColumnAttributes(column, additionalClasses = []) {
@@ -251,18 +230,6 @@ export function createSelectionController({ map, api, store, layout, elements })
     ].filter(Boolean).join(' ');
     const slot = column.slot ? ` data-selection-column="${escapeHtml(column.slot)}"` : '';
     return `${className ? ` class="${className}"` : ''}${slot}`;
-  }
-
-  function lockedPreviewTable(title, items, definitions, kind, showProNotice = false) {
-    const available = new Set(items.flatMap((item) => item.available_fields || []));
-    const columns = definitions.filter((column) => column.visible !== false && (column.alwaysVisible || column.keys.some((key) => available.has(key))));
-    const headers = columns.map((column) => `<th${tableColumnAttributes(column)}>${escapeHtml(column.label)}</th>`).join('');
-    const cells = columns.map((column) => `<td${tableColumnAttributes(column)}><span class="locked-cell">–</span></td>`).join('');
-    const rows = `<tr>${cells}</tr>`;
-    const notice = showProNotice
-      ? `<tr class="selection-pro-notice"><td colspan="${columns.length}"><span class="selection-pro-notice-copy"><span>Diese Tabelle ist im Pro-Plan verfügbar.</span><a href="/pro" target="_top">Pro freischalten</a></span></td></tr>`
-      : '';
-    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody>${notice}${rows}</tbody></table></div></section>`;
   }
 
   function display(value) {

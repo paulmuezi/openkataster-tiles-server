@@ -404,6 +404,13 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
   }
   .selection-head > div { display: grid; gap: 1px; }
   .selection-data-table th, .selection-data-table td { padding: 8px 10px; }
+  .selection-data-table .selection-pro-notice td { padding-inline: 10px; text-align: left; overflow: visible; }
+  .selection-pro-notice-copy {
+    position: relative;
+    box-sizing: border-box;
+    width: var(--selection-pro-notice-width, calc(100vw - 20px));
+    transform: translateX(var(--selection-pro-notice-shift, 0px));
+  }
   .selection-dock { grid-template-rows: 28px 43px minmax(0,1fr); }
   .selection-resize { height: 28px; cursor: ns-resize; }
   .selection-resize span { top: 12px; }

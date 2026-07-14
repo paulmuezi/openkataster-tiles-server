@@ -1,7 +1,26 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { buildingAreaVisibility, createSelectionController, selectionAddressLabels } from '../live-viewer/viewer-app/selection.js';
+import { buildingAreaVisibility, createSelectionController, previewNoticeScrollOffset, selectionAddressLabels } from '../live-viewer/viewer-app/selection.js';
+
+for (const scenario of [
+  { scrollLeft: 0, expected: 0 },
+  { scrollLeft: 180, expected: 180 },
+  { scrollLeft: 470, expected: 470 },
+  { scrollLeft: 940, expected: 940 },
+  { scrollLeft: -35, expected: 0 },
+  { scrollLeft: 1010, expected: 940 }
+]) {
+  const shift = previewNoticeScrollOffset({
+    scrollLeft: scenario.scrollLeft,
+    scrollWidth: 1440,
+    clientWidth: 500
+  });
+  assert.equal(shift, scenario.expected, `Der mobile Pro-Hinweis braucht bei scrollLeft=${scenario.scrollLeft} einen sicheren Versatz.`);
+  if (scenario.scrollLeft >= 0 && scenario.scrollLeft <= 940) {
+    assert.equal(10 - scenario.scrollLeft + shift + 240, 250, 'Der Pro-Hinweis muss im 500 px breiten Ausschnitt zentriert bleiben.');
+  }
+}
 
 assert.deepEqual(
   buildingAreaVisibility([
@@ -228,5 +247,7 @@ assert.match(stylesSource, /selection-data-table th\.compact[^}]*width: 1%[^}]*w
 assert.match(stylesSource, /selection-column-address[^}]*width: 220px[^}]*min-width: 220px[^}]*max-width: 220px/, 'Adressspalten müssen dieselbe Ankerbreite haben.');
 assert.match(stylesSource, /selection-column-areas[^}]*width: 250px[^}]*min-width: 250px[^}]*max-width: 250px/, 'Flächenspalten müssen dieselbe Ankerbreite haben.');
 assert.match(stylesSource, /selection-area-value \{ text-align: right;/, 'Flächenwerte müssen rechtsbündig sein.');
+assert.match(stylesSource, /selection-pro-notice-copy \{[\s\S]*?width: var\(--selection-pro-notice-width,[\s\S]*?transform: translateX\(var\(--selection-pro-notice-shift, 0px\)\)/, 'Der mobile Hinweis braucht eine sichtfensterbreite, scrollabhängige Ausrichtung.');
+assert.match(selectionSource, /selectionContent\.addEventListener\('scroll', schedulePreviewNoticeAlignment, \{ passive: true \}\)/, 'Horizontales Scrollen muss die mobile Hinweisausrichtung aktualisieren.');
 
 console.log('selection-table-layout-tests=ok');

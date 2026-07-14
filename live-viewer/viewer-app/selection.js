@@ -92,6 +92,10 @@ export function selectionAddressLabels(item = {}) {
   return [...new Set(labels)];
 }
 
+export function previewNoticeScrollOffset({ scrollLeft, scrollWidth, clientWidth }) {
+  return Math.min(Math.max(scrollLeft, 0), Math.max(scrollWidth - clientWidth, 0));
+}
+
 export function createSelectionController({ map, api, store, layout, elements }) {
   const { selectionContent, selectionCount, selectTool, selectionDock } = elements;
   let request = null;
@@ -99,6 +103,7 @@ export function createSelectionController({ map, api, store, layout, elements })
   let flashTimers = [];
   let clearGeneration = 0;
   let clearObserver = null;
+  let noticeAlignmentFrame = null;
 
   function featureCollection(items) {
     return { type: 'FeatureCollection', features: items.filter((item) => item.geometry).map((item) => ({ type: 'Feature', properties: { id: featureKey(item) }, geometry: item.geometry })) };
@@ -189,12 +194,45 @@ export function createSelectionController({ map, api, store, layout, elements })
     map.getSource('selected-buildings-v2')?.setData(selectionOutlineCollection(selection.buildings));
   }
 
+  function alignPreviewNotices() {
+    noticeAlignmentFrame = null;
+    const notices = selectionContent.querySelectorAll?.('.selection-pro-notice-copy');
+    if (!notices?.length) return;
+    const mobile = window.matchMedia?.('(max-width: 760px)').matches ?? window.innerWidth <= 760;
+    if (!mobile) {
+      for (const notice of notices) {
+        notice.style.removeProperty('--selection-pro-notice-width');
+        notice.style.removeProperty('--selection-pro-notice-shift');
+      }
+      return;
+    }
+    const viewportWidth = selectionContent.clientWidth;
+    if (!viewportWidth) return;
+    const noticeWidth = Math.max(viewportWidth - 20, 1);
+    const shift = previewNoticeScrollOffset({
+      scrollLeft: selectionContent.scrollLeft,
+      scrollWidth: selectionContent.scrollWidth,
+      clientWidth: viewportWidth
+    });
+    for (const notice of notices) {
+      notice.style.setProperty('--selection-pro-notice-width', `${noticeWidth}px`);
+      notice.style.setProperty('--selection-pro-notice-shift', `${shift}px`);
+    }
+  }
+
+  function schedulePreviewNoticeAlignment() {
+    if (typeof window === 'undefined' || typeof selectionContent.querySelectorAll !== 'function') return;
+    if (noticeAlignmentFrame !== null) return;
+    noticeAlignmentFrame = window.requestAnimationFrame(alignPreviewNotices);
+  }
+
   function render(state = store.getState()) {
     const { parcels, buildings, loading } = state.selection;
     const html = state.access.pro
       ? [buildings.length ? buildingTable(buildings) : '', parcels.length ? parcelTable(parcels) : ''].join('')
       : freePreviewTable(buildings, parcels);
     if (selectionContent.innerHTML !== html) selectionContent.innerHTML = html;
+    schedulePreviewNoticeAlignment();
     const count = parcels.length + buildings.length;
     selectionCount.textContent = loading && !count ? 'Auswahl wird geladen' : count === 1 ? '1 Objekt ausgewählt' : `${count} Objekte ausgewählt`;
     updateSources();
@@ -530,6 +568,8 @@ export function createSelectionController({ map, api, store, layout, elements })
   }
 
   map.on('load', addLayers);
+  selectionContent.addEventListener('scroll', schedulePreviewNoticeAlignment, { passive: true });
+  if (typeof window !== 'undefined') window.addEventListener('resize', schedulePreviewNoticeAlignment, { passive: true });
   map.on('click', (event) => {
     if (store.getState().activeTool === 'select') selectAt(event.lngLat, true);
   });

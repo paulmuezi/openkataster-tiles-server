@@ -48,9 +48,9 @@ assert.deepEqual(
   'Adressen müssen normalisiert, dedupliziert und einzeln ausgebbar sein.'
 );
 
-function renderProSelection(selection) {
+function renderSelection(selection, pro = true) {
   const state = {
-    access: { pro: true },
+    access: { pro },
     activeTool: 'select',
     layout: { tableOpen: true },
     selection: { ...selection, loading: false }
@@ -85,7 +85,7 @@ function renderProSelection(selection) {
   return selectionContent.innerHTML;
 }
 
-const mixedBuildingHtml = renderProSelection({
+const mixedBuildingHtml = renderSelection({
   parcels: [],
   buildings: [
     { preview_id: 'building-official', gebaeudefunktion_text: 'Wohngebäude', sondermerkmal: 'A', grundflaeche_m2: 100, geometrische_flaeche_m2: 99.5, addresses: ['Am Markt 1', 'Am Markt 2'] },
@@ -100,6 +100,21 @@ assert.match(mixedBuildingHtml, /<td class="compact numeric">100 m²<\/td><td cl
 assert.match(mixedBuildingHtml, /<td class="compact numeric">–<\/td><td class="compact numeric">40 m²<\/td>/, 'Rein geometrische Gebäude müssen in der gemischten Auswahl ihre eigene Spalte behalten.');
 assert.match(mixedBuildingHtml, /<tfoot><tr><td class="summary-label" colspan="\d+">Summe<\/td>/);
 assert.doesNotMatch(mixedBuildingHtml, /class="[^"]*strong/, 'Gerenderte Datenzellen dürfen keine Hervorhebungsklasse enthalten.');
+
+const freeSelectionHtml = renderSelection({
+  buildings: [{
+    preview_id: 'preview-building',
+    available_fields: ['gebaeudefunktion_text', 'grundflaeche_m2']
+  }],
+  parcels: [{
+    preview_id: 'preview-parcel',
+    available_fields: ['flurstueck', 'amtliche_flaeche_m2']
+  }]
+}, false);
+
+assert.equal((freeSelectionHtml.match(/Diese Tabelle ist im Pro-Plan verfügbar\./g) || []).length, 1, 'Der ruhige Pro-Hinweis darf bei mehreren Tabellen nur einmal erscheinen.');
+assert.match(freeSelectionHtml, /<tr class="selection-pro-notice"><td colspan="\d+"><span class="selection-pro-notice-copy"><span>Diese Tabelle ist im Pro-Plan verfügbar\.<\/span><a href="\/pro" target="_top">Pro freischalten<\/a><\/span><\/td><\/tr>/);
+assert.doesNotMatch(freeSelectionHtml, /selection-pro-lock|Pro buchen/, 'Die alte überlagernde Pro-Fläche darf nicht mehr gerendert werden.');
 
 const selectionSource = readFileSync(new URL('../live-viewer/viewer-app/selection.js', import.meta.url), 'utf8');
 const stylesSource = readFileSync(new URL('../live-viewer/viewer-app/styles.css', import.meta.url), 'utf8');

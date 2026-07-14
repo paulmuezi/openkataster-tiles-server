@@ -225,7 +225,7 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Geschossfläche', keys: ['geschossflaeche_m2'] },
       { label: 'Amtliche Fläche', keys: BUILDING_OFFICIAL_AREA_KEYS, visible: buildingAreas.showOfficial },
       { label: 'Geometrische Fläche', keys: BUILDING_GEOMETRIC_AREA_KEYS, visible: buildingAreas.showGeometric }
-    ]));
+    ], !parcels.length));
     if (parcels.length) sections.push(lockedPreviewTable('Flurstücke', parcels, [
       { label: 'Gem.-Schl.', keys: ['gemarkungsschluessel', 'gemarkung_key'] },
       { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'] },
@@ -240,17 +240,21 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Adressen', keys: ['addresses', 'address'] },
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'] },
       { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
-    ]));
+    ], true));
     if (!sections.length) return '';
-    return `${sections.join('')}<div class="selection-pro-lock" role="note" aria-label="Pro-Objektdaten"><span class="selection-pro-lock-copy"><strong>Vollständige Objektdaten</strong><small>Alle Gebäude- und Flurstücksdaten anzeigen.</small></span><a href="/pro" target="_top">Pro buchen</a></div>`;
+    return sections.join('');
   }
 
-  function lockedPreviewTable(title, items, definitions) {
+  function lockedPreviewTable(title, items, definitions, showProNotice = false) {
     const available = new Set(items.flatMap((item) => item.available_fields || []));
     const columns = definitions.filter((column) => column.visible !== false && column.keys.some((key) => available.has(key)));
     const headers = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('');
     const cells = columns.map(() => '<td><span class="locked-cell">–</span></td>').join('');
-    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody><tr>${cells}</tr></tbody></table></div></section>`;
+    const rows = `<tr>${cells}</tr>`;
+    const notice = showProNotice
+      ? `<tr class="selection-pro-notice"><td colspan="${columns.length}"><span class="selection-pro-notice-copy"><span>Diese Tabelle ist im Pro-Plan verfügbar.</span><a href="/pro" target="_top">Pro freischalten</a></span></td></tr>`
+      : '';
+    return `<section class="selection-section"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody>${rows}${notice}</tbody></table></div></section>`;
   }
 
   function display(value) {

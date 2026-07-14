@@ -231,7 +231,7 @@ export function createMeasureController({ map, store, elements, finish }) {
     const active = store.getState().activeTool === 'measure';
     const pro = store.getState().access.pro;
     measurePanel.hidden = !active || !points.length;
-    measureValues.hidden = false;
+    measureValues.hidden = !pro;
     measureLocked.hidden = pro;
     if (!map.getSource('measure-v2')) return;
     const working = workingPoints();

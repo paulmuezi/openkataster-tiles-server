@@ -225,7 +225,7 @@ export function createSelectionController({ map, api, store, layout, elements })
     ], 'building', 'Gebäudeinfos sind im Pro-Plan verfügbar.'));
     if (parcels.length) sections.push(lockedPreviewTable('Flurstücke', parcels, [
       { label: 'Gem.-Schl.', title: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'], compact: true },
-      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'] },
+      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], compact: true },
       { label: 'Flur', keys: ['flur'], compact: true },
       { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], compact: true },
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'] },
@@ -419,7 +419,7 @@ export function createSelectionController({ map, api, store, layout, elements })
   function parcelTable(parcels) {
     const columns = [
       { label: 'Gem.-Schl.', title: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'], compact: true },
-      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], value: (item) => item.gemarkung && item.gemarkungsnummer ? `${item.gemarkung} (${item.gemarkungsnummer})` : item.gemarkung || item.gemarkungsnummer },
+      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], value: (item) => item.gemarkung && item.gemarkungsnummer ? `${item.gemarkung} (${item.gemarkungsnummer})` : item.gemarkung || item.gemarkungsnummer, compact: true },
       { label: 'Flur', keys: ['flur'], compact: true },
       { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], value: (item) => item.flurstueck || [item.zaehler, item.nenner].filter(Boolean).join('/'), compact: true },
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'], value: parcelUsage },

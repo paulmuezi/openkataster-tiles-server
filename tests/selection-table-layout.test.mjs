@@ -116,6 +116,45 @@ assert.deepEqual(trailingSlots(alignedSelectionHtml, 'parcel'), ['address', 'are
 assert.match(alignedSelectionHtml, /data-selection-kind="building"[\s\S]*?selection-area-label">Amtliche Fläche<\/span><span class="selection-area-value">100 m²/);
 assert.match(alignedSelectionHtml, /data-selection-kind="parcel"[\s\S]*?selection-area-label">Amtliche Fläche<\/span><span class="selection-area-value">500 m²/);
 
+function assertCompactParcelIdentityBlock(html, mode) {
+  const section = html.match(/<section class="selection-section" data-selection-kind="parcel">[\s\S]*?<thead><tr>([\s\S]*?)<\/tr>/);
+  assert.ok(section, `Flurstückstabelle für ${mode} fehlt.`);
+  const headers = [...section[1].matchAll(/<th([^>]*)>([\s\S]*?)<\/th>/g)].map((match) => ({
+    attributes: match[1],
+    label: match[2].replace(/<[^>]+>/g, '').trim()
+  }));
+  const labels = headers.map((header) => header.label);
+  const identityStart = labels.indexOf('Gem.-Schl.');
+  assert.notEqual(identityStart, -1, `Gemarkungsschlüssel für ${mode} fehlt.`);
+  assert.deepEqual(
+    labels.slice(identityStart, identityStart + 4),
+    ['Gem.-Schl.', 'Gemarkung', 'Flur', 'Flurstück'],
+    `Die Flurstücks-Grunddaten müssen in ${mode} unmittelbar zusammenstehen.`
+  );
+  assert.deepEqual(
+    labels.slice(-2),
+    ['Adressen', 'Flächen'],
+    `Die gemeinsamen Adress- und Flächenspalten müssen in ${mode} am Tabellenende bleiben.`
+  );
+  for (const header of headers.slice(identityStart, identityStart + 4)) {
+    assert.match(header.attributes, /class="[^"]*\bcompact\b[^"]*"/, `${header.label} muss in ${mode} kompakt bleiben.`);
+  }
+}
+
+const proParcelIdentityHtml = renderSelection({
+  buildings: [],
+  parcels: [{
+    preview_id: 'parcel-identity-pro',
+    gemarkungsschluessel: '051234',
+    gemarkung: 'Muster',
+    gemarkungsnummer: '1234',
+    flur: '7',
+    flurstueck: '12/3',
+    nutzung: 'Wohnbaufläche'
+  }]
+});
+assertCompactParcelIdentityBlock(proParcelIdentityHtml, 'Pro');
+
 const freeSelectionHtml = renderSelection({
   buildings: [{
     preview_id: 'preview-building',
@@ -161,6 +200,17 @@ for (const [kind, section, message] of [
 }
 assert.doesNotMatch(freeSelectionHtml, /selection-pro-lock|Pro buchen/, 'Die alte überlagernde Pro-Fläche darf nicht mehr gerendert werden.');
 
+const freeParcelIdentityHtml = renderSelection({
+  buildings: [],
+  parcels: [{
+    preview_id: 'parcel-identity-free',
+    available_fields: ['gemarkungsschluessel', 'gemarkung', 'flur', 'flurstueck']
+  }]
+}, false);
+assertCompactParcelIdentityBlock(freeParcelIdentityHtml, 'Free-Preview');
+assert.match(freeParcelIdentityHtml, /<tbody><tr class="selection-pro-notice"><td colspan="6">/, 'Free muss trotz kompaktem Viererblock genau eine passende Hinweiszeile behalten.');
+assert.equal((freeParcelIdentityHtml.match(/<tbody>[\s\S]*?<tr\b/g) || []).length, 1, 'Free darf auch mit allen Grunddatenspalten keine Objektzeile rendern.');
+
 const selectionSource = readFileSync(new URL('../live-viewer/viewer-app/selection.js', import.meta.url), 'utf8');
 const stylesSource = readFileSync(new URL('../live-viewer/viewer-app/styles.css', import.meta.url), 'utf8');
 const buildingBlock = selectionSource.slice(selectionSource.indexOf('function buildingTable'), selectionSource.indexOf('function parcelTable'));
@@ -174,6 +224,7 @@ assert.ok(parcelBlock.indexOf("label: 'Adressen'") < parcelBlock.indexOf('areaCo
 assert.doesNotMatch(selectionSource, /strong:\s*true/, 'Datenzellen dürfen nicht zufällig fett markiert werden.');
 assert.match(selectionSource, /colspan="\$\{firstSumIndex(?: \+ 1)?\}"/, 'Die Summenbezeichnung muss direkt an den Flächenblock anschließen.');
 assert.match(stylesSource, /grid-template-columns: minmax\(100%, max-content\)/, 'Beide Tabellen müssen dieselbe Gesamtbreite teilen.');
+assert.match(stylesSource, /selection-data-table th\.compact[^}]*width: 1%[^}]*white-space: nowrap/, 'Der kompakte Flurstücksblock muss auf Desktop und Mobile eng zusammenbleiben.');
 assert.match(stylesSource, /selection-column-address[^}]*width: 220px[^}]*min-width: 220px[^}]*max-width: 220px/, 'Adressspalten müssen dieselbe Ankerbreite haben.');
 assert.match(stylesSource, /selection-column-areas[^}]*width: 250px[^}]*min-width: 250px[^}]*max-width: 250px/, 'Flächenspalten müssen dieselbe Ankerbreite haben.');
 assert.match(stylesSource, /selection-area-value \{ text-align: right;/, 'Flächenwerte müssen rechtsbündig sein.');

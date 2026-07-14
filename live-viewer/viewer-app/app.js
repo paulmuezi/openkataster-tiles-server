@@ -6,7 +6,7 @@ import { createPlannerMap } from './map.js?v=20260715-no-world-blue1';
 import { createMeasureController } from './measure.js?v=20260714-mobile-ui1';
 import { createPersistence, readPersistedState } from './persistence.js';
 import { createSearchController } from './search.js?v=20260712-field-suggestions1';
-import { createSelectionController } from './selection.js?v=20260715-parcel-identity-compact1';
+import { createSelectionController } from './selection.js?v=20260715-mobile-free-notice-scroll1';
 import { createSourceController } from './sources.js?v=20260711-inline-sources1';
 import { createStore } from './store.js';
 

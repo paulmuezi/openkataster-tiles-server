@@ -25,8 +25,8 @@ assert.match(stylesSource, /@media \(max-width: 760px\)[\s\S]*\.measure-upgrade-
 assert.doesNotMatch(stylesSource, /@media \(max-width: 760px\)[\s\S]*\.measure-panel \{[^}]*pointer-events: auto;/, 'Nur der Link, nicht die ganze Mobile-Leiste, darf Pointer-Events erhalten.');
 
 assert.match(appSource, /\.\/measure\.js\?v=20260714-mobile-ui1/);
-assert.match(appSource, /\.\/selection\.js\?v=20260715-parcel-identity-compact1/);
-assert.match(indexSource, /styles\.css\?v=20260715-mobile-measure-upgrade1/);
-assert.match(indexSource, /app\.js\?v=20260715-parcel-identity-compact1/);
+assert.match(appSource, /\.\/selection\.js\?v=20260715-mobile-free-notice-scroll1/);
+assert.match(indexSource, /styles\.css\?v=20260715-mobile-free-notice-scroll1/);
+assert.match(indexSource, /app\.js\?v=20260715-mobile-free-notice-scroll1/);
 
 console.log('pro-plan-notice-tests=ok');

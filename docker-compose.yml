@@ -5,6 +5,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        OPENKATASTER_REVISION: ${OPENKATASTER_REVISION:-unknown}
     container_name: openkataster-tiles-api
     restart: unless-stopped
     stop_grace_period: 5m

@@ -75,4 +75,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build production image
-        run: docker build --tag openkataster-tiles:${{ github.sha }} .
+        run: |
+          docker build \
+            --build-arg OPENKATASTER_REVISION=${{ github.sha }} \
+            --tag openkataster-tiles:${{ github.sha }} \
+            .
+          test "$(docker image inspect \
+            --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+            openkataster-tiles:${{ github.sha }})" = "${{ github.sha }}"
+          docker image inspect \
+            --format '{{ range .Config.Env }}{{ println . }}{{ end }}' \
+            openkataster-tiles:${{ github.sha }} \
+            | grep -Fx "OPENKATASTER_RELEASE_REVISION=${{ github.sha }}"

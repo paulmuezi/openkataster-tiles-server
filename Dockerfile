@@ -1,6 +1,12 @@
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ARG OPENKATASTER_REVISION=unknown
+
+LABEL org.opencontainers.image.revision="${OPENKATASTER_REVISION}" \
+    org.opencontainers.image.source="https://github.com/paulmuezi/openkataster-tiles-server"
+
+ENV OPENKATASTER_RELEASE_REVISION="${OPENKATASTER_REVISION}" \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update \

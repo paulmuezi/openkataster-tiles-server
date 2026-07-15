@@ -1,11 +1,11 @@
-import { createApi } from './api.js?v=20260711-free-preview1';
+import { createApi } from './api.js?v=20260714-search-input-only1';
 import { createExportController } from './export.js?v=20260713-location-preview2';
-import { createLayerController } from './layers.js?v=20260712-brandenburg-labels1';
-import { createLayout } from './layout.js?v=20260713-mobile-table-min1';
+import { createLayerController } from './layers.js?v=20260714-hide-mv-topographic-points2';
+import { createLayout } from './layout.js?v=20260714-mobile-tool-tabs1';
 import { createPlannerMap } from './map.js?v=20260715-no-world-blue1';
 import { createMeasureController } from './measure.js?v=20260714-mobile-ui1';
 import { createPersistence, readPersistedState } from './persistence.js';
-import { createSearchController } from './search.js?v=20260712-field-suggestions1';
+import { createSearchController } from './search.js?v=20260714-optional-parcel-flur1';
 import { createSelectionController } from './selection.js?v=20260715-mobile-free-notice-scroll1';
 import { createSourceController } from './sources.js?v=20260711-inline-sources1';
 import { createStore } from './store.js';
@@ -15,6 +15,7 @@ const surface = params.get('surface') === 'planner' ? 'planner' : 'embed';
 const parentOrigin = params.get('okParentOrigin') || '*';
 const saved = readPersistedState();
 const mobileBoot = window.matchMedia('(max-width: 760px)').matches;
+const restoreOpenLayout = surface !== 'planner';
 const app = document.getElementById('plannerApp');
 const headerAccountLink = document.getElementById('headerAccountLink');
 const map = createPlannerMap({ container: document.getElementById('map'), savedView: saved?.view });
@@ -31,10 +32,10 @@ const store = createStore({
   activeTool: 'none',
   access: { ready: false, pro: false, session: null },
   layout: {
-    sidebarOpen: !!saved?.layout?.sidebarOpen,
-    tableOpen: !!saved?.layout?.tableOpen && !(mobileBoot && saved?.layout?.sidebarOpen),
+    sidebarOpen: restoreOpenLayout && !!saved?.layout?.sidebarOpen,
+    tableOpen: restoreOpenLayout && !!saved?.layout?.tableOpen && !(mobileBoot && saved?.layout?.sidebarOpen),
     tableHeight: Number(saved?.layout?.tableHeight || 260),
-    mobileExportSettings: !!saved?.layout?.sidebarOpen && !!saved?.layout?.mobileExportSettings
+    mobileExportSettings: restoreOpenLayout && !!saved?.layout?.sidebarOpen && !!saved?.layout?.mobileExportSettings
   },
   layers: { ...defaultLayers, ...(saved?.layers || {}) },
   selection: { parcels: saved?.selection?.parcels || [], buildings: saved?.selection?.buildings || [], loading: false },

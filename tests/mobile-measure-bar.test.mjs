@@ -3,7 +3,15 @@ import { readFileSync } from 'node:fs';
 
 const stylesSource = readFileSync(new URL('../live-viewer/viewer-app/styles.css', import.meta.url), 'utf8');
 const indexSource = readFileSync(new URL('../live-viewer/viewer-app/index.html', import.meta.url), 'utf8');
+const appSource = readFileSync(new URL('../live-viewer/viewer-app/app.js', import.meta.url), 'utf8');
 const measureSource = readFileSync(new URL('../live-viewer/viewer-app/measure.js', import.meta.url), 'utf8');
+
+function assetVersion(source, asset) {
+  const escaped = asset.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = source.match(new RegExp(`${escaped}\\?v=([A-Za-z0-9._-]+)`));
+  assert.ok(match, `${asset} muss mit einem Cache-Buster referenziert werden.`);
+  return match[1];
+}
 
 const mobileStart = stylesSource.indexOf('@media (max-width: 760px)');
 const reducedMotionStart = stylesSource.indexOf('@media (prefers-reduced-motion:', mobileStart);
@@ -45,5 +53,12 @@ assert.equal((indexSource.match(/class="measure-cell"/g) || []).length, 4, 'Alle
 assert.match(indexSource, /<a class="measure-upgrade-link" href="\/pro" target="_top">Pro freischalten<\/a>/);
 assert.match(measureSource, /measureValues\.hidden = !pro;/);
 assert.match(measureSource, /measureLocked\.hidden = pro;/);
-assert.match(indexSource, /styles\.css\?v=20260715-mobile-measure-upgrade1/);
+const stylesVersion = assetVersion(indexSource, 'styles.css');
+const appVersion = assetVersion(indexSource, 'app.js');
+assetVersion(appSource, 'measure.js');
+assert.equal(
+  stylesVersion,
+  appVersion,
+  'CSS und App-Einstieg müssen mit demselben Viewer-Release invalidiert werden.'
+);
 console.log('mobile-measure-bar-tests=ok');

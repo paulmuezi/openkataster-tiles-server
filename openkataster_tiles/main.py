@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import fcntl
 import gzip
 import hashlib
 import hmac
@@ -20,10 +21,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Iterable
 
 import mapbox_vector_tile
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response, Security
@@ -39,6 +41,12 @@ from shapely import wkb
 from shapely.geometry import Point, mapping, shape
 from shapely.errors import GEOSException
 
+from openkataster_tiles.search_analytics import (
+    SearchAnalytics,
+    install_queryless_uvicorn_access_logging,
+    valid_analytics_marker,
+)
+
 try:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
@@ -48,9 +56,12 @@ except Exception:  # pragma: no cover - optional deployment dependency
 
 
 DATA_DIR = Path(os.environ.get("OPENKATASTER_TILE_DATA_DIR", "/srv/openkataster-tiles/data"))
+SEARCH_ANALYTICS = SearchAnalytics.from_environment(DATA_DIR)
+install_queryless_uvicorn_access_logging()
 VIEWER_ROOT = Path(os.environ.get("OPENKATASTER_VIEWER_ROOT", "/srv/openkataster-tiles/live-viewer"))
 GN250_PLACES_DB = Path(os.environ.get("OPENKATASTER_GN250_PLACES_DB", str(DATA_DIR / "places.sqlite")))
 POSTCODE_AREAS_DB = Path(os.environ.get("OPENKATASTER_POSTCODE_AREAS_DB", "/srv/openkataster-tiles/plz/postcode_areas.sqlite"))
+OPENPLZ_DB = Path(os.environ.get("OPENKATASTER_OPENPLZ_DB", "/srv/openkataster-tiles/plz/openplz.sqlite"))
 API_KEY_STORE_PATH = Path(os.environ.get("OPENKATASTER_API_KEY_STORE", str(DATA_DIR / "api_keys.json")))
 API_USAGE_DB = Path(os.environ.get("OPENKATASTER_API_USAGE_DB", str(DATA_DIR / "api_usage.sqlite")))
 EMBED_SESSION_TTL_SECONDS = max(60, min(3600, int(os.environ.get("OPENKATASTER_EMBED_SESSION_TTL_SECONDS", "900"))))
@@ -1682,6 +1693,8 @@ def search_db_signature_for_states(states: set[str] | tuple[str, ...] | list[str
 
 _SEARCH_DB_CONNECTIONS: dict[str, tuple[tuple[int, int], sqlite3.Connection]] = {}
 _SEARCH_DB_CONNECTION_LOCK = threading.Lock()
+_SEARCH_DB_QUERY_LOCKS: dict[str, threading.RLock] = {}
+_SEARCH_DB_QUERY_LOCKS_LOCK = threading.Lock()
 
 
 def search_db_connection(path: Path) -> sqlite3.Connection:
@@ -1710,6 +1723,62 @@ def search_db_connection(path: Path) -> sqlite3.Connection:
             pass
         _SEARCH_DB_CONNECTIONS[key] = (signature, con)
         return con
+
+
+def search_db_query_lock(path: Path) -> threading.RLock:
+    key = str(path)
+    with _SEARCH_DB_QUERY_LOCKS_LOCK:
+        lock = _SEARCH_DB_QUERY_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _SEARCH_DB_QUERY_LOCKS[key] = lock
+        return lock
+
+
+def search_db_fetchall(
+    path: Path,
+    query: str,
+    parameters: Iterable[object] = (),
+) -> list[sqlite3.Row]:
+    # sqlite3 connections/cursors cannot be used concurrently even when the
+    # connection was opened with check_same_thread=False.  FastAPI executes
+    # synchronous search routes in a thread pool, so guard only the actual
+    # execute+fetch window per state DB and leave normalization outside it.
+    try:
+        with search_db_query_lock(path):
+            return search_db_connection(path).execute(query, parameters).fetchall()
+    except sqlite3.Error as exc:
+        raise search_database_unavailable(path, exc) from exc
+
+
+def search_db_fetchone(
+    path: Path,
+    query: str,
+    parameters: Iterable[object] = (),
+) -> sqlite3.Row | None:
+    try:
+        with search_db_query_lock(path):
+            return search_db_connection(path).execute(query, parameters).fetchone()
+    except sqlite3.Error as exc:
+        raise search_database_unavailable(path, exc) from exc
+
+
+def search_database_unavailable(path: Path, error: sqlite3.Error) -> HTTPException:
+    request_id = f"search-{secrets.token_hex(8)}"
+    print(
+        "search database unavailable "
+        f"request_id={request_id} database={path.name} "
+        f"error={type(error).__name__}: {error}"
+    )
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "search_database_unavailable",
+            "message": "Die Suche ist vorübergehend nicht verfügbar.",
+            "request_id": request_id,
+        },
+        headers={"X-Request-ID": request_id},
+    )
 
 
 def _normalize_bucket_name(raw_value: str | None) -> str:
@@ -4254,6 +4323,10 @@ def postcode_areas_signature() -> tuple[int, int]:
     return sqlite_file_signature(POSTCODE_AREAS_DB)
 
 
+def openplz_signature() -> tuple[int, int]:
+    return sqlite_file_signature(OPENPLZ_DB)
+
+
 
 
 
@@ -4907,58 +4980,6 @@ def _search_places_for_dataset_cached(
         for item in results:
             item.pop("_place_priority", None)
     return tuple(results[:limit])
-
-    for item in cadastre_gemarkung_entries(cadastre_gemarkung_signature(dataset)):
-        state = str(item.get("state") or "")
-        name = str(item.get("gemarkung") or "").strip()
-        if state not in allowed_states or not name:
-            continue
-        haystack = f"{normalize_place_search_text(name)} {compact_place_search_text(name)} {item.get('gemarkungsnummer') or ''}"
-        if not all(
-            any(normalize_place_search_text(variant) in haystack for variant in german_token_variants(token))
-            for token in query_tokens
-        ):
-            continue
-        folded = normalize_place_search_text(name)
-        key = (state, folded)
-        if key in seen:
-            continue
-        seen.add(key)
-        results.append(
-            {
-                "kind": "place",
-                "result_type": "place",
-                "label": name,
-                "subtitle": "Gemarkung",
-                "state": state,
-                "center": item.get("center"),
-                "bbox": item.get("bbox"),
-                "zoom": 13.0,
-                "feature": {
-                    "name": name,
-                    "state": state,
-                    "gemarkungsnummer": item.get("gemarkungsnummer") or "",
-                },
-                "_place_priority": 12,
-            }
-        )
-
-    def place_rank(item: dict) -> tuple[int, int, int, str]:
-        label = str(item.get("label") or "")
-        folded = normalize_place_search_text(label)
-        query_folded = normalize_place_search_text(query)
-        return (
-            0 if folded == query_folded else 1,
-            0 if folded.startswith(query_folded) else 1,
-            int(item.get("_place_priority") or 20),
-            folded,
-        )
-
-    results.sort(key=place_rank)
-    for item in results:
-        item.pop("_place_priority", None)
-    return results[:limit]
-
 
 def feature_label(kind: str, properties: dict) -> str:
     if kind == "parcel":
@@ -6123,28 +6144,71 @@ def normalize_geocoder_text(value: str | None) -> str:
     return _normalize_geocoder_tokens(normalize_place_search_text(value))
 
 
+def german_digraph_collapse_variants(value: str, limit: int = 32) -> tuple[str, ...]:
+    """Return bounded variants for ambiguous ae/oe/ue transliterations.
+
+    Replacing every ``ue`` at once corrupts ordinary letter sequences such as
+    the one in ``quer``: ``Suederquerweg`` became ``suderqurweg``.  Generate
+    individual combinations so the useful ``suderquerweg`` variant survives.
+    """
+    variants = [value]
+    for source, target in (("ae", "a"), ("oe", "o"), ("ue", "u")):
+        index = 0
+        while index < len(variants) and len(variants) < max(1, int(limit)):
+            candidate = variants[index]
+            offset = 0
+            while len(variants) < max(1, int(limit)):
+                position = candidate.find(source, offset)
+                if position < 0:
+                    break
+                collapsed = candidate[:position] + target + candidate[position + len(source):]
+                if collapsed not in variants:
+                    variants.append(collapsed)
+                offset = position + 1
+            index += 1
+    return tuple(variants)
+
+
 def normalize_geocoder_text_variants(value: str | None) -> tuple[str, ...]:
     variants: list[str] = []
     normalized = normalize_geocoder_text(value)
     plain = _normalize_geocoder_tokens(plain_place_search_text(value))
-    collapsed = normalized
-    for source, target in (("ae", "a"), ("oe", "o"), ("ue", "u")):
-        collapsed = collapsed.replace(source, target)
-    for candidate in (normalized, plain, collapsed):
-        if candidate and candidate not in variants:
-            variants.append(candidate)
+    candidates: list[str] = []
+    for base in (normalized, plain):
+        for candidate in german_digraph_collapse_variants(base):
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+    for candidate in candidates:
+        # The ALKIS search index keeps common street abbreviations such as
+        # ``Hauptstr.`` as ``hauptstr``.  Accept both the expanded query form
+        # and that index-compatible form so suggestions remain selectable.
+        abbreviated = re.sub(r"strasse\b", "str", candidate)
+        for variant in (candidate, abbreviated):
+            if variant and variant not in variants:
+                variants.append(variant)
     return tuple(variants)
 
 
 CITY_STATE_MUNICIPALITY_ALIASES = {
     "hamburg": ("Hamburg", "Freie und Hansestadt Hamburg"),
     "berlin": ("Berlin", "Land Berlin"),
-    "bremen": ("Bremen", "Freie Hansestadt Bremen"),
+    "bremen": ("Bremen", "Stadtgemeinde Bremen", "Freie Hansestadt Bremen"),
 }
 
 
 def city_norms_for_state_context(city: str | None, state: str | None) -> tuple[str, ...]:
     variants = list(normalize_geocoder_text_variants(city))
+    # Some ALKIS states retain the administrative prefix in their address
+    # labels (for example ``Stadt Dresden``), while the national place index
+    # exposes the user-facing name (``Dresden``).  Treat both forms as the
+    # same city without adding state-specific special cases.
+    for variant in tuple(variants):
+        if variant.startswith("stadt "):
+            candidate = variant.removeprefix("stadt ").strip()
+        else:
+            candidate = f"stadt {variant}".strip()
+        if candidate and candidate not in variants:
+            variants.append(candidate)
     state_key = normalize_state_key(state)
     aliases = CITY_STATE_MUNICIPALITY_ALIASES.get(state_key, ())
     normalized_city = normalize_geocoder_text(city)
@@ -6192,6 +6256,155 @@ def fast_compact_norm(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", normalize_geocoder_text(value))
 
 
+def fast_parcel_number_norm(value: str | None) -> str:
+    """Normalize parcel numbers without collapsing numerator/denominator slashes."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = text.replace("ß", "ss").replace("ẞ", "ss")
+    text = text.replace("⁄", "/").replace("∕", "/").replace("／", "/")
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(character for character in text if not unicodedata.combining(character)).casefold()
+    return "".join(character for character in text if character.isalnum() or character == "/")
+
+
+def openplz_street_norm_variants(value: str | None) -> tuple[str, ...]:
+    variants: list[str] = []
+    for normalized in normalize_geocoder_text_variants(value):
+        compact = re.sub(r"[^a-z0-9]+", "", normalized)
+        if compact and compact not in variants:
+            variants.append(compact)
+    return tuple(variants)
+
+
+@lru_cache(maxsize=8192)
+def openplz_street_aliases_cached(
+    place: str,
+    street_query: str,
+    state: str,
+    limit: int,
+    signature: tuple[int, int],
+) -> tuple[tuple[str, str, str], ...]:
+    if signature == (0, 0):
+        return tuple()
+    state_key = normalize_state_key(state)
+    place_norms = tuple(dict.fromkeys(city_norms_for_state_context(place, state_key)))
+    street_prefixes = openplz_street_norm_variants(street_query)
+    if not state_key or not place_norms or not street_prefixes:
+        return tuple()
+    place_placeholders = ",".join("?" for _ in place_norms)
+    prefix_clauses = " OR ".join("(street_norm >= ? AND street_norm < ?)" for _ in street_prefixes)
+    prefix_params = [bound for prefix in street_prefixes for bound in (prefix, f"{prefix}\uffff")]
+    try:
+        con = sqlite3.connect(f"file:{OPENPLZ_DB}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT
+              street_norm,
+              postal_code,
+              MAX(locality) AS locality,
+              MIN(priority) AS priority
+            FROM aliases
+            WHERE state_key = ?
+              AND place_norm IN ({place_placeholders})
+              AND ({prefix_clauses})
+            GROUP BY street_norm, postal_code
+            ORDER BY priority, street_norm, postal_code
+            LIMIT ?
+            """,
+            [state_key, *place_norms, *prefix_params, max(64, min(int(limit) * 32, 1024))],
+        ).fetchall()
+        con.close()
+    except sqlite3.Error:
+        return tuple()
+    return tuple(
+        (
+            str(row["street_norm"] or "").strip(),
+            str(row["postal_code"] or "").strip(),
+            str(row["locality"] or place).strip(),
+        )
+        for row in rows
+        if str(row["street_norm"] or "").strip() and str(row["postal_code"] or "").strip()
+    )
+
+
+def openplz_street_aliases(place: str, street_query: str, state: str, limit: int) -> tuple[tuple[str, str, str], ...]:
+    return openplz_street_aliases_cached(
+        (place or "").strip(),
+        (street_query or "").strip(),
+        normalize_state_key(state),
+        int(limit),
+        openplz_signature(),
+    )
+
+
+@lru_cache(maxsize=2048)
+def openplz_unique_postcodes_for_place_cached(
+    state: str,
+    place: str,
+    post_codes: tuple[str, ...],
+    signature: tuple[int, int],
+) -> tuple[str, ...]:
+    """Return only postcodes that map to exactly one requested locality.
+
+    This fallback is deliberately independent of street spelling because some
+    ALKIS states provide a valid street/postcode but no municipality, and the
+    national street catalogue can lag behind ALKIS.  It never guesses between
+    multiple localities and always remains scoped to one federal state.
+    """
+    state_key = normalize_state_key(state)
+    requested_norms = set(city_norms_for_state_context(place, state_key))
+    candidates = tuple(dict.fromkeys(str(value or "").strip() for value in post_codes if str(value or "").strip()))
+    if signature == (0, 0) or not state_key or not requested_norms or not candidates:
+        return tuple()
+    placeholders = ",".join("?" for _ in candidates)
+    try:
+        con = sqlite3.connect(f"file:{OPENPLZ_DB}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT
+              postal_code,
+              MIN(locality) AS locality,
+              COUNT(DISTINCT locality_norm) AS locality_count
+            FROM streets
+            WHERE state_key = ?
+              AND postal_code IN ({placeholders})
+            GROUP BY postal_code
+            HAVING COUNT(DISTINCT locality_norm) = 1
+            """,
+            [state_key, *candidates],
+        ).fetchall()
+        con.close()
+    except sqlite3.Error:
+        return tuple()
+    allowed: list[str] = []
+    for row in rows:
+        locality_norms = set(city_norms_for_state_context(str(row["locality"] or ""), state_key))
+        post_code = str(row["postal_code"] or "").strip()
+        if post_code and requested_norms.intersection(locality_norms):
+            allowed.append(post_code)
+    return tuple(sorted(dict.fromkeys(allowed)))
+
+
+def openplz_unique_postcodes_for_place(post_codes: Iterable[str], place: str, state: str) -> tuple[str, ...]:
+    return openplz_unique_postcodes_for_place_cached(
+        normalize_state_key(state),
+        (place or "").strip(),
+        tuple(sorted(dict.fromkeys(str(value or "").strip() for value in post_codes if str(value or "").strip()))),
+        openplz_signature(),
+    )
+
+
+def search_result_city_label(row_city: str | None, post_code: str | None, state: str, city_fallback: str = "") -> str:
+    fallback = str(city_fallback or "").strip()
+    candidate = fallback or str(row_city or "").strip()
+    if candidate and post_code and fast_compact_norm(candidate) == fast_compact_norm(str(post_code)):
+        candidate = ""
+    return city_display_name_for_state(candidate, state)
+
+
 def fast_float(value, fallback: float = 0.0) -> float:
     try:
         if value is None:
@@ -6235,9 +6448,9 @@ def search_address_result_from_row(row: sqlite3.Row, state: str, city_fallback: 
     lat = fast_float(row["lat"])
     street_label = str(row["street_label"] or "").strip()
     house_label = str(row["house_number_label"] or "").strip()
-    city_label = city_display_name_for_state(row["city_label"] or city_fallback, state)
     base_label = " ".join(part for part in (street_label, house_label) if part).strip()
     post_code = str(row["post_code"] or "").strip()
+    city_label = search_result_city_label(row["city_label"], post_code, state, city_fallback)
     locality = " ".join(part for part in (post_code, city_label) if part)
     label = f"{base_label}, {locality}" if base_label and locality else (base_label or locality)
     address = {
@@ -6279,8 +6492,8 @@ def search_street_result_from_row(row: sqlite3.Row, state: str, street_fallback:
     lon = fast_float(row["lon"])
     lat = fast_float(row["lat"])
     street_label = str(row["street_label"] or street_fallback or "").strip()
-    city_label = city_display_name_for_state(row["city_label"] or city_fallback, state)
     post_code = str(row["post_code"] or "").strip() if "post_code" in row.keys() else ""
+    city_label = search_result_city_label(row["city_label"], post_code, state, city_fallback)
     place_label = " ".join(part for part in (post_code, city_label) if part)
     label = f"{street_label}, {place_label}" if place_label else street_label
     return {
@@ -6321,8 +6534,8 @@ def search_clustered_street_results_from_address_rows(
         lon = fast_float(row["lon"])
         lat = fast_float(row["lat"])
         street_label = str(row["street_label"] or street_fallback or "").strip()
-        city_label = str(row["city_label"] or city_fallback or "").strip()
         post_code = str(row["post_code"] or "").strip() if "post_code" in row.keys() else ""
+        city_label = search_result_city_label(row["city_label"], post_code, state, city_fallback)
         chosen = None
         for cluster in clusters:
             if normalize_geocoder_text(cluster["city"]) != normalize_geocoder_text(city_label):
@@ -6403,7 +6616,15 @@ def search_parcel_result_from_row(row: sqlite3.Row, state: str) -> dict:
     flur = str(row["flur_label"] or "")
     flurstueck = str(row["flurstueck_label"] or "")
     gemarkung = str(row["gemarkung_label"] or "")
-    label = f"Flur {flur}, Flurstück {flurstueck}, {gemarkung}".strip().strip(",")
+    label = ", ".join(
+        part
+        for part in (
+            f"Flur {flur}" if flur else "",
+            f"Flurstück {flurstueck}" if flurstueck else "",
+            gemarkung,
+        )
+        if part
+    )
     feature = {
         "source_db": str(row["source_db"] or ""),
         "gml_id": str(row["gml_id"] or ""),
@@ -6457,8 +6678,19 @@ def search_sqlite_parcel_lookup(
     states = [state for state in states_key if state]
     gemarkung = (gemarkung or "").strip()
     flur = (flur or "").strip()
-    flurstueck = fast_compact_norm(flurstueck)
-    if not any((gemarkung, flur, flurstueck)):
+    flurstueck_label = (flurstueck or "").strip()
+    requested_flurstueck_norm = fast_parcel_number_norm(flurstueck_label)
+    flurstueck_norms = tuple(
+        dict.fromkeys(
+            value
+            for value in (
+                requested_flurstueck_norm,
+                fast_compact_norm(flurstueck_label),
+            )
+            if value
+        )
+    )
+    if not gemarkung or not flurstueck_norms:
         return []
     gemarkung_base = re.sub(r"\s*\([^)]*\)\s*$", "", gemarkung).strip()
     gemarkung_norms = tuple(
@@ -6466,6 +6698,13 @@ def search_sqlite_parcel_lookup(
             value
             for source in (gemarkung, gemarkung_base)
             for value in normalize_geocoder_text_variants(source)
+            if value
+        )
+    )
+    gemarkung_base_norms = tuple(
+        dict.fromkeys(
+            value
+            for value in normalize_geocoder_text_variants(gemarkung_base)
             if value
         )
     )
@@ -6480,24 +6719,47 @@ def search_sqlite_parcel_lookup(
             if value
         )
     )
-    gemarkung_norm = gemarkung_norms[-1] if gemarkung_norms else ""
+    gemarkung_norm = gemarkung_base_norms[-1] if gemarkung_base_norms else (gemarkung_norms[-1] if gemarkung_norms else "")
     flur_norm = fast_compact_norm(flur)
     query_variants: list[tuple[str, list[object]]] = []
-    for candidate in gemarkung_norms:
-        if flur_norm and flurstueck:
-            query_variants.append(("gemarkung_norm = ? AND flur_norm = ? AND flurstueck_norm = ?", [candidate, flur_norm, flurstueck]))
-        if flurstueck:
-            query_variants.append(("gemarkung_norm = ? AND flurstueck_norm = ?", [candidate, flurstueck]))
-    for candidate in gemarkung_numbers:
-        if flur_norm and flurstueck:
-            query_variants.append(("gemarkungsnummer = ? AND flur_norm = ? AND flurstueck_norm = ?", [candidate, flur_norm, flurstueck]))
-        if flurstueck:
-            query_variants.append(("gemarkungsnummer = ? AND flurstueck_norm = ?", [candidate, flurstueck]))
-    if not gemarkung_norms and not gemarkung_numbers:
-        if flur_norm and flurstueck:
-            query_variants.append(("flur_norm = ? AND flurstueck_norm = ?", [flur_norm, flurstueck]))
-        if flurstueck:
-            query_variants.append(("flurstueck_norm = ?", [flurstueck]))
+    if gemarkung_numbers:
+        # A code selected from the Gemarkung autocomplete is authoritative.
+        # Never broaden a miss to similarly normalized Hofen/Höfen names.
+        numeric_only = bool(re.fullmatch(r"\d+", gemarkung))
+        for number in gemarkung_numbers:
+            candidates = ("",) if numeric_only else (gemarkung_base_norms or gemarkung_norms)
+            for candidate in candidates:
+                for parcel_norm in flurstueck_norms:
+                    clauses: list[str] = []
+                    params: list[object] = []
+                    if candidate:
+                        clauses.append("gemarkung_norm = ?")
+                        params.append(candidate)
+                    clauses.append("gemarkungsnummer = ?")
+                    params.append(number)
+                    if flur_norm:
+                        clauses.append("flur_norm = ?")
+                        params.append(flur_norm)
+                    clauses.append("flurstueck_norm = ?")
+                    params.append(parcel_norm)
+                    query_variants.append((" AND ".join(clauses), params))
+    else:
+        for candidate in gemarkung_norms:
+            for parcel_norm in flurstueck_norms:
+                if flur_norm:
+                    query_variants.append((
+                        "gemarkung_norm = ? AND flur_norm = ? AND flurstueck_norm = ?",
+                        [candidate, flur_norm, parcel_norm],
+                    ))
+                else:
+                    query_variants.append((
+                        "gemarkung_norm = ? AND flurstueck_norm = ?",
+                        [candidate, parcel_norm],
+                    ))
+    query_variants = [
+        (where, list(params))
+        for where, params in dict.fromkeys((where, tuple(params)) for where, params in query_variants)
+    ]
     if not query_variants:
         return []
     entries = search_db_entries_for_states(states)
@@ -6505,9 +6767,9 @@ def search_sqlite_parcel_lookup(
     results: list[dict] = []
     for entry in entries:
         try:
-            con = search_db_connection(entry.path)
             for where, params in query_variants:
-                rows = con.execute(
+                rows = search_db_fetchall(
+                    entry.path,
                     f"""
                     SELECT *
                     FROM parcel_lookup
@@ -6518,9 +6780,13 @@ def search_sqlite_parcel_lookup(
                       LENGTH(flurstueck_norm), flurstueck_norm
                     LIMIT ?
                     """,
-                    [*params, gemarkung_norm, flur_norm, max(int(limit) * 3, 12)],
-                ).fetchall()
+                    [*params, gemarkung_norm, flur_norm, 5000],
+                )
                 for row in rows:
+                    # Legacy indices removed '/', making 1/11, 11/1 and 111
+                    # share one key.  Verify the original label before using it.
+                    if fast_parcel_number_norm(row["flurstueck_label"]) != requested_flurstueck_norm:
+                        continue
                     key = (entry.name, str(row["source_db"] or ""), str(row["gml_id"] or ""))
                     if key in seen:
                         continue
@@ -6528,8 +6794,6 @@ def search_sqlite_parcel_lookup(
                     results.append(search_parcel_result_from_row(row, entry.name))
                     if len(results) >= int(limit):
                         return results[:int(limit)]
-                if rows and gemarkung_norm and flur_norm and flurstueck:
-                    return results[:int(limit)]
         except sqlite3.Error:
             continue
     return results[:int(limit)]
@@ -6541,6 +6805,7 @@ def search_sqlite_direct_lookup(
     limit: int,
     states_key: tuple[str, ...],
     signature: tuple[tuple[str, str, int, int], ...],
+    openplz_db_signature: tuple[int, int],
     *,
     allow_plain_street: bool = False,
 ) -> list[dict]:
@@ -6554,13 +6819,11 @@ def search_sqlite_direct_lookup(
     seen: set[tuple[str, str, str, str]] = set()
     for mode, street, house, city in geocoder_direct_candidates(query, allow_plain_street=allow_plain_street):
         street_norms = normalize_geocoder_text_variants(street)
-        city_norms = normalize_geocoder_text_variants(city)
         if not street_norms:
             continue
         for entry in entries:
             entry_city_norms = city_norms_for_state_context(city, entry.name)
             try:
-                con = search_db_connection(entry.path)
                 if mode == "address":
                     house_norm = normalize_geocoder_house(house)
                     if not house_norm:
@@ -6568,7 +6831,8 @@ def search_sqlite_direct_lookup(
                     city_clause = f" AND city_norm IN ({','.join('?' for _ in entry_city_norms)})" if entry_city_norms else ""
                     city_params = list(entry_city_norms)
                     street_placeholders = ",".join("?" for _ in street_norms)
-                    rows = con.execute(
+                    rows = search_db_fetchall(
+                        entry.path,
                         f"""
                         SELECT *
                         FROM address_lookup
@@ -6580,7 +6844,55 @@ def search_sqlite_direct_lookup(
                         LIMIT ?
                         """,
                         [*street_norms, house_norm, *city_params, max(int(limit) * 3, 12)],
-                    ).fetchall()
+                    )
+                    if not rows and city.strip() and openplz_db_signature != (0, 0):
+                        exact_alias_norms = set(openplz_street_norm_variants(street))
+                        allowed_postcodes = sorted({
+                            post_code
+                            for alias_norm, post_code, _locality in openplz_street_aliases(city, street, entry.name, int(limit) * 8)
+                            if alias_norm in exact_alias_norms and post_code
+                        })
+                        if allowed_postcodes:
+                            postcode_placeholders = ",".join("?" for _ in allowed_postcodes)
+                            rows = search_db_fetchall(
+                                entry.path,
+                                f"""
+                                SELECT *
+                                FROM address_lookup
+                                WHERE street_norm IN ({street_placeholders})
+                                  AND house_number_norm = ?
+                                  AND feature_kind = 'building'
+                                  AND post_code IN ({postcode_placeholders})
+                                ORDER BY label
+                                LIMIT ?
+                                """,
+                                [*street_norms, house_norm, *allowed_postcodes, max(int(limit) * 3, 12)],
+                            )
+                    if not rows and city.strip() and openplz_db_signature != (0, 0):
+                        postcode_candidates = search_db_fetchall(
+                            entry.path,
+                            f"""
+                            SELECT *
+                            FROM address_lookup
+                            WHERE street_norm IN ({street_placeholders})
+                              AND house_number_norm = ?
+                              AND feature_kind = 'building'
+                              AND post_code <> ''
+                            ORDER BY label
+                            LIMIT ?
+                            """,
+                            [*street_norms, house_norm, max(int(limit) * 16, 64)],
+                        )
+                        unique_postcodes = set(openplz_unique_postcodes_for_place(
+                            (str(row["post_code"] or "") for row in postcode_candidates),
+                            city,
+                            entry.name,
+                        ))
+                        if unique_postcodes:
+                            rows = [
+                                row for row in postcode_candidates
+                                if str(row["post_code"] or "").strip() in unique_postcodes
+                            ][:max(int(limit) * 3, 12)]
                     for row in rows:
                         result = search_address_result_from_row(row, entry.name, city)
                         key = (entry.name, str(row["source_db"] or ""), str(row["gml_id"] or ""), normalize_geocoder_text(str(result.get("label") or "")))
@@ -6594,7 +6906,8 @@ def search_sqlite_direct_lookup(
                     if not entry_city_norms:
                         continue
                     street_placeholders = ",".join("?" for _ in street_norms)
-                    rows = con.execute(
+                    rows = search_db_fetchall(
+                        entry.path,
                         f"""
                         SELECT *
                         FROM street_lookup
@@ -6604,7 +6917,51 @@ def search_sqlite_direct_lookup(
                         LIMIT ?
                         """,
                         [*street_norms, *entry_city_norms, int(limit)],
-                    ).fetchall()
+                    )
+                    if not rows and city.strip() and openplz_db_signature != (0, 0):
+                        exact_alias_norms = set(openplz_street_norm_variants(street))
+                        allowed_postcodes = sorted({
+                            post_code
+                            for alias_norm, post_code, _locality in openplz_street_aliases(city, street, entry.name, int(limit) * 8)
+                            if alias_norm in exact_alias_norms and post_code
+                        })
+                        if allowed_postcodes:
+                            postcode_placeholders = ",".join("?" for _ in allowed_postcodes)
+                            rows = search_db_fetchall(
+                                entry.path,
+                                f"""
+                                SELECT *
+                                FROM street_lookup
+                                WHERE street_norm IN ({street_placeholders})
+                                  AND post_code IN ({postcode_placeholders})
+                                ORDER BY address_count DESC, label
+                                LIMIT ?
+                                """,
+                                [*street_norms, *allowed_postcodes, int(limit)],
+                            )
+                    if not rows and city.strip() and openplz_db_signature != (0, 0):
+                        postcode_candidates = search_db_fetchall(
+                            entry.path,
+                            f"""
+                            SELECT *
+                            FROM street_lookup
+                            WHERE street_norm IN ({street_placeholders})
+                              AND post_code <> ''
+                            ORDER BY address_count DESC, label
+                            LIMIT ?
+                            """,
+                            [*street_norms, max(int(limit) * 16, 64)],
+                        )
+                        unique_postcodes = set(openplz_unique_postcodes_for_place(
+                            (str(row["post_code"] or "") for row in postcode_candidates),
+                            city,
+                            entry.name,
+                        ))
+                        if unique_postcodes:
+                            rows = [
+                                row for row in postcode_candidates
+                                if str(row["post_code"] or "").strip() in unique_postcodes
+                            ][:int(limit)]
                     for row in rows:
                         result = search_street_result_from_row(row, entry.name, street, city)
                         key = (entry.name, "street", str(row["post_code"] or ""), normalize_geocoder_text(str(result.get("label") or "")))
@@ -6923,13 +7280,13 @@ def search_street_suggestions_cached(
     seen: set[tuple[str, str, str]] = set()
     for entry in search_db_entries_for_states(entry_states):
         try:
-            con = search_db_connection(entry.path)
             rows = []
             for city_name in city_names:
                 city_norms = city_norms_for_state_context(city_name, entry.name)
                 if not city_norms:
                     continue
-                rows.extend(con.execute(
+                rows.extend(search_db_fetchall(
+                    entry.path,
                     f"""
                     SELECT
                       street_label,
@@ -6950,7 +7307,7 @@ def search_street_suggestions_cached(
                     LIMIT ?
                     """,
                     [*city_norms, *(f"{street_norm}%" for street_norm in street_norms), int(limit) * 2],
-                ).fetchall())
+                ))
         except sqlite3.Error:
             continue
         for row in rows:
@@ -6978,6 +7335,242 @@ def search_street_suggestions_cached(
     return tuple(results[:int(limit)])
 
 
+def search_street_suggestions_openplz(
+    place: str,
+    q: str,
+    limit: int,
+    states: set[str],
+) -> list[dict]:
+    place = (place or "").strip()
+    query = (q or "").strip()
+    if len(place) < 2 or len(query) < 2 or openplz_signature() == (0, 0):
+        return []
+    place_context = exact_place_context(place, states)
+    inferred_states = states_for_place_context(place, states)
+    entry_states = tuple(sorted(inferred_states)) if len(inferred_states) == 1 else tuple(sorted(states))
+    place_candidates: list[str] = []
+    for value in (
+        place,
+        str((place_context or {}).get("name") or ""),
+        str((place_context or {}).get("municipality") or ""),
+    ):
+        value = value.strip()
+        if value and normalize_geocoder_text(value) not in {
+            normalize_geocoder_text(candidate) for candidate in place_candidates
+        }:
+            place_candidates.append(value)
+    display_place = str((place_context or {}).get("name") or place).strip()
+    street_prefixes = normalize_geocoder_text_variants(query)
+    if not entry_states or not place_candidates or not street_prefixes:
+        return []
+
+    groups: dict[tuple[str, str], dict] = {}
+    for entry in search_db_entries_for_states(entry_states):
+        aliases: set[tuple[str, str]] = set()
+        for place_candidate in place_candidates:
+            aliases.update(
+                (alias_norm, post_code)
+                for alias_norm, post_code, _locality in openplz_street_aliases(
+                    place_candidate,
+                    query,
+                    entry.name,
+                    int(limit),
+                )
+            )
+        if not aliases:
+            continue
+        allowed_postcodes = sorted({post_code for _alias_norm, post_code in aliases if post_code})
+        if not allowed_postcodes:
+            continue
+        postcode_placeholders = ",".join("?" for _ in allowed_postcodes)
+        prefix_clauses = " OR ".join("(street_norm >= ? AND street_norm < ?)" for _ in street_prefixes)
+        prefix_params = [bound for prefix in street_prefixes for bound in (prefix, f"{prefix}\uffff")]
+        try:
+            rows = search_db_fetchall(
+                entry.path,
+                f"""
+                SELECT *
+                FROM street_lookup
+                WHERE post_code IN ({postcode_placeholders})
+                  AND ({prefix_clauses})
+                ORDER BY address_count DESC, street_label
+                LIMIT ?
+                """,
+                [*allowed_postcodes, *prefix_params, max(128, min(int(limit) * 64, 1024))],
+            )
+        except sqlite3.Error:
+            continue
+        for row in rows:
+            post_code = str(row["post_code"] or "").strip()
+            row_alias_norms = openplz_street_norm_variants(str(row["street_label"] or row["street_norm"] or ""))
+            if not any((row_alias_norm, post_code) in aliases for row_alias_norm in row_alias_norms):
+                continue
+            street_label = str(row["street_label"] or "").strip()
+            if not street_label:
+                continue
+            key = (entry.name, normalize_geocoder_text(street_label))
+            weight = max(int(row["address_count"] or 0), 1)
+            lon = fast_float(row["lon"])
+            lat = fast_float(row["lat"])
+            group = groups.setdefault(
+                key,
+                {
+                    "state": entry.name,
+                    "street": street_label,
+                    "address_count": 0,
+                    "weighted_lon": 0.0,
+                    "weighted_lat": 0.0,
+                    "weight": 0,
+                    "min_lon": fast_float(row["min_lon"], lon),
+                    "min_lat": fast_float(row["min_lat"], lat),
+                    "max_lon": fast_float(row["max_lon"], lon),
+                    "max_lat": fast_float(row["max_lat"], lat),
+                },
+            )
+            group["address_count"] += int(row["address_count"] or 0)
+            group["weighted_lon"] += lon * weight
+            group["weighted_lat"] += lat * weight
+            group["weight"] += weight
+            group["min_lon"] = min(group["min_lon"], fast_float(row["min_lon"], lon))
+            group["min_lat"] = min(group["min_lat"], fast_float(row["min_lat"], lat))
+            group["max_lon"] = max(group["max_lon"], fast_float(row["max_lon"], lon))
+            group["max_lat"] = max(group["max_lat"], fast_float(row["max_lat"], lat))
+
+    ranked = sorted(groups.values(), key=lambda group: (-int(group["address_count"]), str(group["street"]).casefold()))
+    results: list[dict] = []
+    for group in ranked[:int(limit)]:
+        weight = max(int(group["weight"]), 1)
+        state_key = str(group["state"])
+        results.append({
+            "label": str(group["street"]),
+            "value": str(group["street"]),
+            "subtitle": display_place,
+            "kind": "street",
+            "result_type": "street",
+            "state": state_key,
+            "state_label": state_display_name(state_key),
+            "address_count": int(group["address_count"]),
+            "center": [float(group["weighted_lon"]) / weight, float(group["weighted_lat"]) / weight],
+            "bbox": [
+                float(group["min_lon"]),
+                float(group["min_lat"]),
+                float(group["max_lon"]),
+                float(group["max_lat"]),
+            ],
+            "zoom": 17.4,
+        })
+    return results
+
+
+def search_street_suggestions_unique_postcode(
+    place: str,
+    q: str,
+    limit: int,
+    states: set[str],
+) -> list[dict]:
+    """Recover ALKIS streets missing from OpenPLZ's street catalogue.
+
+    Candidate streets still come from the ALKIS search index.  OpenPLZ is used
+    only to prove that each candidate postcode maps uniquely to the requested
+    locality inside the same federal state.
+    """
+    place = (place or "").strip()
+    query = (q or "").strip()
+    if len(place) < 2 or len(query) < 2 or openplz_signature() == (0, 0):
+        return []
+    inferred_states = states_for_place_context(place, states)
+    entry_states = tuple(sorted(inferred_states)) if len(inferred_states) == 1 else tuple(sorted(states))
+    street_prefixes = normalize_geocoder_text_variants(query)
+    if not entry_states or not street_prefixes:
+        return []
+
+    groups: dict[tuple[str, str], dict] = {}
+    for entry in search_db_entries_for_states(entry_states):
+        prefix_clauses = " OR ".join("(street_norm >= ? AND street_norm < ?)" for _ in street_prefixes)
+        prefix_params = [bound for prefix in street_prefixes for bound in (prefix, f"{prefix}\uffff")]
+        try:
+            rows = search_db_fetchall(
+                entry.path,
+                f"""
+                SELECT *
+                FROM street_lookup
+                WHERE post_code <> ''
+                  AND ({prefix_clauses})
+                ORDER BY address_count DESC, street_label
+                LIMIT ?
+                """,
+                [*prefix_params, max(256, min(int(limit) * 128, 2048))],
+            )
+        except sqlite3.Error:
+            continue
+        allowed_postcodes = set(openplz_unique_postcodes_for_place(
+            (str(row["post_code"] or "") for row in rows),
+            place,
+            entry.name,
+        ))
+        if not allowed_postcodes:
+            continue
+        for row in rows:
+            post_code = str(row["post_code"] or "").strip()
+            if post_code not in allowed_postcodes:
+                continue
+            street_label = str(row["street_label"] or "").strip()
+            if not street_label:
+                continue
+            key = (entry.name, normalize_geocoder_text(street_label))
+            weight = max(int(row["address_count"] or 0), 1)
+            lon = fast_float(row["lon"])
+            lat = fast_float(row["lat"])
+            group = groups.setdefault(
+                key,
+                {
+                    "state": entry.name,
+                    "street": street_label,
+                    "address_count": 0,
+                    "weighted_lon": 0.0,
+                    "weighted_lat": 0.0,
+                    "weight": 0,
+                    "min_lon": fast_float(row["min_lon"], lon),
+                    "min_lat": fast_float(row["min_lat"], lat),
+                    "max_lon": fast_float(row["max_lon"], lon),
+                    "max_lat": fast_float(row["max_lat"], lat),
+                },
+            )
+            group["address_count"] += int(row["address_count"] or 0)
+            group["weighted_lon"] += lon * weight
+            group["weighted_lat"] += lat * weight
+            group["weight"] += weight
+            group["min_lon"] = min(group["min_lon"], fast_float(row["min_lon"], lon))
+            group["min_lat"] = min(group["min_lat"], fast_float(row["min_lat"], lat))
+            group["max_lon"] = max(group["max_lon"], fast_float(row["max_lon"], lon))
+            group["max_lat"] = max(group["max_lat"], fast_float(row["max_lat"], lat))
+
+    ranked = sorted(groups.values(), key=lambda group: (-int(group["address_count"]), str(group["street"]).casefold()))
+    results: list[dict] = []
+    for group in ranked[:int(limit)]:
+        weight = max(int(group["weight"]), 1)
+        state_key = str(group["state"])
+        results.append({
+            "label": str(group["street"]),
+            "value": str(group["street"]),
+            "subtitle": place,
+            "kind": "street",
+            "result_type": "street",
+            "state": state_key,
+            "state_label": state_display_name(state_key),
+            "address_count": int(group["address_count"]),
+            "center": [float(group["weighted_lon"]) / weight, float(group["weighted_lat"]) / weight],
+            "bbox": [
+                float(group["min_lon"]),
+                float(group["min_lat"]),
+                float(group["max_lon"]),
+                float(group["max_lat"]),
+            ],
+            "zoom": 17.4,
+        })
+    return results
+
+
 def search_street_suggestions_for_dataset(dataset: str, place: str, q: str, limit: int, state: str = "") -> dict:
     if not is_virtual_germany_dataset(dataset):
         get_dataset(dataset)
@@ -6989,6 +7582,10 @@ def search_street_suggestions_for_dataset(dataset: str, place: str, q: str, limi
         tuple(sorted(state for state in states if state)),
         search_db_signature_for_states(states),
     ))
+    if not results:
+        results = search_street_suggestions_openplz(place, q, int(limit), states)
+    if not results:
+        results = search_street_suggestions_unique_postcode(place, q, int(limit), states)
     if not results and place.strip():
         seen: set[tuple[str, str, str]] = set()
         for item in results:
@@ -7037,8 +7634,8 @@ def search_gemarkung_suggestions_cached(
     seen: set[tuple[str, str]] = set()
     for entry in search_db_entries_for_states(states_key):
         try:
-            con = search_db_connection(entry.path)
-            rows = con.execute(
+            rows = search_db_fetchall(
+                entry.path,
                 """
                 SELECT gemarkung_label, gemarkungsnummer, COUNT(*) AS parcel_count
                 FROM parcel_lookup
@@ -7048,12 +7645,13 @@ def search_gemarkung_suggestions_cached(
                 LIMIT ?
                 """,
                 [f"{query_norm}*", int(limit) * 2],
-            ).fetchall()
+            )
         except sqlite3.Error:
             continue
         for row in rows:
             gemarkung_label = str(row["gemarkung_label"] or "").strip()
-            key = (entry.name, normalize_geocoder_text(gemarkung_label))
+            gemarkungsnummer = str(row["gemarkungsnummer"] or "").strip()
+            key = (entry.name, gemarkungsnummer or normalize_geocoder_text(gemarkung_label))
             if not gemarkung_label or key in seen:
                 continue
             seen.add(key)
@@ -7063,7 +7661,7 @@ def search_gemarkung_suggestions_cached(
                 "subtitle": state_display_name(entry.name),
                 "state": entry.name,
                 "state_label": state_display_name(entry.name),
-                "gemarkungsnummer": str(row["gemarkungsnummer"] or ""),
+                "gemarkungsnummer": gemarkungsnummer,
                 "parcel_count": int(row["parcel_count"] or 0),
             })
             if len(results) >= int(limit):
@@ -7106,8 +7704,8 @@ def search_geocoder_for_dataset(
         seen: set[tuple[str, str, str]] = set()
         for entry in search_db_entries_for_states(tuple(sorted(search_states))):
             try:
-                con = search_db_connection(entry.path)
-                rows = con.execute(
+                rows = search_db_fetchall(
+                    entry.path,
                     """
                     SELECT *
                     FROM address_lookup
@@ -7123,7 +7721,7 @@ def search_geocoder_for_dataset(
                     LIMIT 5000
                     """,
                     [street_norm, min_lon, max_lon, min_lat, max_lat],
-                ).fetchall()
+                )
             except sqlite3.Error:
                 continue
             municipality = str((wanted_municipality or {}).get("name") or "").strip()
@@ -7160,10 +7758,24 @@ def geocoder_direct_candidates(query: str, *, allow_plain_street: bool = False) 
         if not any(ch.isdigit() for ch in token):
             continue
         street = " ".join(tokens[:index]).strip()
-        house = token.strip()
-        city = " ".join(tokens[index + 1:]).strip()
-        if street and house:
-            candidates.append(("address", street, house, city))
+        house_spans: list[tuple[str, int]] = []
+        # Structured form fields are joined into one query before this parser
+        # runs.  Keep separated suffixes/ranges with the house number instead
+        # of treating them as the first token of the municipality (``8 a
+        # Loose`` previously became house ``8`` in city ``a Loose``).
+        if index + 1 < len(tokens) and re.fullmatch(r"[A-Za-zÄÖÜäöü]", tokens[index + 1]):
+            house_spans.append((f"{token} {tokens[index + 1]}", index + 2))
+        if (
+            index + 2 < len(tokens)
+            and tokens[index + 1] in {"-", "/"}
+            and any(ch.isdigit() for ch in tokens[index + 2])
+        ):
+            house_spans.append((f"{token}{tokens[index + 1]}{tokens[index + 2]}", index + 3))
+        house_spans.append((token.strip(), index + 1))
+        for house, city_start in house_spans:
+            city = " ".join(tokens[city_start:]).strip()
+            if street and house:
+                candidates.append(("address", street, house, city))
     for split in range(len(tokens) - 1, 0, -1):
         street = " ".join(tokens[:split]).strip()
         city = " ".join(tokens[split:]).strip()
@@ -7191,6 +7803,7 @@ def search_direct_geocoder_for_dataset(query: str, limit: int, search_states: se
         int(limit),
         tuple(sorted(search_states)),
         search_db_signature_for_states(search_states),
+        openplz_signature(),
         allow_plain_street=allow_plain_street,
     )
     return sqlite_results[:int(limit)]
@@ -7228,7 +7841,7 @@ def search_features_for_dataset(
         fast_parcel_results = search_fast_cadastre_parcels_for_dataset(gemarkung, flur, flurstueck, limit, preliminary_search_states)
         if fast_parcel_results:
             return {"query": query, "count": len(fast_parcel_results[:limit]), "results": fast_parcel_results[:limit]}
-        if gemarkung.strip() and flur.strip() and flurstueck.strip():
+        if gemarkung.strip() and flurstueck.strip():
             return {"query": query, "count": 0, "results": []}
     place_context = requested_place_context(query, allowed_states)
     query_without_place = query_without_place_context(query, place_context)
@@ -7407,7 +8020,7 @@ def cached_search_features_for_dataset(
             place_context = requested_place_context(stripped_query, allowed_states)
             place_query = query_without_place_context(stripped_query, place_context)
         key = (
-            "direct-geocoder-v5",
+            "direct-geocoder-v6-openplz",
             dataset,
             stripped_query,
             int(limit),
@@ -7416,27 +8029,21 @@ def cached_search_features_for_dataset(
             tuple(sorted(search_states)),
             tuple(active_bucket_state_keys()),
             search_db_signature_for_states(search_states),
+            openplz_signature(),
         )
         cached = _SEARCH_RESPONSE_CACHE.get(key)
         if cached and cached[0] > now:
             return json.loads(json.dumps(cached[1]))
-        direct_results = []
-        if place_context and normalize_place_search_text(place_query) != normalize_place_search_text(stripped_query):
-            place_states = {structured_state} if structured_state else {str(place_context["state"])}
-            place_candidate_limit = max(int(limit) * 20, 100)
-            direct_results = search_direct_geocoder_for_dataset(place_query, place_candidate_limit, place_states, allow_plain_street=street_mode)
-            place_bbox = normalized_bbox(place_context.get("bbox") if isinstance(place_context, dict) else None)
-            if place_bbox:
-                min_lon, min_lat, max_lon, max_lat = place_bbox
-                direct_results = [
-                    item for item in direct_results
-                    if isinstance(item.get("center"), list)
-                    and len(item["center"]) >= 2
-                    and min_lon <= float(item["center"][0]) <= max_lon
-                    and min_lat <= float(item["center"][1]) <= max_lat
-                ]
-        if not direct_results:
-            direct_results = search_direct_geocoder_for_dataset(stripped_query, limit, search_states, allow_plain_street=street_mode)
+        # Keep the requested city in the query so exact ALKIS city aliases and
+        # the OpenPLZ street/postcode fallback can scope results correctly.
+        # The former place-stripped, bbox-only fallback admitted neighbouring
+        # municipalities for broad municipal bounding boxes.
+        direct_results = search_direct_geocoder_for_dataset(
+            stripped_query,
+            limit,
+            search_states,
+            allow_plain_street=street_mode,
+        )
         if direct_results or is_probable_address_query(stripped_query) or is_probable_address_query(place_query):
             result = {"query": stripped_query, "count": len(direct_results[:limit]), "results": direct_results[:limit]}
             if len(_SEARCH_RESPONSE_CACHE) >= _SEARCH_RESPONSE_CACHE_MAX:
@@ -12336,6 +12943,13 @@ def _safe_version_name(version: str) -> str:
     return value
 
 
+def _canonical_volume_state_slug(value: str) -> str:
+    state_slug = normalize_state_key(value)
+    if not DATASET_RE.match(state_slug):
+        raise HTTPException(status_code=400, detail="invalid state slug")
+    return state_slug
+
+
 def _volume_versions_root() -> Path:
     return ACTIVE_VOLUME_ROOT / "versions"
 
@@ -12349,15 +12963,33 @@ def _volume_incoming_root() -> Path:
 
 
 def _volume_version_dir(state_slug: str, version_name: str) -> Path:
-    if not DATASET_RE.match(state_slug):
-        raise HTTPException(status_code=400, detail="invalid state slug")
+    state_slug = _canonical_volume_state_slug(state_slug)
     return _volume_versions_root() / state_slug / _safe_version_name(version_name)
 
 
 def _volume_upload_dir(state_slug: str, version_name: str) -> Path:
-    if not DATASET_RE.match(state_slug):
-        raise HTTPException(status_code=400, detail="invalid state slug")
+    state_slug = _canonical_volume_state_slug(state_slug)
     return _volume_incoming_root() / state_slug / _safe_version_name(version_name)
+
+
+@asynccontextmanager
+async def _locked_volume_upload_session(upload_dir: Path):
+    """Serialize writes and finalization for one upload session across workers."""
+    lock_path = upload_dir / ".upload.lock"
+    lock_handle = lock_path.open("a+b")
+    locked = False
+    try:
+        while not locked:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+            except BlockingIOError:
+                await asyncio.sleep(0.1)
+        yield
+    finally:
+        if locked:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        lock_handle.close()
 
 
 def _prune_stale_volume_upload_sessions(
@@ -12369,8 +13001,7 @@ def _prune_stale_volume_upload_sessions(
     if not incoming_root.is_dir():
         return {"sessions": 0, "bytes_total": 0}
     if state_slug is not None:
-        if not DATASET_RE.match(state_slug):
-            raise HTTPException(status_code=400, detail="invalid state slug")
+        state_slug = _canonical_volume_state_slug(state_slug)
         state_dirs = [incoming_root / state_slug]
     else:
         state_dirs = [path for path in incoming_root.iterdir() if path.is_dir() and not path.is_symlink()]
@@ -12570,8 +13201,7 @@ def _volume_upload_file_status(upload_dir: Path, item: dict) -> dict:
 
 
 def _volume_upload_sessions(state_slug: str) -> list[dict]:
-    if not DATASET_RE.match(state_slug):
-        raise HTTPException(status_code=400, detail="invalid state slug")
+    state_slug = _canonical_volume_state_slug(state_slug)
     _prune_stale_volume_upload_sessions(state_slug)
     state_dir = _volume_incoming_root() / state_slug
     if not state_dir.is_dir():
@@ -12731,6 +13361,48 @@ app.add_middleware(
 )
 
 
+def _search_analytics_started(
+    request: Request,
+    analytics_id: str | None,
+    analytics_scope: str | None,
+    allowed_scopes: set[str],
+) -> float | None:
+    if analytics_scope not in allowed_scopes:
+        return None
+    if not valid_analytics_marker(request.method, analytics_id, analytics_scope):
+        return None
+    return time.perf_counter()
+
+
+def _record_search_analytics(
+    *,
+    started_at: float | None,
+    scope: str | None,
+    query_text: str,
+    state: str,
+    payload: dict,
+    access_mode: str,
+) -> dict:
+    """Record a completed marked interaction without affecting its response."""
+
+    if started_at is None or scope is None:
+        return payload
+    try:
+        SEARCH_ANALYTICS.record_response(
+            scope=scope,
+            query_text=query_text,
+            state=state,
+            payload=payload,
+            access_mode=access_mode,
+            latency_ms=(time.perf_counter() - started_at) * 1_000,
+        )
+    except Exception:
+        # Analytics is deliberately fail-open: even unexpected implementation
+        # errors must never change search or map-selection behaviour.
+        pass
+    return payload
+
+
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health() -> dict:
     return {"status": "ok"}
@@ -12738,6 +13410,7 @@ def health() -> dict:
 
 @app.on_event("startup")
 def warm_search_indexes() -> None:
+    SEARCH_ANALYTICS.initialize()
     try:
         _prune_stale_volume_upload_sessions()
     except Exception:
@@ -12747,10 +13420,9 @@ def warm_search_indexes() -> None:
         exact_place_context_index(gn250_places_signature())
         for entry in search_db_entries_for_states(tuple(sorted(states))):
             try:
-                con = search_db_connection(entry.path)
-                con.execute("SELECT 1 FROM address_lookup LIMIT 1").fetchone()
-                con.execute("SELECT 1 FROM street_lookup LIMIT 1").fetchone()
-                con.execute("SELECT 1 FROM parcel_lookup LIMIT 1").fetchone()
+                search_db_fetchone(entry.path, "SELECT 1 FROM address_lookup LIMIT 1")
+                search_db_fetchone(entry.path, "SELECT 1 FROM street_lookup LIMIT 1")
+                search_db_fetchone(entry.path, "SELECT 1 FROM parcel_lookup LIMIT 1")
             except sqlite3.Error:
                 continue
         feature_db_entries_for_dataset("deutschland")
@@ -13217,6 +13889,24 @@ def api_v1_create_internal_viewer_session(
     return {"token": token, "expires_at": claims.get("exp")}
 
 
+@app.get("/internal/v1/search-analytics/dashboard", include_in_schema=False)
+def api_v1_search_analytics_dashboard(
+    _: Annotated[str, Depends(require_admin_key)],
+    period: str = "30d",
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[int, Query(ge=1, le=100)] = 100,
+    bucket: str = "day",
+    timeline_from: Annotated[int | None, Query(ge=0)] = None,
+) -> dict:
+    return SEARCH_ANALYTICS.dashboard(
+        period,
+        page=page,
+        per_page=per_page,
+        bucket=bucket,
+        timeline_from=timeline_from,
+    )
+
+
 @app.api_route("/api/v1/states", methods=["GET", "HEAD"])
 def api_v1_states() -> dict:
     states = _api_v1_state_rows()
@@ -13292,17 +13982,32 @@ def api_v1_tile_mvt(state: str, z: int, x: int, y: int) -> Response:
 
 @app.api_route("/api/v1/search/address", methods=["GET", "HEAD"])
 def api_v1_search_address(
-    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    request: Request,
+    access: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
     q: str = "",
     place: str = "",
     street: str = "",
     house_number: str = "",
     limit: Annotated[int, Query(ge=1, le=30)] = 12,
     state: str = "",
+    analytics_id: str | None = None,
+    analytics_scope: str | None = None,
 ) -> dict:
+    analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"address"})
     query = q.strip() or _api_v1_search_query_from_parts(street, house_number, place)
+
+    def done(payload: dict) -> dict:
+        return _record_search_analytics(
+            started_at=analytics_started,
+            scope=analytics_scope,
+            query_text=query,
+            state=state,
+            payload=payload,
+            access_mode=access.mode,
+        )
+
     if len(query) < 2:
-        return {"query": query, "results": []}
+        return done({"query": query, "results": []})
     state_key = state
     if not state_key.strip() and place.strip():
         inferred_states = states_for_place_context(place, set(active_bucket_state_keys()))
@@ -13317,7 +14022,7 @@ def api_v1_search_address(
         state=state_key,
     )
     if result.get("results") or q.strip() or not place.strip() or not street.strip():
-        return result
+        return done(result)
     place_suggestions = search_place_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, place, 8, state=state).get("results") or []
     for suggestion in place_suggestions:
         suggested_place = str(suggestion.get("value") or suggestion.get("label") or "").strip()
@@ -13334,38 +14039,52 @@ def api_v1_search_address(
         )
         if fallback.get("results"):
             fallback["query"] = query
-            return fallback
-    return result
+            return done(fallback)
+    return done(result)
 
 
 @app.api_route("/api/v1/search/parcel", methods=["GET", "HEAD"])
 def api_v1_search_parcel(
+    request: Request,
     gemarkung: str,
-    flur: str,
     flurstueck: str,
-    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    access: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    flur: str = "",
     limit: Annotated[int, Query(ge=1, le=30)] = 12,
     state: str = "",
+    analytics_id: str | None = None,
+    analytics_scope: str | None = None,
 ) -> dict:
+    analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"parcel"})
     query = _api_v1_search_query_from_parts(gemarkung, flur, flurstueck)
-    if len(gemarkung.strip()) < 2 or not flur.strip() or not flurstueck.strip():
-        return {"query": query, "results": []}
-    return cached_search_features_for_dataset(
-        VIRTUAL_GERMANY_DATASET,
-        gemarkung.strip(),
-        limit,
-        "parcel",
+    if len(gemarkung.strip()) < 2 or not flurstueck.strip():
+        payload = {"query": query, "results": []}
+    else:
+        payload = cached_search_features_for_dataset(
+            VIRTUAL_GERMANY_DATASET,
+            gemarkung.strip(),
+            limit,
+            "parcel",
+            state=state,
+            gemarkung=gemarkung,
+            flur=flur,
+            flurstueck=flurstueck,
+        )
+    return _record_search_analytics(
+        started_at=analytics_started,
+        scope=analytics_scope,
+        query_text=query,
         state=state,
-        gemarkung=gemarkung,
-        flur=flur,
-        flurstueck=flurstueck,
+        payload=payload,
+        access_mode=access.mode,
     )
 
 
 @app.api_route("/api/v1/search/{dataset}", methods=["GET", "HEAD"])
 def api_v1_dataset_search(
+    request: Request,
     dataset: str,
-    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    access: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
     q: str = "",
     limit: Annotated[int, Query(ge=1, le=30)] = 12,
     mode: str = "mixed",
@@ -13373,43 +14092,79 @@ def api_v1_dataset_search(
     gemarkung: str = "",
     flur: str = "",
     flurstueck: str = "",
+    analytics_id: str | None = None,
+    analytics_scope: str | None = None,
 ) -> dict:
+    analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"address", "parcel"})
     if not is_virtual_germany_dataset(dataset):
         get_dataset(dataset)
     query = q.strip() or gemarkung.strip() or flurstueck.strip()
     if len(query) < 2:
-        return {"query": query, "results": []}
-    return cached_search_features_for_dataset(
-        dataset,
-        query,
-        limit,
-        mode,
+        payload = {"query": query, "results": []}
+    else:
+        payload = cached_search_features_for_dataset(
+            dataset,
+            query,
+            limit,
+            mode,
+            state=state,
+            gemarkung=gemarkung,
+            flur=flur,
+            flurstueck=flurstueck,
+        )
+    return _record_search_analytics(
+        started_at=analytics_started,
+        scope=analytics_scope,
+        query_text=_api_v1_search_query_from_parts(gemarkung, flur, flurstueck) if analytics_scope == "parcel" else query,
         state=state,
-        gemarkung=gemarkung,
-        flur=flur,
-        flurstueck=flurstueck,
+        payload=payload,
+        access_mode=access.mode,
     )
 
 
 @app.api_route("/api/v1/suggest/places", methods=["GET", "HEAD"], tags=["Search"])
 def api_v1_suggest_places(
-    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    request: Request,
+    access: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
     q: Annotated[str, Query(min_length=2, max_length=80)],
     limit: Annotated[int, Query(ge=1, le=20)] = 10,
     state: str = "",
+    analytics_id: str | None = None,
+    analytics_scope: str | None = None,
 ) -> dict:
-    return search_place_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, q, limit, state=state)
+    analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"place"})
+    payload = search_place_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, q, limit, state=state)
+    return _record_search_analytics(
+        started_at=analytics_started,
+        scope=analytics_scope,
+        query_text=q,
+        state=state,
+        payload=payload,
+        access_mode=access.mode,
+    )
 
 
 @app.api_route("/api/v1/suggest/streets", methods=["GET", "HEAD"], tags=["Search"])
 def api_v1_suggest_streets(
-    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    request: Request,
+    access: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
     q: Annotated[str, Query(min_length=2, max_length=80)],
     place: Annotated[str, Query(min_length=2, max_length=80)],
     limit: Annotated[int, Query(ge=1, le=20)] = 10,
     state: str = "",
+    analytics_id: str | None = None,
+    analytics_scope: str | None = None,
 ) -> dict:
-    return search_street_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, place, q, limit, state=state)
+    analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"street"})
+    payload = search_street_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, place, q, limit, state=state)
+    return _record_search_analytics(
+        started_at=analytics_started,
+        scope=analytics_scope,
+        query_text=_api_v1_search_query_from_parts(q, place),
+        state=state,
+        payload=payload,
+        access_mode=access.mode,
+    )
 
 
 @app.api_route("/api/v1/suggest/gemarkungen", methods=["GET", "HEAD"], tags=["Search"])
@@ -13814,11 +14569,15 @@ def api_v1_onoffice_selection_payload(
 
 @app.api_route("/api/v1/features/point", methods=["GET", "HEAD"])
 def api_v1_features_at_point(
+    request: Request,
     access: Annotated[ApiAccessContext, Depends(RequireScopes("feature:read"))],
     lon: Annotated[float, Query(ge=-180, le=180)],
     lat: Annotated[float, Query(ge=-90, le=90)],
     dataset: str = VIRTUAL_GERMANY_DATASET,
+    analytics_id: str | None = None,
+    analytics_scope: str | None = None,
 ) -> dict:
+    analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"map_selection"})
     if not is_virtual_germany_dataset(dataset):
         try:
             get_dataset(dataset)
@@ -13827,16 +14586,27 @@ def api_v1_features_at_point(
                 raise
     payload = features_at_point_for_dataset(dataset, lon, lat)
     payload["access"] = access.mode
-    return payload
+    return _record_search_analytics(
+        started_at=analytics_started,
+        scope=analytics_scope,
+        query_text="Kartenauswahl",
+        state="" if is_virtual_germany_dataset(dataset) else dataset,
+        payload=payload,
+        access_mode=access.mode,
+    )
 
 
 @app.api_route("/api/v1/features/point-preview", methods=["GET", "HEAD"])
 def api_v1_features_at_point_preview(
-    _: Annotated[ApiAccessContext, Depends(RequireScopes("feature:preview"))],
+    request: Request,
+    access: Annotated[ApiAccessContext, Depends(RequireScopes("feature:preview"))],
     lon: Annotated[float, Query(ge=-180, le=180)],
     lat: Annotated[float, Query(ge=-90, le=90)],
     dataset: str = VIRTUAL_GERMANY_DATASET,
+    analytics_id: str | None = None,
+    analytics_scope: str | None = None,
 ) -> dict:
+    analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"map_selection"})
     if not is_virtual_germany_dataset(dataset):
         try:
             get_dataset(dataset)
@@ -13846,7 +14616,7 @@ def api_v1_features_at_point_preview(
     payload = features_at_point_for_dataset(dataset, lon, lat)
     parcels = [preview for item in payload["parcels"] if (preview := feature_preview_item(item, "parcel"))]
     buildings = [preview for item in payload["buildings"] if (preview := feature_preview_item(item, "building"))]
-    return {
+    result = {
         "access": "free",
         "lon": lon,
         "lat": lat,
@@ -13854,6 +14624,14 @@ def api_v1_features_at_point_preview(
         "parcels": parcels,
         "buildings": buildings,
     }
+    return _record_search_analytics(
+        started_at=analytics_started,
+        scope=analytics_scope,
+        query_text="Kartenauswahl",
+        state="" if is_virtual_germany_dataset(dataset) else dataset,
+        payload=result,
+        access_mode=access.mode,
+    )
 
 
 @app.api_route("/active/{state_slug}/{asset_path:path}", methods=["GET", "HEAD"])
@@ -14215,8 +14993,7 @@ async def create_volume_upload_session(
     bundesland: Annotated[str | None, Query()] = None,
     base_version: Annotated[str | None, Query()] = None,
 ) -> dict:
-    if not DATASET_RE.match(state_slug):
-        raise HTTPException(status_code=400, detail="invalid state slug")
+    state_slug = _canonical_volume_state_slug(state_slug)
     _prune_stale_volume_upload_sessions(state_slug)
     version_name = _safe_version_name(version)
     payload = await request.json()
@@ -14282,6 +15059,7 @@ def list_volume_upload_sessions(
     state_slug: str,
     _: Annotated[str, Depends(require_openkataster_admin_token)],
 ) -> dict:
+    state_slug = _canonical_volume_state_slug(state_slug)
     return {
         "status": "success",
         "target": "tile-volume",
@@ -14296,8 +15074,7 @@ def list_volume_version_files(
     _: Annotated[str, Depends(require_openkataster_admin_token)],
     version: Annotated[str, Query(min_length=1)],
 ) -> dict:
-    if not DATASET_RE.match(state_slug):
-        raise HTTPException(status_code=400, detail="invalid state slug")
+    state_slug = _canonical_volume_state_slug(state_slug)
     version_name = _safe_version_name(version)
     version_dir = _volume_version_dir(state_slug, version_name)
     if not version_dir.is_dir():
@@ -14333,18 +15110,18 @@ def list_volume_version_files(
 
 
 @app.delete("/admin/volume-upload-session/{state_slug}")
-def delete_volume_upload_session(
+async def delete_volume_upload_session(
     state_slug: str,
     _: Annotated[str, Depends(require_openkataster_admin_token)],
     version: Annotated[str, Query(min_length=1)],
 ) -> dict:
-    if not DATASET_RE.match(state_slug):
-        raise HTTPException(status_code=400, detail="invalid state slug")
+    state_slug = _canonical_volume_state_slug(state_slug)
     version_name = _safe_version_name(version)
     upload_dir = _volume_upload_dir(state_slug, version_name)
     if not upload_dir.is_dir():
         raise HTTPException(status_code=404, detail="upload session not found")
-    shutil.rmtree(upload_dir)
+    async with _locked_volume_upload_session(upload_dir):
+        shutil.rmtree(upload_dir)
     state_dir = upload_dir.parent
     try:
         state_dir.rmdir()
@@ -14370,8 +15147,7 @@ async def upload_volume_part(
     end: Annotated[int, Query(gt=0)],
     total_size: Annotated[int, Query(gt=0)],
 ) -> dict:
-    if not DATASET_RE.match(state_slug):
-        raise HTTPException(status_code=400, detail="invalid state slug")
+    state_slug = _canonical_volume_state_slug(state_slug)
     version_name = _safe_version_name(version)
     safe_filename = os.path.basename(filename)
     if safe_filename != filename or safe_filename not in VOLUME_REQUIRED_FILES:
@@ -14401,53 +15177,97 @@ async def upload_volume_part(
         )
     target_path = upload_dir / f"{safe_filename}.partial"
     final_path = upload_dir / safe_filename
-    if final_path.is_file():
-        final_size = final_path.stat().st_size
-        if final_size != total_size:
-            raise HTTPException(status_code=409, detail=f"completed upload size mismatch for {safe_filename}")
-        return {"status": "success", "already_uploaded": True, "uploaded_bytes": final_size, "size_bytes": 0}
-    current_size = target_path.stat().st_size if target_path.exists() else 0
-    if current_size > total_size:
-        raise HTTPException(status_code=409, detail=f"partial upload exceeds session size for {safe_filename}")
-    if current_size >= end:
-        return {"status": "success", "already_uploaded": True, "uploaded_bytes": current_size, "size_bytes": 0}
-    if current_size != start:
-        raise HTTPException(status_code=409, detail=f"upload offset mismatch for {safe_filename}: expected start {current_size}, got {start}")
+    async with _locked_volume_upload_session(upload_dir):
+        # The destination may have been finalized while this request waited for
+        # another worker holding the session lock.
+        _volume_destination_must_be_available(state_slug, version_name)
+        if not upload_dir.is_dir():
+            raise HTTPException(status_code=409, detail="upload session is no longer available")
+        if final_path.is_file():
+            final_size = final_path.stat().st_size
+            if final_size != total_size:
+                raise HTTPException(status_code=409, detail=f"completed upload size mismatch for {safe_filename}")
+            return {"status": "success", "already_uploaded": True, "uploaded_bytes": final_size, "size_bytes": 0}
 
-    written = 0
-    try:
-        with target_path.open("ab") as handle:
-            async for chunk in request.stream():
-                if not chunk:
-                    continue
-                written += len(chunk)
-                if written > expected_chunk_size:
-                    handle.truncate(start)
-                    raise HTTPException(status_code=413, detail="upload part exceeded declared range")
-                await asyncio.to_thread(handle.write, chunk)
-        if written != expected_chunk_size:
-            with target_path.open("ab") as handle:
+        current_size = target_path.stat().st_size if target_path.exists() else 0
+        if current_size > total_size:
+            raise HTTPException(status_code=409, detail=f"partial upload exceeds session size for {safe_filename}")
+        if current_size >= end:
+            return {"status": "success", "already_uploaded": True, "uploaded_bytes": current_size, "size_bytes": 0}
+        if current_size < start:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "upload_offset_mismatch",
+                    "message": f"upload offset mismatch for {safe_filename}: expected start {current_size}, got {start}",
+                    "filename": safe_filename,
+                    "expected_start": current_size,
+                    "received_start": start,
+                    "end": end,
+                    "total_size": total_size,
+                },
+                headers={"Upload-Offset": str(current_size)},
+            )
+
+        recovered_partial_part = current_size > start
+        if recovered_partial_part:
+            # A forced process stop can leave a prefix of this exact range on
+            # disk. The retry still contains the complete range, so roll that
+            # uncommitted prefix back and write the part once under the lock.
+            with target_path.open("r+b") as handle:
                 handle.truncate(start)
-            raise HTTPException(status_code=400, detail=f"incomplete upload part: expected {expected_chunk_size}, got {written}")
-    except HTTPException:
-        raise
-    except Exception as exc:
+
+        written = 0
         try:
             with target_path.open("ab") as handle:
-                handle.truncate(start)
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=f"could not write upload part: {exc}") from exc
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    if written > expected_chunk_size:
+                        handle.truncate(start)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                        raise HTTPException(status_code=413, detail="upload part exceeded declared range")
+                    await asyncio.to_thread(handle.write, chunk)
+                if written != expected_chunk_size:
+                    handle.truncate(start)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                    raise HTTPException(status_code=400, detail=f"incomplete upload part: expected {expected_chunk_size}, got {written}")
+                handle.flush()
+                await asyncio.to_thread(os.fsync, handle.fileno())
+        except HTTPException:
+            raise
+        except asyncio.CancelledError:
+            try:
+                with target_path.open("ab") as handle:
+                    handle.truncate(start)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except Exception:
+                pass
+            raise
+        except Exception as exc:
+            try:
+                with target_path.open("ab") as handle:
+                    handle.truncate(start)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail=f"could not write upload part: {exc}") from exc
 
-    return {
-        "status": "success",
-        "target": "tile-volume",
-        "filename": safe_filename,
-        "start": start,
-        "end": end,
-        "size_bytes": written,
-        "uploaded_bytes": target_path.stat().st_size,
-    }
+        return {
+            "status": "success",
+            "target": "tile-volume",
+            "filename": safe_filename,
+            "start": start,
+            "end": end,
+            "size_bytes": written,
+            "uploaded_bytes": target_path.stat().st_size,
+            "recovered_partial_part": recovered_partial_part,
+        }
 
 
 @app.post("/admin/complete-volume-upload/{state_slug}")
@@ -14459,8 +15279,7 @@ async def complete_volume_upload(
     bundesland: Annotated[str | None, Query()] = None,
     base_version: Annotated[str | None, Query()] = None,
 ) -> dict:
-    if not DATASET_RE.match(state_slug):
-        raise HTTPException(status_code=400, detail="invalid state slug")
+    state_slug = _canonical_volume_state_slug(state_slug)
     version_name = _safe_version_name(version)
     payload = await request.json()
     payload_base_version = payload.get("base_version")
@@ -14481,68 +15300,70 @@ async def complete_volume_upload(
     upload_dir = _volume_upload_dir(state_slug, version_name)
     if not upload_dir.is_dir():
         raise HTTPException(status_code=400, detail="upload session not found")
-    manifest = _read_volume_upload_session_manifest(
-        upload_dir,
-        state_slug=state_slug,
-        version_name=version_name,
-    )
-    if manifest["base_version"] != selected_base_version or manifest["files"] != files:
-        raise HTTPException(status_code=409, detail="completion payload does not match upload session")
+    async with _locked_volume_upload_session(upload_dir):
+        manifest = _read_volume_upload_session_manifest(
+            upload_dir,
+            state_slug=state_slug,
+            version_name=version_name,
+        )
+        if manifest["base_version"] != selected_base_version or manifest["files"] != files:
+            raise HTTPException(status_code=409, detail="completion payload does not match upload session")
 
-    base_dir = None
-    if selected_base_version is not None:
-        base_dir = _validated_volume_base_dir(state_slug, selected_base_version)
+        base_dir = None
+        if selected_base_version is not None:
+            base_dir = _validated_volume_base_dir(state_slug, selected_base_version)
 
-    for item in files:
-        filename = item["filename"]
-        partial_path = upload_dir / f"{filename}.partial"
-        final_path = upload_dir / filename
-        if partial_path.is_file():
-            if partial_path.stat().st_size != int(item["size_bytes"]):
-                raise HTTPException(status_code=400, detail=f"size mismatch for {filename}: expected {item['size_bytes']}, got {partial_path.stat().st_size}")
-            final_path.unlink(missing_ok=True)
-            partial_path.rename(final_path)
-        if not final_path.is_file():
-            raise HTTPException(status_code=400, detail=f"missing uploaded file: {filename}")
-        if final_path.stat().st_size != int(item["size_bytes"]):
-            raise HTTPException(status_code=400, detail=f"size mismatch for {filename}: expected {item['size_bytes']}, got {final_path.stat().st_size}")
+        for item in files:
+            filename = item["filename"]
+            partial_path = upload_dir / f"{filename}.partial"
+            final_path = upload_dir / filename
+            if partial_path.is_file():
+                if partial_path.stat().st_size != int(item["size_bytes"]):
+                    raise HTTPException(status_code=400, detail=f"size mismatch for {filename}: expected {item['size_bytes']}, got {partial_path.stat().st_size}")
+                final_path.unlink(missing_ok=True)
+                partial_path.rename(final_path)
+            if not final_path.is_file():
+                raise HTTPException(status_code=400, detail=f"missing uploaded file: {filename}")
+            if final_path.stat().st_size != int(item["size_bytes"]):
+                raise HTTPException(status_code=400, detail=f"size mismatch for {filename}: expected {item['size_bytes']}, got {final_path.stat().st_size}")
 
-    uploaded_names = {item["filename"] for item in files}
-    inherited_storage = {}
-    for filename in sorted(VOLUME_REQUIRED_FILES - uploaded_names):
-        if base_dir is None:
-            raise HTTPException(status_code=400, detail=f"missing uploaded file: {filename}")
-        (upload_dir / f"{filename}.partial").unlink(missing_ok=True)
-        inherited_storage[filename] = _inherit_volume_file(base_dir / filename, upload_dir / filename)
+        uploaded_names = {item["filename"] for item in files}
+        inherited_storage = {}
+        for filename in sorted(VOLUME_REQUIRED_FILES - uploaded_names):
+            if base_dir is None:
+                raise HTTPException(status_code=400, detail=f"missing uploaded file: {filename}")
+            (upload_dir / f"{filename}.partial").unlink(missing_ok=True)
+            inherited_storage[filename] = _inherit_volume_file(base_dir / filename, upload_dir / filename)
 
-    validation = _validate_volume_state_dir(upload_dir)
-    display_name = bundesland or manifest.get("bundesland") or state_slug.replace("-", " ").title()
-    _write_volume_upload_manifest(
-        upload_dir,
-        state_slug=state_slug,
-        bundesland=display_name,
-        version_name=version_name,
-        uploaded_files=files,
-        base_version=selected_base_version,
-        inherited_storage=inherited_storage,
-    )
+        validation = _validate_volume_state_dir(upload_dir)
+        display_name = bundesland or manifest.get("bundesland") or state_slug.replace("-", " ").title()
+        _write_volume_upload_manifest(
+            upload_dir,
+            state_slug=state_slug,
+            bundesland=display_name,
+            version_name=version_name,
+            uploaded_files=files,
+            base_version=selected_base_version,
+            inherited_storage=inherited_storage,
+        )
 
-    version_dir.parent.mkdir(parents=True, exist_ok=True)
-    tmp_version_dir = version_dir.with_name(f".{version_dir.name}.{os.getpid()}.tmp")
-    shutil.rmtree(tmp_version_dir, ignore_errors=True)
-    os.replace(upload_dir, tmp_version_dir)
-    if os.path.lexists(version_dir):
-        os.replace(tmp_version_dir, upload_dir)
-        raise HTTPException(status_code=409, detail=f"tile version already exists: {version_name}")
-    try:
-        os.rename(tmp_version_dir, version_dir)
-    except OSError as exc:
-        if not upload_dir.exists() and tmp_version_dir.exists():
-            os.replace(tmp_version_dir, upload_dir)
+        version_dir.parent.mkdir(parents=True, exist_ok=True)
+        tmp_version_dir = version_dir.with_name(f".{version_dir.name}.{os.getpid()}.tmp")
+        shutil.rmtree(tmp_version_dir, ignore_errors=True)
+        os.replace(upload_dir, tmp_version_dir)
         if os.path.lexists(version_dir):
-            raise HTTPException(status_code=409, detail=f"tile version already exists: {version_name}") from exc
-        raise HTTPException(status_code=500, detail=f"could not publish tile version: {exc}") from exc
-    _volume_upload_session_manifest_path(version_dir).unlink(missing_ok=True)
+            os.replace(tmp_version_dir, upload_dir)
+            raise HTTPException(status_code=409, detail=f"tile version already exists: {version_name}")
+        try:
+            os.rename(tmp_version_dir, version_dir)
+        except OSError as exc:
+            if not upload_dir.exists() and tmp_version_dir.exists():
+                os.replace(tmp_version_dir, upload_dir)
+            if os.path.lexists(version_dir):
+                raise HTTPException(status_code=409, detail=f"tile version already exists: {version_name}") from exc
+            raise HTTPException(status_code=500, detail=f"could not publish tile version: {exc}") from exc
+        _volume_upload_session_manifest_path(version_dir).unlink(missing_ok=True)
+    (version_dir / ".upload.lock").unlink(missing_ok=True)
     _clear_data_caches()
     return {
         "status": "success",

@@ -7,6 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: openkataster-tiles-api
     restart: unless-stopped
+    stop_grace_period: 5m
     env_file:
       - .env
     environment:

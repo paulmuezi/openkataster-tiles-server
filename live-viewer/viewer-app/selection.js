@@ -4,13 +4,12 @@ const HIDDEN_DYNAMIC_FIELDS = new Set([
   'source_db', 'gml_id', 'id', 'geometry', 'bbox', 'center', 'addresses', 'address',
   'flurstueckskennzeichen',
   'gebaeudekennzeichen',
-  'zaehler', 'nenner', 'nutzungen', 'nutzung_haupt',
+  'zaehler', 'nenner', 'flurstuecksfolge', 'nutzungen', 'nutzung_haupt',
   'gemeinde', 'gemeindenummer', 'kreis', 'kreisnummer', 'land', 'landnummer', 'regierungsbezirk'
 ]);
 
 const FIELD_LABELS = {
-  gemeindeteil: 'Gemeindeteil',
-  flurstuecksfolge: 'Flurstücksfolge'
+  gemeindeteil: 'Gemeindeteil'
 };
 
 const BUILDING_OFFICIAL_AREA_KEYS = ['amtliche_flaeche_m2', 'grundflaeche_m2'];
@@ -96,6 +95,93 @@ export function previewNoticeScrollOffset({ scrollLeft, scrollWidth, clientWidth
   return Math.min(Math.max(scrollLeft, 0), Math.max(scrollWidth - clientWidth, 0));
 }
 
+export function resolveHitStack({
+  currentBuildings = [],
+  currentParcels = [],
+  hitBuildings = [],
+  hitParcels = [],
+  additive = false,
+  preferredKind = null
+} = {}) {
+  const geometryKeys = new WeakMap();
+  const geometryKey = (item) => {
+    const geometry = item?.geometry;
+    if (!geometry || typeof geometry !== 'object') return '';
+    if (!geometryKeys.has(geometry)) geometryKeys.set(geometry, JSON.stringify(geometry));
+    return geometryKeys.get(geometry);
+  };
+  const isPreview = (item) => Boolean(item?.preview_id && !item?.gml_id);
+  const selectionBucket = (items) => {
+    const values = new Map();
+    const equivalentKey = (item) => {
+      const directKey = featureKey(item);
+      if (values.has(directKey)) return directKey;
+      const candidateGeometry = geometryKey(item);
+      if (!candidateGeometry) return null;
+      for (const [key, candidate] of values) {
+        // Preview responses deliberately hide the cadastral ID. During an access
+        // change, the same geometry can therefore arrive once as preview_id and
+        // once as source_db:gml_id. Reconcile only that cross-mode pair; two
+        // distinct full records with identical geometry remain distinct.
+        if (isPreview(candidate) === isPreview(item)) continue;
+        if (geometryKey(candidate) === candidateGeometry) return key;
+      }
+      return null;
+    };
+    const bucket = {
+      has: (item) => equivalentKey(item) !== null,
+      delete: (item) => {
+        const key = equivalentKey(item);
+        if (key !== null) values.delete(key);
+      },
+      set: (item) => {
+        const equivalent = equivalentKey(item);
+        if (equivalent !== null && equivalent !== featureKey(item)) values.delete(equivalent);
+        values.set(featureKey(item), item);
+      },
+      values: () => [...values.values()]
+    };
+    items.forEach(bucket.set);
+    return bucket;
+  };
+  const buildings = selectionBucket(additive ? currentBuildings : []);
+  const parcels = selectionBucket(additive ? currentParcels : []);
+  const includeAll = !preferredKind || preferredKind === 'all';
+  const keyedHits = (items) => [...new Map(items.map((item) => [featureKey(item), item])).values()];
+  const buildingHits = includeAll || preferredKind === 'building' ? keyedHits(hitBuildings) : [];
+  const parcelHits = includeAll || preferredKind === 'parcel' ? keyedHits(hitParcels) : [];
+
+  if (!additive) {
+    buildingHits.forEach(buildings.set);
+    parcelHits.forEach(parcels.set);
+  } else if (buildingHits.length) {
+    const removeBuildings = buildingHits.every(buildings.has);
+    for (const item of buildingHits) {
+      if (removeBuildings) buildings.delete(item);
+      else buildings.set(item);
+    }
+    // A building click auto-adds its parcel only while adding the building. When
+    // removing a building, the parcel keeps its independently chosen state.
+    if (!removeBuildings) parcelHits.forEach(parcels.set);
+  } else if (parcelHits.length) {
+    const removeParcels = parcelHits.every(parcels.has);
+    for (const item of parcelHits) {
+      if (removeParcels) parcels.delete(item);
+      else parcels.set(item);
+    }
+  }
+  return { buildings: buildings.values(), parcels: parcels.values() };
+}
+
+export function withoutSelectionItem({ buildings = [], parcels = [] } = {}, kind, key) {
+  const safeBuildings = Array.isArray(buildings) ? buildings : [];
+  const safeParcels = Array.isArray(parcels) ? parcels : [];
+  return {
+    buildings: kind === 'building' ? safeBuildings.filter((item) => featureKey(item) !== key) : [...safeBuildings],
+    parcels: kind === 'parcel' ? safeParcels.filter((item) => featureKey(item) !== key) : [...safeParcels]
+  };
+}
+
 export function createSelectionController({ map, api, store, layout, elements }) {
   const { selectionContent, selectionCount, selectTool, selectionDock } = elements;
   let request = null;
@@ -123,8 +209,10 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function selectionOutlineCollection(items) {
     const edges = new Map();
+    const seenRings = new Set();
     for (const item of items) {
       for (const ring of collectRings(item.geometry)) {
+        const ringEdges = [];
         for (let index = 1; index < ring.length; index += 1) {
           const start = ring[index - 1];
           const end = ring[index];
@@ -133,6 +221,12 @@ export function createSelectionController({ map, api, store, layout, elements })
           const endKey = coordinateKey(end);
           if (startKey === endKey) continue;
           const key = startKey < endKey ? `${startKey}|${endKey}` : `${endKey}|${startKey}`;
+          ringEdges.push({ key, start, end, startKey, endKey });
+        }
+        const ringKey = ringEdges.map((edge) => edge.key).sort().join('||');
+        if (!ringKey || seenRings.has(ringKey)) continue;
+        seenRings.add(ringKey);
+        for (const { key, start, end, startKey, endKey } of ringEdges) {
           const edge = edges.get(key);
           if (edge) edge.count += 1;
           else edges.set(key, { count: 1, start, end, startKey, endKey });
@@ -236,7 +330,8 @@ export function createSelectionController({ map, api, store, layout, elements })
     const count = parcels.length + buildings.length;
     selectionCount.textContent = loading && !count ? 'Auswahl wird geladen' : count === 1 ? '1 Objekt ausgewählt' : `${count} Objekte ausgewählt`;
     updateSources();
-    if (count && !state.layout.tableOpen) layout.setTable(true);
+    const canRevealTable = !layout.isMobile() || ['select', 'search'].includes(state.activeTool);
+    if (count && !state.layout.tableOpen && canRevealTable) layout.setTable(true);
     selectionDock.classList.toggle('is-loading', loading);
   }
 
@@ -289,6 +384,15 @@ export function createSelectionController({ map, api, store, layout, elements })
     return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody>${notice}</tbody></table></div></section>`;
   }
 
+  function selectionActionHeader() {
+    return '<th class="selection-action-column compact"><span class="sr-only">Auswahl</span></th>';
+  }
+
+  function selectionActionCell(item, kind) {
+    const noun = kind === 'parcel' ? 'Flurstück' : 'Gebäude';
+    return `<td class="selection-action-column compact"><button class="selection-item-remove" type="button" data-selection-remove-kind="${kind}" data-selection-remove-key="${escapeHtml(featureKey(item))}" aria-label="${noun} aus Auswahl entfernen" title="Aus Auswahl entfernen">×</button></td>`;
+  }
+
   function tableColumnAttributes(column, additionalClasses = []) {
     const className = [
       ...additionalClasses,
@@ -299,6 +403,7 @@ export function createSelectionController({ map, api, store, layout, elements })
     const slot = column.slot ? ` data-selection-column="${escapeHtml(column.slot)}"` : '';
     return `${className ? ` class="${className}"` : ''}${slot}`;
   }
+
 
   function display(value) {
     return value === null || value === undefined || value === '' ? '–' : escapeHtml(value);
@@ -404,20 +509,20 @@ export function createSelectionController({ map, api, store, layout, elements })
       const fullLabel = column.title || column.label;
       return `<th${tableColumnAttributes(column)} title="${escapeHtml(fullLabel)}">${escapeHtml(column.label)}</th>`;
     }).join('');
-    const rows = items.map((item) => `<tr>${columns.map((column) => {
+    const rows = items.map((item) => `<tr>${selectionActionCell(item, kind)}${columns.map((column) => {
       const value = columnValue(column, item);
       const content = column.html ? column.html(item, value) : formatCell(value, column.format);
       return `<td${tableColumnAttributes(column)}>${content}</td>`;
     }).join('')}</tr>`).join('');
     const firstSumIndex = columns.findIndex((column) => column.sum || column.summary);
     const hasTotals = items.length > 1 && firstSumIndex >= 0;
-    const totals = hasTotals ? `<tfoot><tr><td class="summary-label" colspan="${firstSumIndex}">Summe</td>${columns.slice(firstSumIndex).map((column) => {
+    const totals = hasTotals ? `<tfoot><tr><td class="summary-label" colspan="${firstSumIndex + 1}">Summe</td>${columns.slice(firstSumIndex).map((column) => {
       if (column.summary) return `<td${tableColumnAttributes(column, ['summary-value'])}>${column.summary(items)}</td>`;
       if (!column.sum) return '<td></td>';
       const values = items.map((item) => columnValue(column, item)).filter(hasValue).map(Number).filter(Number.isFinite);
       return `<td${tableColumnAttributes(column, ['summary-value'])}>${values.length ? formatCell(values.reduce((sum, value) => sum + value, 0), column.format) : '–'}</td>`;
     }).join('')}</tr></tfoot>` : '';
-    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody>${totals}</table></div></section>`;
+    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table"><thead><tr>${selectionActionHeader()}${headers}</tr></thead><tbody>${rows}</tbody>${totals}</table></div></section>`;
   }
 
   function buildingTable(buildings) {
@@ -462,7 +567,6 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], value: (item) => item.flurstueck || [item.zaehler, item.nenner].filter(Boolean).join('/'), compact: true },
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'], value: parcelUsage },
       { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
-      { label: 'Flurstücksfolge', keys: ['flurstuecksfolge'] },
       { label: 'Abweichender Rechtszustand', keys: ['abweichender_rechtszustand'], format: 'boolean' },
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'], format: 'boolean' },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'], format: 'boolean' },
@@ -482,16 +586,21 @@ export function createSelectionController({ map, api, store, layout, elements })
     selectTool.classList.add('is-loading');
     store.setState({ selection: { ...state.selection, loading: true } }, 'selection-loading');
     try {
-      const data = await (state.access.pro ? api.featureAt : api.featurePreviewAt)(lngLat.lng, lngLat.lat, request.signal);
-      const buildings = data.buildings || [];
-      const parcels = data.parcels || [];
-      const kind = preferredKind || (buildings.length ? 'building' : parcels.length ? 'parcel' : null);
+      const data = await (state.access.pro ? api.featureAt : api.featurePreviewAt)(
+        lngLat.lng,
+        lngLat.lat,
+        request.signal
+      );
       const next = store.getState();
-      const currentBuildings = additive ? new Map(next.selection.buildings.map((item) => [featureKey(item), item])) : new Map();
-      const currentParcels = additive ? new Map(next.selection.parcels.map((item) => [featureKey(item), item])) : new Map();
-      if (kind === 'building') toggleItems(currentBuildings, buildings, additive);
-      if (kind === 'parcel') toggleItems(currentParcels, parcels, additive);
-      store.setState({ selection: { buildings: [...currentBuildings.values()], parcels: [...currentParcels.values()], loading: false } }, 'selection');
+      const hits = resolveHitStack({
+        currentBuildings: next.selection.buildings,
+        currentParcels: next.selection.parcels,
+        hitBuildings: data.buildings || [],
+        hitParcels: data.parcels || [],
+        additive,
+        preferredKind
+      });
+      store.setState({ selection: { ...hits, loading: false } }, 'selection');
     } catch (error) {
       if (error.name !== 'AbortError') console.error(error);
       const current = store.getState();
@@ -532,13 +641,6 @@ export function createSelectionController({ map, api, store, layout, elements })
     }
   }
 
-  function toggleItems(target, items, additive) {
-    for (const item of items) {
-      const key = featureKey(item);
-      if (additive && target.has(key)) target.delete(key); else target.set(key, item);
-    }
-  }
-
   function clear() {
     const state = store.getState();
     if (!state.layout.tableOpen) {
@@ -570,8 +672,22 @@ export function createSelectionController({ map, api, store, layout, elements })
   map.on('load', addLayers);
   selectionContent.addEventListener('scroll', schedulePreviewNoticeAlignment, { passive: true });
   if (typeof window !== 'undefined') window.addEventListener('resize', schedulePreviewNoticeAlignment, { passive: true });
+  selectionContent.addEventListener('click', (event) => {
+    const button = event.target?.closest?.('[data-selection-remove-kind][data-selection-remove-key]');
+    if (!button || !selectionContent.contains(button)) return;
+    event.preventDefault();
+    const current = store.getState();
+    const next = withoutSelectionItem(
+      current.selection,
+      button.dataset.selectionRemoveKind,
+      button.dataset.selectionRemoveKey
+    );
+    store.setState({ selection: { ...current.selection, ...next } }, 'selection-item-remove');
+  });
   map.on('click', (event) => {
-    if (store.getState().activeTool === 'select') selectAt(event.lngLat, true);
+    if (store.getState().activeTool === 'select') {
+      selectAt(event.lngLat, true);
+    }
   });
   store.subscribe((state, reason) => { if (reason.startsWith('selection') || reason === 'restore') render(state); });
   return { selectAt, flash, clear, render };

@@ -64,7 +64,7 @@ export function createLayerController({ map, store, elements }) {
     if (map.getSource(SOURCE_ID)) return;
     map.addSource(SOURCE_ID, {
       type: 'vector',
-      tiles: [`${window.location.origin}/api/v1/tiles/deutschland/{z}/{x}/{y}.mvt?client=viewer`],
+      tiles: [`${window.location.origin}/api/v1/tiles/deutschland/{z}/{x}/{y}.mvt?client=viewer&v=20260714-runtime-schema3`],
       minzoom: 0,
       maxzoom: 17
     });
@@ -123,6 +123,11 @@ export function createLayerController({ map, store, elements }) {
           20, ['case', ['in', ['get', 'signaturnummer'], ['literal', ['3024', '3025']]], 2.9, 1.7]]
       } });
     add({ id: 'alkis-symbols', type: 'fill', source: SOURCE_ID, 'source-layer': 'point_symbol_fills_simplified', minzoom: 17.4,
+      // MV's DEMV objects include millions of migrated legacy "graphische Punkte"
+      // as ALKIS 3629. Keep the same signature from other states untouched.
+      filter: ['!', ['all',
+        ['==', ['get', 'signaturnummer'], '3629'],
+        ['==', ['slice', ['coalesce', ['get', 'gml_id'], ''], 0, 4], 'DEMV']]],
       paint: { 'fill-color': ['coalesce', ['get', 'fill_color'], '#111111'], 'fill-opacity': 1 } });
   }
 

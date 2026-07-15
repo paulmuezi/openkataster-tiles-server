@@ -19,14 +19,16 @@ export function createLayout({ app, map, store, elements }) {
   }
 
   function scheduleMapResize(reason) {
-    const geometryChanges = reason === 'table' || (!isMobile() && ['tool', 'sidebar'].includes(reason));
+    const mobile = isMobile();
+    const tableTransition = reason === 'table' || (mobile && reason === 'tool');
+    const geometryChanges = tableTransition || (!mobile && ['tool', 'sidebar'].includes(reason));
     if (!geometryChanges) return;
     app.dataset.layoutTransitioning = 'true';
     window.clearTimeout(layoutTransitionTimer);
     layoutTransitionTimer = window.setTimeout(() => {
       app.dataset.layoutTransitioning = 'false';
       map.resize();
-    }, reason === 'table' ? 320 : 400);
+    }, tableTransition ? 320 : 400);
   }
 
   function render(state, reason) {
@@ -48,6 +50,20 @@ export function createLayout({ app, map, store, elements }) {
   function setTool(activeTool) {
     const current = store.getState();
     const nextTool = current.activeTool === activeTool ? 'none' : activeTool;
+    if (isMobile()) {
+      const selectionCount = current.selection.parcels.length + current.selection.buildings.length;
+      store.setState({
+        activeTool: nextTool,
+        layout: {
+          ...current.layout,
+          sidebarOpen: nextTool === 'export',
+          tableOpen: nextTool === 'select' && selectionCount > 0,
+          mobileExportSettings: false
+        }
+      }, 'tool');
+      return;
+    }
+
     const sidebarOpen = activeTool === 'export' ? true : current.layout.sidebarOpen;
 
     store.setState({
@@ -63,6 +79,19 @@ export function createLayout({ app, map, store, elements }) {
 
   function setSidebar(open) {
     const state = store.getState();
+    if (isMobile()) {
+      store.setState({
+        activeTool: open ? 'export' : state.activeTool === 'export' ? 'none' : state.activeTool,
+        layout: {
+          ...state.layout,
+          sidebarOpen: open,
+          tableOpen: open ? false : state.layout.tableOpen,
+          mobileExportSettings: open ? state.layout.mobileExportSettings : false
+        }
+      }, 'tool');
+      return;
+    }
+
     store.setState({
       activeTool: !open && state.activeTool === 'export' ? 'none' : state.activeTool,
       layout: { ...state.layout, sidebarOpen: open, mobileExportSettings: open ? state.layout.mobileExportSettings : false }
@@ -90,19 +119,25 @@ export function createLayout({ app, map, store, elements }) {
   }
 
   function closeExportPanel() {
-    const state = store.getState();
-    if (isMobile() && state.layout.mobileExportSettings) {
-      store.setState({
-        layout: { ...state.layout, mobileExportSettings: false }
-      }, 'sidebar');
-      return;
-    }
     setSidebar(false);
   }
 
   function setTable(open) {
     const state = store.getState();
     const mobile = isMobile();
+    if (mobile) {
+      store.setState({
+        activeTool: open ? 'select' : state.activeTool === 'select' ? 'none' : state.activeTool,
+        layout: {
+          ...state.layout,
+          tableOpen: open,
+          sidebarOpen: open ? false : state.layout.sidebarOpen,
+          mobileExportSettings: open ? false : state.layout.mobileExportSettings
+        }
+      }, 'tool');
+      return;
+    }
+
     store.setState({
       activeTool: state.activeTool,
       layout: {
@@ -148,5 +183,5 @@ export function createLayout({ app, map, store, elements }) {
 
   store.subscribe(render);
   render(store.getState(), 'boot');
-  return { setTool, setSidebar, setTable, toggleMobileExportSettings, closeMobileExportSettings, closeExportPanel, beginTableResize };
+  return { isMobile, setTool, setSidebar, setTable, toggleMobileExportSettings, closeMobileExportSettings, closeExportPanel, beginTableResize };
 }

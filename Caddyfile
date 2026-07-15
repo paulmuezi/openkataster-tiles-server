@@ -1,4 +1,5 @@
 tiles.openkataster.de {
+	tls internal
 	encode gzip zstd
 	reverse_proxy tiles-api:8080
 }
@@ -27,4 +28,12 @@ tiles.openkataster.de {
 		reverse_proxy openkataster-pocketbase:8090
 	}
 	respond 403
+}
+
+api.openkataster.de {
+	tls internal
+	encode gzip zstd
+	@developer_docs path /docs* /openapi.json /v1/docs* /v1/openapi.json
+	respond @developer_docs 404
+	reverse_proxy openkataster-api:8000
 }

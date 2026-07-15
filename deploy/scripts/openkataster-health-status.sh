@@ -28,7 +28,11 @@ else
     # shellcheck disable=SC1090
     source "$status_file"
     age_seconds=$(( $(date -u +%s) - $(date -u -d "${BACKUP_TIMESTAMP:-1970-01-01T00:00:00Z}" +%s 2>/dev/null || echo 0) ))
-    [[ "${BACKUP_STATUS:-}" == "ok" && "$age_seconds" -le 93600 ]] || issues+=("backup:stale-or-failed")
+    [[ "${BACKUP_STATUS:-}" == "ok" \
+        && "${OFFSITE_STATUS:-}" == "encrypted-uploaded" \
+        && "$age_seconds" -ge 0 \
+        && "$age_seconds" -le 32400 ]] \
+        || issues+=("backup:offsite-stale-or-failed")
 fi
 
 if (( ${#issues[@]} )); then

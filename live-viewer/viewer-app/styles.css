@@ -223,6 +223,10 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .selection-data-table tbody tr:hover { --selection-row-bg: #fff8f4; }
 .selection-data-table th, .selection-data-table td { padding: 9px 13px; border-bottom: 1px solid var(--ok-border-soft); background: var(--selection-row-bg); color: #343a43; text-align: left; vertical-align: top; }
 .selection-data-table th { position: sticky; top: 0; z-index: 1; border-bottom-color: var(--ok-border); background: #f7f5f2; color: #59616d; font-weight: 600; }
+.selection-data-table th.selection-action-column, .selection-data-table td.selection-action-column { width: 38px; min-width: 38px; max-width: 38px; padding: 4px 5px; text-align: center; vertical-align: middle; }
+.selection-item-remove { width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent; color: #69717b; display: inline-grid; place-items: center; font: inherit; font-size: 19px; line-height: 1; cursor: pointer; }
+.selection-item-remove:hover { background: var(--ok-orange-soft); color: var(--ok-orange); }
+.selection-item-remove:focus-visible { outline: 2px solid var(--ok-orange); outline-offset: 1px; }
 .selection-data-table th:first-child, .selection-data-table td:first-child { position: sticky; left: 0; z-index: 2; box-shadow: 1px 0 0 var(--ok-border-soft); }
 .selection-data-table th:first-child { z-index: 3; }
 .selection-data-table th.compact, .selection-data-table td.compact { width: 1%; white-space: nowrap; }
@@ -287,8 +291,9 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
 
 @media (max-width: 760px) {
   :root { --sidebar-open: 0px; --table-height-open: min(42vh, 300px); --mobile-export-bar-height: 142px; --mobile-measure-bar-height: 85px; }
-  .maplibregl-ctrl-bottom-left, .brand-mark, .zoom-badge { bottom: 8px; }
-  .source-control { bottom: 3px; }
+  .maplibregl-ctrl-bottom-left, .zoom-badge { bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+  .source-control { bottom: calc(15px + env(safe-area-inset-bottom, 0px)); }
+  .brand-mark { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
   .planner-app,
   .planner-app[data-sidebar-open="true"],
   .planner-app[data-sidebar-open="true"][data-mobile-export-settings="true"] {
@@ -351,9 +356,9 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
   }
   .planner-app[data-mobile-export-settings="true"] .mobile-export-backdrop { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity 180ms ease, visibility 0s; }
   .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .maplibregl-ctrl-bottom-left,
-  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .source-control,
-  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .brand-mark { bottom: calc(var(--mobile-export-bar-height) + env(safe-area-inset-bottom, 0px)); }
-  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .zoom-badge { bottom: calc(var(--mobile-export-bar-height) + 10px + env(safe-area-inset-bottom, 0px)); }
+  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .zoom-badge { bottom: calc(var(--mobile-export-bar-height) + 20px + env(safe-area-inset-bottom, 0px)); }
+  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .source-control { bottom: calc(var(--mobile-export-bar-height) + 15px + env(safe-area-inset-bottom, 0px)); }
+  .planner-app[data-sidebar-open="true"][data-mobile-export-settings="false"][data-table-open="false"] .brand-mark { bottom: calc(var(--mobile-export-bar-height) + 12px + env(safe-area-inset-bottom, 0px)); }
   .planner-app[data-sidebar-open="true"][data-table-open="true"] .selection-content { padding-bottom: var(--mobile-export-bar-height); }
   .planner-app[data-measure-panel-open="true"] .maplibregl-ctrl-bottom-left,
   .planner-app[data-measure-panel-open="true"] .zoom-badge { bottom: calc(var(--mobile-measure-bar-height) + 20px + env(safe-area-inset-bottom, 0px)); }
@@ -411,6 +416,8 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
     width: var(--selection-pro-notice-width, calc(100vw - 20px));
     transform: translateX(var(--selection-pro-notice-shift, 0px));
   }
+  .selection-data-table th:first-child { left: auto; z-index: 1; box-shadow: none; }
+  .selection-data-table td:first-child { position: static; left: auto; z-index: auto; box-shadow: none; }
   .selection-dock { grid-template-rows: 28px 43px minmax(0,1fr); }
   .selection-resize { height: 28px; cursor: ns-resize; }
   .selection-resize span { top: 12px; }

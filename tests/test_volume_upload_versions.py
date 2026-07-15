@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import tempfile
@@ -33,6 +34,29 @@ class StreamRequest:
             yield self.data[self.split_at :]
         else:
             yield self.data
+
+
+class BlockingStreamRequest:
+    def __init__(self, data, entered, release):
+        self.data = data
+        self.entered = entered
+        self.release = release
+
+    async def stream(self):
+        split_at = max(1, len(self.data) // 2)
+        yield self.data[:split_at]
+        self.entered.set()
+        await self.release.wait()
+        yield self.data[split_at:]
+
+
+class FailingStreamRequest:
+    def __init__(self, data):
+        self.data = data
+
+    async def stream(self):
+        yield self.data
+        raise RuntimeError("connection lost")
 
 
 def declarations(files):
@@ -243,14 +267,131 @@ class VolumeUploadVersionTests(unittest.IsolatedAsyncioTestCase):
         upload_dir = self.root / ".incoming" / self.state_slug / "delete-v2"
         self.assertTrue(upload_dir.is_dir())
 
-        result = main.delete_volume_upload_session(self.state_slug, "admin", "delete-v2")
+        result = await main.delete_volume_upload_session(self.state_slug, "admin", "delete-v2")
         self.assertTrue(result["deleted"])
         self.assertFalse(upload_dir.exists())
         self.assertTrue((self.root / "versions" / self.state_slug / "base-v1").is_dir())
 
         with self.assertRaises(HTTPException) as missing_error:
-            main.delete_volume_upload_session(self.state_slug, "admin", "delete-v2")
+            await main.delete_volume_upload_session(self.state_slug, "admin", "delete-v2")
         self.assertEqual(missing_error.exception.status_code, 404)
+
+    async def test_retry_recovers_a_part_left_half_written_by_forced_shutdown(self):
+        data = PMTILES_BYTES + b"retry"
+        files = {"alkis.pmtiles": data}
+        await self.create_session("recover-v1", files, base_version=self._write_base_for_partial())
+        upload_dir = self.root / ".incoming" / self.state_slug / "recover-v1"
+        target = upload_dir / "alkis.pmtiles.partial"
+        interrupted_at = len(data) // 2
+        target.write_bytes(data[:interrupted_at])
+
+        result = await main.upload_volume_part(
+            request=StreamRequest(data, split_at=3),
+            state_slug=self.state_slug,
+            _="admin",
+            version="recover-v1",
+            filename="alkis.pmtiles",
+            start=0,
+            end=len(data),
+            total_size=len(data),
+        )
+
+        self.assertTrue(result["recovered_partial_part"])
+        self.assertEqual(result["uploaded_bytes"], len(data))
+        self.assertEqual(target.read_bytes(), data)
+
+    async def test_concurrent_duplicate_waits_and_becomes_idempotent(self):
+        data = PMTILES_BYTES + b"concurrent"
+        files = {"alkis.pmtiles": data}
+        await self.create_session("concurrent-v1", files, base_version=self._write_base_for_partial())
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        first = asyncio.create_task(main.upload_volume_part(
+            request=BlockingStreamRequest(data, entered, release),
+            state_slug=self.state_slug,
+            _="admin",
+            version="concurrent-v1",
+            filename="alkis.pmtiles",
+            start=0,
+            end=len(data),
+            total_size=len(data),
+        ))
+        await entered.wait()
+        duplicate = asyncio.create_task(main.upload_volume_part(
+            request=StreamRequest(data),
+            state_slug=self.state_slug,
+            _="admin",
+            version="concurrent-v1",
+            filename="alkis.pmtiles",
+            start=0,
+            end=len(data),
+            total_size=len(data),
+        ))
+        await asyncio.sleep(0.2)
+        self.assertFalse(duplicate.done())
+        release.set()
+
+        first_result, duplicate_result = await asyncio.gather(first, duplicate)
+        self.assertEqual(first_result["uploaded_bytes"], len(data))
+        self.assertTrue(duplicate_result["already_uploaded"])
+        target = self.root / ".incoming" / self.state_slug / "concurrent-v1" / "alkis.pmtiles.partial"
+        self.assertEqual(target.read_bytes(), data)
+
+    async def test_gap_returns_structured_authoritative_offset(self):
+        data = PMTILES_BYTES + b"gap"
+        files = {"alkis.pmtiles": data}
+        await self.create_session("gap-v1", files, base_version=self._write_base_for_partial())
+        upload_dir = self.root / ".incoming" / self.state_slug / "gap-v1"
+        target = upload_dir / "alkis.pmtiles.partial"
+        target.write_bytes(data[:5])
+
+        with self.assertRaises(HTTPException) as mismatch:
+            await main.upload_volume_part(
+                request=StreamRequest(data[8:]),
+                state_slug=self.state_slug,
+                _="admin",
+                version="gap-v1",
+                filename="alkis.pmtiles",
+                start=8,
+                end=len(data),
+                total_size=len(data),
+            )
+
+        self.assertEqual(mismatch.exception.status_code, 409)
+        self.assertEqual(mismatch.exception.detail["code"], "upload_offset_mismatch")
+        self.assertEqual(mismatch.exception.detail["expected_start"], 5)
+        self.assertEqual(target.read_bytes(), data[:5])
+
+    async def test_failed_stream_rolls_back_only_the_current_part(self):
+        data = PMTILES_BYTES + b"rollback"
+        files = {"alkis.pmtiles": data}
+        await self.create_session("rollback-v1", files, base_version=self._write_base_for_partial())
+        upload_dir = self.root / ".incoming" / self.state_slug / "rollback-v1"
+        target = upload_dir / "alkis.pmtiles.partial"
+        committed = 12
+        target.write_bytes(data[:committed])
+
+        with self.assertRaises(HTTPException) as failed:
+            await main.upload_volume_part(
+                request=FailingStreamRequest(data[committed:committed + 7]),
+                state_slug=self.state_slug,
+                _="admin",
+                version="rollback-v1",
+                filename="alkis.pmtiles",
+                start=committed,
+                end=len(data),
+                total_size=len(data),
+            )
+
+        self.assertEqual(failed.exception.status_code, 500)
+        self.assertEqual(target.read_bytes(), data[:committed])
+
+    def _write_base_for_partial(self):
+        version = "base-v1"
+        base_dir = self.root / "versions" / self.state_slug / version
+        if not base_dir.exists():
+            self.write_version(version)
+        return version
 
     def test_stale_incoming_sessions_are_pruned_after_ttl(self):
         state_dir = self.root / ".incoming" / self.state_slug
@@ -286,6 +427,29 @@ class VolumeUploadVersionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage, "copy")
         self.assertEqual(destination.read_bytes(), FEATURES_BYTES)
         self.assertFalse(destination.samefile(source))
+
+    async def test_volume_upload_normalizes_state_slug_aliases(self):
+        self.state_slug = "baden-wuerttemberg"
+        files = {
+            "alkis.pmtiles": PMTILES_BYTES,
+            "features.sqlite": FEATURES_BYTES,
+            "search.sqlite": SEARCH_BYTES,
+        }
+
+        session = await self.create_session("bw-v1", files)
+        self.assertEqual(session["state_slug"], "baden-wurttemberg")
+        canonical_upload_dir = self.root / ".incoming" / "baden-wurttemberg" / "bw-v1"
+        self.assertTrue(canonical_upload_dir.is_dir())
+        self.assertFalse((self.root / ".incoming" / "baden-wuerttemberg").exists())
+
+        await self.upload_files("bw-v1", files)
+        completed = await self.complete("bw-v1", files)
+
+        self.assertEqual(completed["state_slug"], "baden-wurttemberg")
+        canonical_version_dir = self.root / "versions" / "baden-wurttemberg" / "bw-v1"
+        self.assertTrue(canonical_version_dir.is_dir())
+        manifest = json.loads((canonical_version_dir / "state_upload_manifest.json").read_text())
+        self.assertEqual(manifest["state_slug"], "baden-wurttemberg")
 
 
 if __name__ == "__main__":

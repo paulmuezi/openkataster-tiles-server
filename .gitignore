@@ -46,9 +46,14 @@ temp/
 *.parquet
 *.geojson
 *.jsonl
+*.zst
+*.gpg
+*.sha256
 # Deployment/runtime paths
 /srv/
 /backups/
+/repairs/
+/artifacts/
 cleanup-*.txt
 # Runtime tile caches and generated local data
 luftbild_cache/

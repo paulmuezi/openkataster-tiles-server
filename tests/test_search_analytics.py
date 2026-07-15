@@ -8,6 +8,7 @@ import time
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from openkataster_tiles.search_analytics import (
     SearchAnalytics,
@@ -309,15 +310,16 @@ class SearchAnalyticsTests(unittest.TestCase):
                 occurred_at=old,
             )
             store._last_cleanup = 0.0
-            store.record_response(
-                scope="parcel",
-                query_text="Neue Gemarkung 1 888/8",
-                state="bayern",
-                payload={"results": []},
-                access_mode="free",
-                latency_ms=4,
-                occurred_at=now,
-            )
+            with patch("openkataster_tiles.search_analytics.time.monotonic", return_value=5.0):
+                store.record_response(
+                    scope="parcel",
+                    query_text="Neue Gemarkung 1 888/8",
+                    state="bayern",
+                    payload={"results": []},
+                    access_mode="free",
+                    latency_ms=4,
+                    occurred_at=now,
+                )
             dashboard = store.dashboard("90d")
             self.assertEqual(dashboard["stats"]["total_searches"], 2)
             misses = {row["query"] for row in dashboard["top_misses"]}

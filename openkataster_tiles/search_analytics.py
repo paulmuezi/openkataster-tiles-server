@@ -411,13 +411,15 @@ class SearchAnalytics:
                         """,
                         (aggregate_count - self.aggregate_hard_cap,),
                     )
-                if time.monotonic() - self._last_cleanup >= 3600 and self._cleanup_lock.acquire(blocking=False):
+                cleanup_clock = time.monotonic()
+                cleanup_due = self._last_cleanup <= 0.0 or cleanup_clock - self._last_cleanup >= 3600
+                if cleanup_due and self._cleanup_lock.acquire(blocking=False):
                     try:
                         raw_cutoff = timestamp - self.raw_days * 86_400
                         aggregate_cutoff = (datetime.fromtimestamp(timestamp, timezone.utc).date() - timedelta(days=self.aggregate_days - 1)).isoformat()
                         connection.execute("DELETE FROM search_events WHERE occurred_at < ?", (raw_cutoff,))
                         connection.execute("DELETE FROM search_daily WHERE day < ?", (aggregate_cutoff,))
-                        self._last_cleanup = time.monotonic()
+                        self._last_cleanup = cleanup_clock
                     finally:
                         self._cleanup_lock.release()
                 connection.execute("COMMIT")

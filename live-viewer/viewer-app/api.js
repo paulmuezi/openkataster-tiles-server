@@ -63,7 +63,7 @@ export function createApi({ token = '', fresh = '' } = {}) {
     searchParcel: ({ gemarkung, flur = '', flurstueck, state = '', limit = 12 }, signal, analytics = null) => viewerJson(withAnalytics(`${viewerUrl('/api/v1/search/parcel')}&gemarkung=${encodeURIComponent(gemarkung)}&flur=${encodeURIComponent(flur)}&flurstueck=${encodeURIComponent(flurstueck)}&state=${encodeURIComponent(state)}&limit=${limit}`, analytics), { signal }),
     suggestPlaces: (query, signal, analytics = null) => viewerJson(withAnalytics(`${viewerUrl('/api/v1/suggest/places')}&q=${encodeURIComponent(query)}&limit=8`, analytics), { signal }),
     suggestStreets: (place, query, state, signal, analytics = null) => viewerJson(withAnalytics(`${viewerUrl('/api/v1/suggest/streets')}&place=${encodeURIComponent(place)}&q=${encodeURIComponent(query)}&state=${encodeURIComponent(state || '')}&limit=8`, analytics), { signal }),
-    suggestGemarkungen: (query, signal) => viewerJson(`${viewerUrl('/api/v1/suggest/gemarkungen')}&q=${encodeURIComponent(query)}&limit=8`, { signal }),
+    suggestGemarkungen: (query, signal) => viewerJson(`${viewerUrl('/api/v1/suggest/gemarkungen')}&q=${encodeURIComponent(query)}&limit=50`, { signal }),
     createOrder: (payload) => json('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
     orderStatus: (orderId, guestToken) => json(`/api/orders/${encodeURIComponent(orderId)}/status${guestToken ? `?guest_token=${encodeURIComponent(guestToken)}` : ''}`)
   };

@@ -4658,6 +4658,57 @@ def exact_place_key_variants(value: str | None) -> set[str]:
     }
 
 
+def place_input_context_variants(value: str | None) -> tuple[str, ...]:
+    """Return explicit place components without guessing arbitrary substrings.
+
+    Address sources commonly spell a municipality and district together as
+    ``Kindelbrück OT Düppel``.  Both components are useful, but ``OT`` is a
+    structural separator rather than part of either official GN250 name.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return tuple()
+    variants = [text]
+    parts = re.split(
+        r"\s*,?\s+(?:OT|Ortsteil)\s+",
+        text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )
+    if len(parts) == 2:
+        for part in parts:
+            candidate = part.strip(" ,")
+            if candidate and candidate not in variants:
+                variants.append(candidate)
+    return tuple(variants)
+
+
+def gn250_place_name_aliases(value: str | None, state: str | None) -> tuple[str, ...]:
+    """Return safe aliases derived from an official GN250 place name.
+
+    A slash suffix is removed only when it is the place's own state name, as
+    in ``Mühlhausen/Thüringen``.  Other slash-bearing place names remain
+    untouched.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return tuple()
+    aliases = [text]
+    parenthetical_base = re.sub(r"\s*\([^)]*\)\s*$", "", text).strip()
+    if parenthetical_base and parenthetical_base != text:
+        aliases.append(parenthetical_base)
+    state_key = normalize_state_key(state)
+    if "/" in text and state_key:
+        base, suffix = (part.strip() for part in text.rsplit("/", 1))
+        state_names = {
+            normalize_place_search_text(state_display_name(state_key)),
+            normalize_place_search_text(state_key.replace("-", " ")),
+        }
+        if base and normalize_place_search_text(suffix) in state_names:
+            aliases.append(base)
+    return tuple(dict.fromkeys(alias for alias in aliases if alias))
+
+
 def exact_place_context(value: str, allowed_states: set[str]) -> dict | None:
     cached = _exact_place_context_cached(
         value,
@@ -4685,9 +4736,10 @@ def exact_place_context_index(signature: tuple[int, int]) -> dict[str, tuple[dic
                 "bbox": entry.get("bbox"),
                 "municipality": municipality,
             }
-            for key in exact_place_key_variants(value):
-                if key:
-                    index.setdefault(key, []).append(context)
+            for alias in gn250_place_name_aliases(value, state):
+                for key in exact_place_key_variants(alias):
+                    if key:
+                        index.setdefault(key, []).append(context)
     return {key: tuple(value) for key, value in index.items()}
 
 
@@ -4696,15 +4748,16 @@ def _exact_place_context_cached(value: str, allowed_states_key: tuple[str, ...],
     allowed_states = set(allowed_states_key)
     index = exact_place_context_index(signature)
     seen: set[tuple[str, str, str]] = set()
-    for key in exact_place_key_variants(value):
-        for context in index.get(key, tuple()):
-            state = normalize_state_key(str(context.get("state") or ""))
-            if state not in allowed_states:
-                continue
-            dedupe_key = (state, str(context.get("name") or ""), str(context.get("municipality") or ""))
-            if dedupe_key in seen:
-                continue
-            return dict(context)
+    for candidate in place_input_context_variants(value):
+        for key in exact_place_key_variants(candidate):
+            for context in index.get(key, tuple()):
+                state = normalize_state_key(str(context.get("state") or ""))
+                if state not in allowed_states:
+                    continue
+                dedupe_key = (state, str(context.get("name") or ""), str(context.get("municipality") or ""))
+                if dedupe_key in seen:
+                    continue
+                return dict(context)
     return None
 
 
@@ -4725,12 +4778,74 @@ def _states_for_place_context_cached(value: str, allowed_states_key: tuple[str, 
     allowed_states = set(allowed_states_key)
     index = exact_place_context_index(signature)
     matches: set[str] = set()
-    for key in exact_place_key_variants(place):
-        for context in index.get(key, tuple()):
-            state = normalize_state_key(str(context.get("state") or ""))
-            if state in allowed_states:
-                matches.add(state)
+    for candidate in place_input_context_variants(place):
+        for key in exact_place_key_variants(candidate):
+            for context in index.get(key, tuple()):
+                state = normalize_state_key(str(context.get("state") or ""))
+                if state in allowed_states:
+                    matches.add(state)
     return tuple(sorted(matches))
+
+
+@lru_cache(maxsize=4096)
+def gn250_place_bboxes_for_state_context(
+    place: str,
+    state: str,
+    signature: tuple[int, int],
+) -> tuple[tuple[float, float, float, float], ...]:
+    """Return exact GN250 place extents for a place within one state.
+
+    The fallback deliberately accepts only exact place aliases from the
+    central GN250 index.  Larger municipality extents sort first and subsume
+    contained locality extents, which keeps the SQL predicate both complete
+    and bounded for municipalities with many districts.
+    """
+    state_key = normalize_state_key(state)
+    if not state_key or len(str(place or "").strip()) < 2:
+        return tuple()
+    index = exact_place_context_index(signature)
+    raw_bboxes: set[tuple[float, float, float, float]] = set()
+    for candidate in place_input_context_variants(place):
+        for key in exact_place_key_variants(candidate):
+            for context in index.get(key, tuple()):
+                if normalize_state_key(str(context.get("state") or "")) != state_key:
+                    continue
+                bbox = context.get("bbox")
+                if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                    continue
+                try:
+                    parsed = tuple(float(value) for value in bbox)
+                except (TypeError, ValueError):
+                    continue
+                if not all(math.isfinite(value) for value in parsed):
+                    continue
+                min_lon, min_lat, max_lon, max_lat = parsed
+                if min_lon > max_lon or min_lat > max_lat:
+                    continue
+                raw_bboxes.add((min_lon, min_lat, max_lon, max_lat))
+
+    ordered = sorted(
+        raw_bboxes,
+        key=lambda bbox: (
+            -((bbox[2] - bbox[0]) * (bbox[3] - bbox[1])),
+            bbox,
+        ),
+    )
+    selected: list[tuple[float, float, float, float]] = []
+    for bbox in ordered:
+        min_lon, min_lat, max_lon, max_lat = bbox
+        if any(
+            outer_min_lon <= min_lon
+            and outer_min_lat <= min_lat
+            and outer_max_lon >= max_lon
+            and outer_max_lat >= max_lat
+            for outer_min_lon, outer_min_lat, outer_max_lon, outer_max_lat in selected
+        ):
+            continue
+        selected.append(bbox)
+        if len(selected) >= 32:
+            break
+    return tuple(selected)
 
 
 def query_without_municipality(query: str, municipality: dict | None) -> str:
@@ -6197,7 +6312,63 @@ CITY_STATE_MUNICIPALITY_ALIASES = {
 
 
 def city_norms_for_state_context(city: str | None, state: str | None) -> tuple[str, ...]:
-    variants = list(normalize_geocoder_text_variants(city))
+    variants: list[str] = []
+
+    def add_value(value: str | None) -> None:
+        if len(variants) >= 256:
+            return
+        for candidate in normalize_geocoder_text_variants(value):
+            if candidate and candidate not in variants:
+                variants.append(candidate)
+                if len(variants) >= 256:
+                    break
+
+    place_seeds = place_input_context_variants(city)
+    for seed in place_seeds:
+        add_value(seed)
+
+    state_key = normalize_state_key(state)
+    if state_key:
+        place_index = exact_place_context_index(gn250_places_signature())
+        context_seen: set[tuple[str, str, str]] = set()
+        for seed in place_seeds:
+            for key in exact_place_key_variants(seed):
+                for context in place_index.get(key, tuple()):
+                    context_state = normalize_state_key(str(context.get("state") or ""))
+                    if context_state != state_key:
+                        continue
+                    context_key = (
+                        context_state,
+                        str(context.get("name") or ""),
+                        str(context.get("municipality") or ""),
+                    )
+                    if context_key in context_seen:
+                        continue
+                    context_seen.add(context_key)
+                    context_name = str(context.get("name") or "").strip()
+                    municipality = str(context.get("municipality") or "").strip()
+                    add_value(context_name)
+                    # A district name must not silently broaden an exact city
+                    # lookup to the whole parent municipality (for example
+                    # Treptow-Köpenick -> all of Berlin).  Different parent
+                    # names are considered only by the postcode+BBOX fallback.
+                    if (
+                        municipality
+                        and normalize_geocoder_text(municipality)
+                        == normalize_geocoder_text(context_name)
+                    ):
+                        add_value(municipality)
+
+    # Some official address labels retain a trailing administrative title
+    # although GN250 exposes the user-facing municipality without it.
+    for variant in tuple(variants):
+        if variant.endswith(" kurort"):
+            candidate = variant.removesuffix(" kurort").strip()
+        else:
+            candidate = f"{variant} kurort".strip()
+        if candidate and candidate not in variants and len(variants) < 256:
+            variants.append(candidate)
+
     # Some ALKIS states retain the administrative prefix in their address
     # labels (for example ``Stadt Dresden``), while the national place index
     # exposes the user-facing name (``Dresden``).  Treat both forms as the
@@ -6207,9 +6378,17 @@ def city_norms_for_state_context(city: str | None, state: str | None) -> tuple[s
             candidate = variant.removeprefix("stadt ").strip()
         else:
             candidate = f"stadt {variant}".strip()
-        if candidate and candidate not in variants:
+        if candidate and candidate not in variants and len(variants) < 256:
             variants.append(candidate)
-    state_key = normalize_state_key(state)
+    # The same generic administrative prefix also appears in otherwise
+    # ordinary municipality labels (for example Stadtgemeinde Bremerhaven).
+    for variant in tuple(variants):
+        if variant.startswith("stadtgemeinde "):
+            candidate = variant.removeprefix("stadtgemeinde ").strip()
+        else:
+            candidate = f"stadtgemeinde {variant}".strip()
+        if candidate and candidate not in variants and len(variants) < 256:
+            variants.append(candidate)
     aliases = CITY_STATE_MUNICIPALITY_ALIASES.get(state_key, ())
     normalized_city = normalize_geocoder_text(city)
     alias_norms = {
@@ -6219,9 +6398,7 @@ def city_norms_for_state_context(city: str | None, state: str | None) -> tuple[s
     }
     if normalized_city and normalized_city in alias_norms:
         for alias in aliases:
-            for variant in normalize_geocoder_text_variants(alias):
-                if variant and variant not in variants:
-                    variants.append(variant)
+            add_value(alias)
     return tuple(variants)
 
 
@@ -6239,7 +6416,53 @@ def city_display_name_for_state(city: str | None, state: str | None) -> str:
 
 
 def normalize_geocoder_house(value: str | None) -> str:
+    """Return the compact legacy SQL key used by existing search.sqlite files."""
     return re.sub(r"\s+", "", normalize_geocoder_text(value))
+
+
+_HOUSE_NUMBER_SLASH_TRANSLATION = str.maketrans({
+    "⁄": "/",
+    "∕": "/",
+    "／": "/",
+})
+_HOUSE_NUMBER_DASH_TRANSLATION = str.maketrans({
+    "‐": "-",
+    "‑": "-",
+    "‒": "-",
+    "–": "-",
+    "—": "-",
+    "―": "-",
+    "−": "-",
+})
+
+
+def normalize_house_number_semantic(value: str | None) -> str:
+    """Normalize a house number without merging meaningful separators."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = text.translate(_HOUSE_NUMBER_SLASH_TRANSLATION)
+    text = text.translate(_HOUSE_NUMBER_DASH_TRANSLATION)
+    text = text.replace("ß", "ss").replace("ẞ", "ss")
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(character for character in text if not unicodedata.combining(character)).casefold()
+    return "".join(
+        character
+        for character in text
+        if character.isalnum() or character in "/-;, ."
+    ).replace(" ", "")
+
+
+def filter_address_rows_by_house_number(rows: Iterable, requested_house_number: str) -> list:
+    """Verify legacy SQL candidates against their original house-number label."""
+    requested = normalize_house_number_semantic(requested_house_number)
+    if not requested:
+        return []
+    return [
+        row
+        for row in rows
+        if normalize_house_number_semantic(str(row["house_number_label"] or "")) == requested
+    ]
 
 
 
@@ -6277,6 +6500,35 @@ def openplz_street_norm_variants(value: str | None) -> tuple[str, ...]:
     return tuple(variants)
 
 
+@lru_cache(maxsize=64)
+def openplz_storage_state_keys_cached(
+    state: str,
+    signature: tuple[int, int],
+) -> tuple[str, ...]:
+    """Resolve canonical OpenKataster states to OpenPLZ's stored slugs."""
+    state_key = normalize_state_key(state)
+    if signature == (0, 0) or not state_key:
+        return tuple()
+    try:
+        con = sqlite3.connect(f"file:{OPENPLZ_DB}?mode=ro", uri=True)
+        rows = con.execute("SELECT DISTINCT state_key FROM streets").fetchall()
+        con.close()
+    except sqlite3.Error:
+        return tuple()
+    matches = sorted({
+        str(row[0] or "").strip()
+        for row in rows
+        if str(row[0] or "").strip()
+        and normalize_state_key(str(row[0] or "")) == state_key
+    })
+    return tuple(matches)
+
+
+def openplz_storage_state_keys(state: str, signature: tuple[int, int] | None = None) -> tuple[str, ...]:
+    current_signature = openplz_signature() if signature is None else signature
+    return openplz_storage_state_keys_cached(normalize_state_key(state), current_signature)
+
+
 @lru_cache(maxsize=8192)
 def openplz_street_aliases_cached(
     place: str,
@@ -6288,10 +6540,12 @@ def openplz_street_aliases_cached(
     if signature == (0, 0):
         return tuple()
     state_key = normalize_state_key(state)
+    storage_state_keys = openplz_storage_state_keys(state_key, signature)
     place_norms = tuple(dict.fromkeys(city_norms_for_state_context(place, state_key)))
     street_prefixes = openplz_street_norm_variants(street_query)
-    if not state_key or not place_norms or not street_prefixes:
+    if not state_key or not storage_state_keys or not place_norms or not street_prefixes:
         return tuple()
+    state_placeholders = ",".join("?" for _ in storage_state_keys)
     place_placeholders = ",".join("?" for _ in place_norms)
     prefix_clauses = " OR ".join("(street_norm >= ? AND street_norm < ?)" for _ in street_prefixes)
     prefix_params = [bound for prefix in street_prefixes for bound in (prefix, f"{prefix}\uffff")]
@@ -6306,14 +6560,14 @@ def openplz_street_aliases_cached(
               MAX(locality) AS locality,
               MIN(priority) AS priority
             FROM aliases
-            WHERE state_key = ?
+            WHERE state_key IN ({state_placeholders})
               AND place_norm IN ({place_placeholders})
               AND ({prefix_clauses})
             GROUP BY street_norm, postal_code
             ORDER BY priority, street_norm, postal_code
             LIMIT ?
             """,
-            [state_key, *place_norms, *prefix_params, max(64, min(int(limit) * 32, 1024))],
+            [*storage_state_keys, *place_norms, *prefix_params, max(64, min(int(limit) * 32, 1024))],
         ).fetchall()
         con.close()
     except sqlite3.Error:
@@ -6354,10 +6608,12 @@ def openplz_unique_postcodes_for_place_cached(
     multiple localities and always remains scoped to one federal state.
     """
     state_key = normalize_state_key(state)
+    storage_state_keys = openplz_storage_state_keys(state_key, signature)
     requested_norms = set(city_norms_for_state_context(place, state_key))
     candidates = tuple(dict.fromkeys(str(value or "").strip() for value in post_codes if str(value or "").strip()))
-    if signature == (0, 0) or not state_key or not requested_norms or not candidates:
+    if signature == (0, 0) or not state_key or not storage_state_keys or not requested_norms or not candidates:
         return tuple()
+    state_placeholders = ",".join("?" for _ in storage_state_keys)
     placeholders = ",".join("?" for _ in candidates)
     try:
         con = sqlite3.connect(f"file:{OPENPLZ_DB}?mode=ro", uri=True)
@@ -6369,12 +6625,12 @@ def openplz_unique_postcodes_for_place_cached(
               MIN(locality) AS locality,
               COUNT(DISTINCT locality_norm) AS locality_count
             FROM streets
-            WHERE state_key = ?
+            WHERE state_key IN ({state_placeholders})
               AND postal_code IN ({placeholders})
             GROUP BY postal_code
             HAVING COUNT(DISTINCT locality_norm) = 1
             """,
-            [state_key, *candidates],
+            [*storage_state_keys, *candidates],
         ).fetchall()
         con.close()
     except sqlite3.Error:
@@ -6397,6 +6653,107 @@ def openplz_unique_postcodes_for_place(post_codes: Iterable[str], place: str, st
     )
 
 
+def openplz_place_comparison_norms(place: str | None, state: str | None) -> tuple[str, ...]:
+    """Return conservative locality aliases for postcode validation.
+
+    OpenPLZ sometimes uses the short locality (``Endingen``), while GN250 and
+    the user-facing search use the official qualified name (``Endingen am
+    Kaiserstuhl``).  Only a bounded set of geographic qualifier suffixes is
+    removed; arbitrary substrings are never accepted as aliases.
+    """
+    state_key = normalize_state_key(state)
+    norms = list(city_norms_for_state_context(place, state_key))
+    if state_key:
+        place_index = exact_place_context_index(gn250_places_signature())
+        for seed in place_input_context_variants(place):
+            for key in exact_place_key_variants(seed):
+                for context in place_index.get(key, tuple()):
+                    if normalize_state_key(str(context.get("state") or "")) != state_key:
+                        continue
+                    for value in (
+                        str(context.get("name") or ""),
+                        str(context.get("municipality") or ""),
+                    ):
+                        for normalized in normalize_geocoder_text_variants(value):
+                            if normalized and normalized not in norms:
+                                norms.append(normalized)
+    qualifier_pattern = re.compile(
+        r"\s+(?:am|an\s+der|an\s+dem|im|in\s+der|in\s+dem|bei|auf\s+der|auf\s+dem)\s+.+$"
+    )
+    for seed in place_input_context_variants(place):
+        for normalized in normalize_geocoder_text_variants(seed):
+            shortened = qualifier_pattern.sub("", normalized).strip()
+            if shortened and shortened not in norms:
+                norms.append(shortened)
+    return tuple(norms)
+
+
+@lru_cache(maxsize=2048)
+def openplz_postcodes_for_place_context_cached(
+    state: str,
+    place: str,
+    post_codes: tuple[str, ...],
+    signature: tuple[int, int],
+) -> tuple[str, ...]:
+    """Validate candidate postcodes against a requested locality and state.
+
+    Unlike the older unique-postcode helper, this accepts a postcode shared by
+    multiple localities when one of them is the requested place.  Callers must
+    additionally constrain candidates to the exact GN250 place extent.
+    """
+    state_key = normalize_state_key(state)
+    storage_state_keys = openplz_storage_state_keys(state_key, signature)
+    requested_norms = set(openplz_place_comparison_norms(place, state_key))
+    candidates = tuple(dict.fromkeys(
+        str(value or "").strip()
+        for value in post_codes
+        if str(value or "").strip()
+    ))
+    if signature == (0, 0) or not state_key or not storage_state_keys or not requested_norms or not candidates:
+        return tuple()
+    state_placeholders = ",".join("?" for _ in storage_state_keys)
+    placeholders = ",".join("?" for _ in candidates)
+    try:
+        con = sqlite3.connect(f"file:{OPENPLZ_DB}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT DISTINCT postal_code, locality
+            FROM streets
+            WHERE state_key IN ({state_placeholders})
+              AND postal_code IN ({placeholders})
+            """,
+            [*storage_state_keys, *candidates],
+        ).fetchall()
+        con.close()
+    except sqlite3.Error:
+        return tuple()
+    allowed: set[str] = set()
+    for row in rows:
+        locality_norms = set(city_norms_for_state_context(str(row["locality"] or ""), state_key))
+        post_code = str(row["postal_code"] or "").strip()
+        if post_code and requested_norms.intersection(locality_norms):
+            allowed.add(post_code)
+    return tuple(sorted(allowed))
+
+
+def openplz_postcodes_for_place_context(
+    post_codes: Iterable[str],
+    place: str,
+    state: str,
+) -> tuple[str, ...]:
+    return openplz_postcodes_for_place_context_cached(
+        normalize_state_key(state),
+        (place or "").strip(),
+        tuple(sorted(dict.fromkeys(
+            str(value or "").strip()
+            for value in post_codes
+            if str(value or "").strip()
+        ))),
+        openplz_signature(),
+    )
+
+
 def search_result_city_label(row_city: str | None, post_code: str | None, state: str, city_fallback: str = "") -> str:
     fallback = str(city_fallback or "").strip()
     candidate = fallback or str(row_city or "").strip()
@@ -6412,6 +6769,138 @@ def fast_float(value, fallback: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def filter_address_rows_by_place_extent(
+    rows: Iterable,
+    place_bboxes: tuple[tuple[float, float, float, float], ...],
+) -> list:
+    """Keep rows whose address point lies inside an exact GN250 extent."""
+    if not place_bboxes:
+        return []
+    accepted = []
+    for row in rows:
+        if row["lon"] is None or row["lat"] is None:
+            continue
+        lon = fast_float(row["lon"], math.nan)
+        lat = fast_float(row["lat"], math.nan)
+        if not math.isfinite(lon) or not math.isfinite(lat):
+            continue
+        if any(
+            min_lon <= lon <= max_lon and min_lat <= lat <= max_lat
+            for min_lon, min_lat, max_lon, max_lat in place_bboxes
+        ):
+            accepted.append(row)
+    return accepted
+
+
+def filter_address_rows_by_postcode_area(
+    rows: Iterable,
+    postcode_db_signature: tuple[int, int],
+) -> list:
+    """Keep rows whose stored postcode agrees with the postcode polygon."""
+    if postcode_db_signature == (0, 0):
+        return []
+    accepted = []
+    for row in rows:
+        post_code = str(row["post_code"] or "").strip()
+        if not post_code or row["lon"] is None or row["lat"] is None:
+            continue
+        lon = fast_float(row["lon"], math.nan)
+        lat = fast_float(row["lat"], math.nan)
+        if not math.isfinite(lon) or not math.isfinite(lat):
+            continue
+        if post_code and postcode_area_lookup(lon, lat, postcode_db_signature) == post_code:
+            accepted.append(row)
+    return accepted
+
+
+def city_identity_comparison_norms(value: str | None, state: str) -> tuple[str, ...]:
+    """Normalize a stored locality plus bounded label-only adornments."""
+    text = str(value or "").strip()
+    if not text:
+        return tuple()
+    candidates = [text]
+    without_translation = re.sub(r"\s*\[[^]]*\]\s*$", "", text).strip()
+    if without_translation and without_translation not in candidates:
+        candidates.append(without_translation)
+    for candidate in tuple(candidates):
+        if "," in candidate:
+            base = candidate.split(",", 1)[0].strip()
+            if base and base not in candidates:
+                candidates.append(base)
+    norms: list[str] = []
+    for candidate in candidates:
+        for normalized in city_norms_for_state_context(candidate, state):
+            if normalized and normalized not in norms:
+                norms.append(normalized)
+    return tuple(norms)
+
+
+def filter_address_rows_by_place_context(
+    rows: Iterable,
+    place: str,
+    state: str,
+    place_bboxes: tuple[tuple[float, float, float, float], ...],
+    postcode_db_signature: tuple[int, int],
+) -> list:
+    """Validate recovered rows with locality text and independent geometry.
+
+    A postcode or an OpenPLZ street proves that a street exists in a place,
+    but not that every equal house number in the same postcode belongs to that
+    place.  Every fallback row must lie inside the requested GN250 extent.  A
+    compatible stored locality is sufficient.  Missing or contradictory
+    locality text additionally needs a matching postcode polygon; a
+    contradictory locality whose own GN250 extent contains the row wins and
+    is rejected.  This recovers known stale ALKIS city labels without turning
+    shared-postcode neighbours into the requested address.
+    """
+    requested_norms = set(openplz_place_comparison_norms(place, state))
+    if not requested_norms:
+        return []
+    accepted = []
+    for row in filter_address_rows_by_place_extent(rows, place_bboxes):
+        post_code = str(row["post_code"] or "").strip()
+        explicit_identities: list[str] = []
+        for field in ("city_label", "city_norm"):
+            value = str(row[field] or "").strip()
+            if not value:
+                continue
+            if post_code and fast_compact_norm(value) == fast_compact_norm(post_code):
+                continue
+            if value not in explicit_identities:
+                explicit_identities.append(value)
+
+        row_norms = {
+            normalized
+            for value in explicit_identities
+            for normalized in city_identity_comparison_norms(value, state)
+        }
+        if requested_norms.intersection(row_norms):
+            accepted.append(row)
+            continue
+
+        lon = fast_float(row["lon"], math.nan)
+        lat = fast_float(row["lat"], math.nan)
+        if not math.isfinite(lon) or not math.isfinite(lat):
+            continue
+        conflicting_bboxes = {
+            bbox
+            for value in explicit_identities
+            for bbox in gn250_place_bboxes_for_state_context(
+                value,
+                state,
+                gn250_places_signature(),
+            )
+        }
+        if any(
+            min_lon <= lon <= max_lon and min_lat <= lat <= max_lat
+            for min_lon, min_lat, max_lon, max_lat in conflicting_bboxes
+        ):
+            continue
+        if post_code and postcode_area_lookup(lon, lat, postcode_db_signature) == post_code:
+            accepted.append(row)
+    return accepted
 
 
 
@@ -6806,8 +7295,10 @@ def search_sqlite_direct_lookup(
     states_key: tuple[str, ...],
     signature: tuple[tuple[str, str, int, int], ...],
     openplz_db_signature: tuple[int, int],
+    postcode_db_signature: tuple[int, int],
     *,
     allow_plain_street: bool = False,
+    candidate_override: tuple[tuple[str, str, str, str], ...] = tuple(),
 ) -> list[dict]:
     if not signature:
         return []
@@ -6817,7 +7308,10 @@ def search_sqlite_direct_lookup(
     entries = search_db_entries_for_states(states)
     results: list[dict] = []
     seen: set[tuple[str, str, str, str]] = set()
-    for mode, street, house, city in geocoder_direct_candidates(query, allow_plain_street=allow_plain_street):
+    candidates = candidate_override or tuple(
+        geocoder_direct_candidates(query, allow_plain_street=allow_plain_street)
+    )
+    for mode, street, house, city in candidates:
         street_norms = normalize_geocoder_text_variants(street)
         if not street_norms:
             continue
@@ -6828,6 +7322,7 @@ def search_sqlite_direct_lookup(
                     house_norm = normalize_geocoder_house(house)
                     if not house_norm:
                         continue
+                    address_candidate_limit = max(int(limit) * 64, 512)
                     city_clause = f" AND city_norm IN ({','.join('?' for _ in entry_city_norms)})" if entry_city_norms else ""
                     city_params = list(entry_city_norms)
                     street_placeholders = ",".join("?" for _ in street_norms)
@@ -6843,9 +7338,19 @@ def search_sqlite_direct_lookup(
                         ORDER BY label
                         LIMIT ?
                         """,
-                        [*street_norms, house_norm, *city_params, max(int(limit) * 3, 12)],
+                        [*street_norms, house_norm, *city_params, address_candidate_limit],
                     )
-                    if not rows and city.strip() and openplz_db_signature != (0, 0):
+                    rows = filter_address_rows_by_house_number(rows, house)
+                    place_bboxes = (
+                        gn250_place_bboxes_for_state_context(
+                            city,
+                            entry.name,
+                            gn250_places_signature(),
+                        )
+                        if not rows and city.strip()
+                        else tuple()
+                    )
+                    if not rows and place_bboxes and openplz_db_signature != (0, 0):
                         exact_alias_norms = set(openplz_street_norm_variants(street))
                         allowed_postcodes = sorted({
                             post_code
@@ -6866,9 +7371,17 @@ def search_sqlite_direct_lookup(
                                 ORDER BY label
                                 LIMIT ?
                                 """,
-                                [*street_norms, house_norm, *allowed_postcodes, max(int(limit) * 3, 12)],
+                                [*street_norms, house_norm, *allowed_postcodes, address_candidate_limit],
                             )
-                    if not rows and city.strip() and openplz_db_signature != (0, 0):
+                            rows = filter_address_rows_by_house_number(rows, house)
+                            rows = filter_address_rows_by_place_context(
+                                rows,
+                                city,
+                                entry.name,
+                                place_bboxes,
+                                postcode_db_signature,
+                            )
+                    if not rows and place_bboxes and openplz_db_signature != (0, 0):
                         postcode_candidates = search_db_fetchall(
                             entry.path,
                             f"""
@@ -6881,7 +7394,19 @@ def search_sqlite_direct_lookup(
                             ORDER BY label
                             LIMIT ?
                             """,
-                            [*street_norms, house_norm, max(int(limit) * 16, 64)],
+                            [*street_norms, house_norm, address_candidate_limit],
+                        )
+                        postcode_candidates = filter_address_rows_by_house_number(
+                            postcode_candidates,
+                            house,
+                        )
+                        postcode_candidates = filter_address_rows_by_place_extent(
+                            postcode_candidates,
+                            place_bboxes,
+                        )
+                        postcode_candidates = filter_address_rows_by_postcode_area(
+                            postcode_candidates,
+                            postcode_db_signature,
                         )
                         unique_postcodes = set(openplz_unique_postcodes_for_place(
                             (str(row["post_code"] or "") for row in postcode_candidates),
@@ -6893,6 +7418,51 @@ def search_sqlite_direct_lookup(
                                 row for row in postcode_candidates
                                 if str(row["post_code"] or "").strip() in unique_postcodes
                             ][:max(int(limit) * 3, 12)]
+                    if not rows and place_bboxes:
+                        bbox_clause = " OR ".join(
+                            "(lon BETWEEN ? AND ? AND lat BETWEEN ? AND ?)"
+                            for _bbox in place_bboxes
+                        )
+                        bbox_params = [
+                            coordinate
+                            for min_lon, min_lat, max_lon, max_lat in place_bboxes
+                            for coordinate in (min_lon, max_lon, min_lat, max_lat)
+                        ]
+                        rows = search_db_fetchall(
+                            entry.path,
+                            f"""
+                            SELECT *
+                            FROM address_lookup
+                            WHERE street_norm IN ({street_placeholders})
+                              AND house_number_norm = ?
+                              AND feature_kind = 'building'
+                              AND post_code <> ''
+                              AND lon IS NOT NULL
+                              AND lat IS NOT NULL
+                              AND ({bbox_clause})
+                            ORDER BY label
+                            LIMIT ?
+                            """,
+                            [*street_norms, house_norm, *bbox_params, address_candidate_limit],
+                        )
+                        rows = filter_address_rows_by_house_number(rows, house)
+                        rows = filter_address_rows_by_place_context(
+                            rows,
+                            city,
+                            entry.name,
+                            place_bboxes,
+                            postcode_db_signature,
+                        )
+                        allowed_context_postcodes = set(openplz_postcodes_for_place_context(
+                            (str(row["post_code"] or "") for row in rows),
+                            city,
+                            entry.name,
+                        ))
+                        rows = [
+                            row
+                            for row in rows
+                            if str(row["post_code"] or "").strip() in allowed_context_postcodes
+                        ]
                     for row in rows:
                         result = search_address_result_from_row(row, entry.name, city)
                         key = (entry.name, str(row["source_db"] or ""), str(row["gml_id"] or ""), normalize_geocoder_text(str(result.get("label") or "")))
@@ -7014,24 +7584,24 @@ def _rank_place_suggestion(entry: dict, query_norm: str, query_ascii: str, query
     name = str(entry.get("name") or "").strip()
     if not name:
         return None
-    name_norm = str(entry.get("name_norm") or normalize_place_search_text(name))
-    name_ascii = str(entry.get("name_ascii") or compact_place_search_text(name))
-    name_plain = str(entry.get("name_plain") or plain_place_search_text(name))
-    name_plain_ascii = str(entry.get("name_plain_ascii") or compact_plain_place_search_text(name))
-    name_base = re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
-    name_base_norm = normalize_place_search_text(name_base)
-    name_base_plain = plain_place_search_text(name_base)
-    name_base_ascii = compact_place_search_text(name_base)
+    name_variants: list[str] = []
+    for alias in gn250_place_name_aliases(name, entry_state):
+        for candidate in (alias, re.sub(r"\s*\([^)]*\)\s*$", "", alias).strip()):
+            if candidate and candidate not in name_variants:
+                name_variants.append(candidate)
+    name_norms = {normalize_place_search_text(value) for value in name_variants}
+    name_asciis = {compact_place_search_text(value) for value in name_variants}
+    name_plains = {plain_place_search_text(value) for value in name_variants}
+    name_plain_asciis = {compact_plain_place_search_text(value) for value in name_variants}
     if not (
-        name_norm.startswith(query_norm)
-        or name_ascii.startswith(query_ascii)
-        or name_plain.startswith(query_plain)
-        or name_plain_ascii.startswith(query_plain_ascii)
-        or name_base_norm.startswith(query_norm)
-        or name_base_ascii.startswith(query_ascii)
+        any(value.startswith(query_norm) for value in name_norms)
+        or any(value.startswith(query_ascii) for value in name_asciis)
+        or any(value.startswith(query_plain) for value in name_plains)
+        or any(value.startswith(query_plain_ascii) for value in name_plain_asciis)
     ):
         return None
     municipality = str(entry.get("municipality") or "").strip()
+    name_norm = str(entry.get("name_norm") or normalize_place_search_text(name))
     state_label = str(entry.get("state_label") or state_display_name(entry_state))
     subtitle_parts = []
     if municipality and normalize_place_search_text(municipality) != name_norm:
@@ -7040,13 +7610,19 @@ def _rank_place_suggestion(entry: dict, query_norm: str, query_ascii: str, query
         subtitle_parts.append(state_label)
     place_class = str(entry.get("class") or "Ort")
     class_rank = 0 if place_class == "Gemeinde" else (1 if place_class == "Ortsteil" else 2)
-    if query_norm in {name_norm, name_base_norm} or query_plain in {name_plain, name_base_plain}:
+    if query_norm in name_norms or query_plain in name_plains:
         match_rank = 0
-    elif name_norm.startswith(f"{query_norm} ") or name_plain.startswith(f"{query_plain} "):
+    elif any(value.startswith(f"{query_norm} ") for value in name_norms) or any(
+        value.startswith(f"{query_plain} ") for value in name_plains
+    ):
         match_rank = 1
-    elif name_norm.startswith(query_norm) or name_plain.startswith(query_plain):
+    elif any(value.startswith(query_norm) for value in name_norms) or any(
+        value.startswith(query_plain) for value in name_plains
+    ):
         match_rank = 2
-    elif name_ascii.startswith(query_ascii) or name_plain_ascii.startswith(query_plain_ascii):
+    elif any(value.startswith(query_ascii) for value in name_asciis) or any(
+        value.startswith(query_plain_ascii) for value in name_plain_asciis
+    ):
         match_rank = 3
     else:
         match_rank = 4
@@ -7176,61 +7752,21 @@ def search_place_suggestions_for_dataset(dataset: str, q: str, limit: int, state
         if not name:
             continue
         name_norm = str(entry.get("name_norm") or normalize_place_search_text(name))
-        name_ascii = str(entry.get("name_ascii") or compact_place_search_text(name))
-        name_plain = str(entry.get("name_plain") or plain_place_search_text(name))
-        name_plain_ascii = str(entry.get("name_plain_ascii") or compact_plain_place_search_text(name))
-        name_base = re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
-        name_base_norm = normalize_place_search_text(name_base)
-        name_base_plain = plain_place_search_text(name_base)
-        name_base_ascii = compact_place_search_text(name_base)
-        if not (
-            name_norm.startswith(query_norm)
-            or name_ascii.startswith(query_ascii)
-            or name_plain.startswith(query_plain)
-            or name_plain_ascii.startswith(query_plain_ascii)
-            or name_base_norm.startswith(query_norm)
-            or name_base_ascii.startswith(query_ascii)
-        ):
-            continue
         municipality = str(entry.get("municipality") or "").strip()
-        state_label = str(entry.get("state_label") or state_display_name(entry_state))
         key = (entry_state, name_norm, normalize_place_search_text(municipality))
         if key in seen:
             continue
+        ranked = _rank_place_suggestion(
+            entry,
+            query_norm,
+            query_ascii,
+            query_plain,
+            query_plain_ascii,
+        )
+        if not ranked:
+            continue
         seen.add(key)
-        subtitle_parts = []
-        if municipality and normalize_place_search_text(municipality) != name_norm:
-            subtitle_parts.append(municipality)
-        if state_label:
-            subtitle_parts.append(state_label)
-        place_class = str(entry.get("class") or "Ort")
-        class_rank = 0 if place_class == "Gemeinde" else (1 if place_class == "Ortsteil" else 2)
-        if query_norm in {name_norm, name_base_norm} or query_plain in {name_plain, name_base_plain}:
-            match_rank = 0
-        elif name_norm.startswith(f"{query_norm} ") or name_plain.startswith(f"{query_plain} "):
-            match_rank = 1
-        elif name_norm.startswith(query_norm) or name_plain.startswith(query_plain):
-            match_rank = 2
-        elif name_ascii.startswith(query_ascii) or name_plain_ascii.startswith(query_plain_ascii):
-            match_rank = 3
-        else:
-            match_rank = 4
-        payload = {
-            "label": name,
-            "value": name,
-            "subtitle": ", ".join(subtitle_parts),
-            "state": entry_state,
-            "state_label": state_label,
-            "class": place_class,
-            "municipality": municipality,
-            "center": entry.get("center"),
-            "bbox": entry.get("bbox"),
-            "zoom": entry.get("zoom"),
-            "result_type": "place",
-            "kind": "place",
-        }
-        population_rank = -int(entry.get("population") or 0)
-        candidates.append(((match_rank, population_rank, class_rank, name.casefold()), payload))
+        candidates.append(ranked)
     candidates.sort(key=lambda item: item[0])
     return {"results": [payload for _, payload in candidates[:int(limit)]]}
 
@@ -7471,8 +8007,9 @@ def search_street_suggestions_unique_postcode(
     """Recover ALKIS streets missing from OpenPLZ's street catalogue.
 
     Candidate streets still come from the ALKIS search index.  OpenPLZ is used
-    only to prove that each candidate postcode maps uniquely to the requested
-    locality inside the same federal state.
+    to validate the postcode against the requested locality and federal state.
+    Shared postcodes are accepted only when the ALKIS street center also lies
+    inside an exact GN250 place extent.
     """
     place = (place or "").strip()
     query = (q or "").strip()
@@ -7503,24 +8040,40 @@ def search_street_suggestions_unique_postcode(
             )
         except sqlite3.Error:
             continue
-        allowed_postcodes = set(openplz_unique_postcodes_for_place(
+        unique_postcodes = set(openplz_unique_postcodes_for_place(
             (str(row["post_code"] or "") for row in rows),
             place,
             entry.name,
         ))
-        if not allowed_postcodes:
+        place_bboxes = gn250_place_bboxes_for_state_context(
+            place,
+            entry.name,
+            gn250_places_signature(),
+        )
+        context_postcodes = set(openplz_postcodes_for_place_context(
+            (str(row["post_code"] or "") for row in rows),
+            place,
+            entry.name,
+        )) if place_bboxes else set()
+        if not unique_postcodes and not context_postcodes:
             continue
         for row in rows:
             post_code = str(row["post_code"] or "").strip()
-            if post_code not in allowed_postcodes:
+            lon = fast_float(row["lon"])
+            lat = fast_float(row["lat"])
+            inside_place = any(
+                min_lon <= lon <= max_lon and min_lat <= lat <= max_lat
+                for min_lon, min_lat, max_lon, max_lat in place_bboxes
+            )
+            if post_code not in unique_postcodes and not (
+                post_code in context_postcodes and inside_place
+            ):
                 continue
             street_label = str(row["street_label"] or "").strip()
             if not street_label:
                 continue
             key = (entry.name, normalize_geocoder_text(street_label))
             weight = max(int(row["address_count"] or 0), 1)
-            lon = fast_float(row["lon"])
-            lat = fast_float(row["lat"])
             group = groups.setdefault(
                 key,
                 {
@@ -7627,43 +8180,133 @@ def search_gemarkung_suggestions_cached(
     query = (q or "").strip()
     if len(query) < 2:
         return tuple()
-    query_norm = normalize_geocoder_text(query)
-    if not query_norm:
+    requested_code = ""
+    code_match = re.search(r"\(\s*([0-9A-Za-z]+)\s*\)\s*$", query)
+    if code_match:
+        requested_code = code_match.group(1).strip()
+        query = query[:code_match.start()].strip()
+        if len(query) < 2:
+            return tuple()
+    primary_query_norms = tuple(dict.fromkeys(
+        value
+        for value in (
+            normalize_geocoder_text(query),
+            _normalize_geocoder_tokens(plain_place_search_text(query)),
+        )
+        if value
+    ))
+    query_norms = tuple(dict.fromkeys((
+        *primary_query_norms,
+        *normalize_geocoder_text_variants(query),
+    )))
+    if not query_norms:
         return tuple()
-    results: list[dict] = []
-    seen: set[tuple[str, str]] = set()
-    for entry in search_db_entries_for_states(states_key):
+    entries = search_db_entries_for_states(states_key)
+
+    def suggestion_payload(entry_name: str, row: sqlite3.Row) -> dict | None:
+        gemarkung_label = str(row["gemarkung_label"] or "").strip()
+        if not gemarkung_label:
+            return None
+        gemarkungsnummer = str(row["gemarkungsnummer"] or "").strip()
+        return {
+            "label": gemarkung_label,
+            "gemarkung": gemarkung_label,
+            "subtitle": state_display_name(entry_name),
+            "state": entry_name,
+            "state_label": state_display_name(entry_name),
+            "gemarkungsnummer": gemarkungsnummer,
+            "parcel_count": int(row["parcel_count"] or 0),
+        }
+
+    # Search exact names across every active state before considering prefix
+    # matches.  This prevents an exact Gemarkung in a later state from being
+    # displaced by popular prefixes in an alphabetically earlier state.  The
+    # plain normalization mirrors the producer's NFKD search.sqlite values
+    # for real umlauts (for example Überseehafen -> uberseehafen).  The
+    # additional variants below also support an ASCII Ueberseehafen input.
+    exact_placeholders = ",".join("?" for _ in primary_query_norms)
+    code_clause = " AND gemarkungsnummer = ?" if requested_code else ""
+    code_params = [requested_code] if requested_code else []
+    exact_candidates: list[tuple[tuple[int, str, str, str], dict]] = []
+    exact_seen: set[tuple[str, str]] = set()
+    for entry in entries:
         try:
             rows = search_db_fetchall(
                 entry.path,
-                """
+                f"""
                 SELECT gemarkung_label, gemarkungsnummer, COUNT(*) AS parcel_count
                 FROM parcel_lookup
-                WHERE gemarkung_norm GLOB ?
+                WHERE gemarkung_norm IN ({exact_placeholders})
+                  {code_clause}
                 GROUP BY gemarkung_norm, gemarkungsnummer
                 ORDER BY parcel_count DESC, gemarkung_label
-                LIMIT ?
                 """,
-                [f"{query_norm}*", int(limit) * 2],
+                [*primary_query_norms, *code_params],
             )
         except sqlite3.Error:
             continue
         for row in rows:
-            gemarkung_label = str(row["gemarkung_label"] or "").strip()
-            gemarkungsnummer = str(row["gemarkungsnummer"] or "").strip()
-            key = (entry.name, gemarkungsnummer or normalize_geocoder_text(gemarkung_label))
-            if not gemarkung_label or key in seen:
+            payload = suggestion_payload(entry.name, row)
+            if payload is None:
+                continue
+            gemarkungsnummer = str(payload["gemarkungsnummer"])
+            key = (entry.name, gemarkungsnummer or normalize_geocoder_text(str(payload["label"])))
+            if key in exact_seen:
+                continue
+            exact_seen.add(key)
+            exact_candidates.append((
+                (
+                    -int(payload["parcel_count"]),
+                    str(payload["label"]).casefold(),
+                    entry.name,
+                    gemarkungsnummer,
+                ),
+                payload,
+            ))
+    if exact_candidates:
+        exact_candidates.sort(key=lambda item: item[0])
+        return tuple(payload for _, payload in exact_candidates[:int(limit)])
+
+    # While the user is still typing, keep the existing bounded/early-return
+    # prefix behavior.  Query every supported spelling variant, but rank the
+    # producer-compatible primary spelling ahead of transliteration fallbacks.
+    primary_globs = tuple(f"{value}*" for value in primary_query_norms)
+    query_globs = tuple(f"{value}*" for value in query_norms)
+    primary_rank_sql = " OR ".join("gemarkung_norm GLOB ?" for _ in primary_globs)
+    query_sql = " OR ".join("gemarkung_norm GLOB ?" for _ in query_globs)
+    results: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in entries:
+        try:
+            rows = search_db_fetchall(
+                entry.path,
+                f"""
+                SELECT
+                  gemarkung_label,
+                  gemarkungsnummer,
+                  COUNT(*) AS parcel_count,
+                  CASE WHEN ({primary_rank_sql}) THEN 0 ELSE 1 END AS match_rank
+                FROM parcel_lookup
+                WHERE ({query_sql})
+                  {code_clause}
+                GROUP BY gemarkung_norm, gemarkungsnummer
+                ORDER BY match_rank, parcel_count DESC, gemarkung_label
+                LIMIT ?
+                """,
+                [*primary_globs, *query_globs, *code_params, int(limit) * 2],
+            )
+        except sqlite3.Error:
+            continue
+        for row in rows:
+            payload = suggestion_payload(entry.name, row)
+            if payload is None:
+                continue
+            gemarkungsnummer = str(payload["gemarkungsnummer"])
+            key = (entry.name, gemarkungsnummer or normalize_geocoder_text(str(payload["label"])))
+            if key in seen:
                 continue
             seen.add(key)
-            results.append({
-                "label": gemarkung_label,
-                "gemarkung": gemarkung_label,
-                "subtitle": state_display_name(entry.name),
-                "state": entry.name,
-                "state_label": state_display_name(entry.name),
-                "gemarkungsnummer": gemarkungsnummer,
-                "parcel_count": int(row["parcel_count"] or 0),
-            })
+            results.append(payload)
             if len(results) >= int(limit):
                 return tuple(results)
     return tuple(results[:int(limit)])
@@ -7763,7 +8406,25 @@ def geocoder_direct_candidates(query: str, *, allow_plain_street: bool = False) 
         # runs.  Keep separated suffixes/ranges with the house number instead
         # of treating them as the first token of the municipality (``8 a
         # Loose`` previously became house ``8`` in city ``a Loose``).
-        if index + 1 < len(tokens) and re.fullmatch(r"[A-Za-zÄÖÜäöü]", tokens[index + 1]):
+        if (
+            index + 3 < len(tokens)
+            and re.fullmatch(r"[A-Za-zÄÖÜäöü]", tokens[index + 1])
+            and tokens[index + 2] in {"-", "/"}
+            and re.fullmatch(r"\d+[A-Za-zÄÖÜäöü]?", tokens[index + 3])
+        ):
+            house_spans.append((
+                f"{token} {tokens[index + 1]}{tokens[index + 2]}{tokens[index + 3]}",
+                index + 4,
+            ))
+        if index + 1 < len(tokens) and re.fullmatch(
+            r"[A-Za-zÄÖÜäöü](?:\d+[A-Za-zÄÖÜäöü]?)?",
+            tokens[index + 1],
+        ):
+            house_spans.append((f"{token} {tokens[index + 1]}", index + 2))
+        if index + 1 < len(tokens) and re.fullmatch(
+            r"\d+\s*[-/]\s*\d+[A-Za-zÄÖÜäöü]?",
+            tokens[index + 1],
+        ):
             house_spans.append((f"{token} {tokens[index + 1]}", index + 2))
         if (
             index + 2 < len(tokens)
@@ -7795,16 +8456,40 @@ def geocoder_direct_candidates(query: str, *, allow_plain_street: bool = False) 
     return unique
 
 
+def structured_geocoder_candidates(
+    street: str | None,
+    house_number: str | None,
+    city: str | None,
+) -> tuple[tuple[str, str, str, str], ...]:
+    """Create a hashable direct-search candidate from structured form fields."""
+    street_value = str(street or "").strip()
+    house_value = str(house_number or "").strip()
+    city_value = str(city or "").strip()
+    if not street_value:
+        return tuple()
+    mode = "address" if house_value else "street"
+    return ((mode, street_value, house_value, city_value),)
 
 
-def search_direct_geocoder_for_dataset(query: str, limit: int, search_states: set[str], *, allow_plain_street: bool = False) -> list[dict]:
+
+
+def search_direct_geocoder_for_dataset(
+    query: str,
+    limit: int,
+    search_states: set[str],
+    *,
+    allow_plain_street: bool = False,
+    candidate_override: tuple[tuple[str, str, str, str], ...] = tuple(),
+) -> list[dict]:
     sqlite_results = search_sqlite_direct_lookup(
         query,
         int(limit),
         tuple(sorted(search_states)),
         search_db_signature_for_states(search_states),
         openplz_signature(),
+        postcode_areas_signature(),
         allow_plain_street=allow_plain_street,
+        candidate_override=candidate_override,
     )
     return sqlite_results[:int(limit)]
 
@@ -13661,7 +14346,7 @@ def dataset_gemarkung_suggestions(
     dataset: str,
     key_value: Annotated[str, Depends(require_api_key)],
     q: Annotated[str, Query(min_length=2, max_length=80)],
-    limit: Annotated[int, Query(ge=1, le=20)] = 10,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
     state: str = "",
 ) -> dict:
     del key_value
@@ -14014,13 +14699,35 @@ def api_v1_search_address(
         if len(inferred_states) == 1:
             state_key = inferred_states[0]
     mode = "street" if street.strip() and not house_number.strip() else "address"
-    result = cached_search_features_for_dataset(
-        VIRTUAL_GERMANY_DATASET,
-        query,
-        limit,
-        mode,
-        state=state_key,
+    candidate_override = (
+        structured_geocoder_candidates(street, house_number, place)
+        if not q.strip()
+        else tuple()
     )
+    if candidate_override:
+        active_states = set(active_bucket_state_keys())
+        structured_state = requested_state_context(state_key, active_states)
+        search_states = {structured_state} if structured_state else active_states
+        direct_results = search_direct_geocoder_for_dataset(
+            query,
+            limit,
+            search_states,
+            allow_plain_street=mode == "street",
+            candidate_override=candidate_override,
+        )
+        result = {
+            "query": query,
+            "count": len(direct_results[:limit]),
+            "results": direct_results[:limit],
+        }
+    else:
+        result = cached_search_features_for_dataset(
+            VIRTUAL_GERMANY_DATASET,
+            query,
+            limit,
+            mode,
+            state=state_key,
+        )
     if result.get("results") or q.strip() or not place.strip() or not street.strip():
         return done(result)
     place_suggestions = search_place_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, place, 8, state=state).get("results") or []
@@ -14030,13 +14737,25 @@ def api_v1_search_address(
         if not suggested_place or normalize_place_search_text(suggested_place) == normalize_place_search_text(place):
             continue
         fallback_query = _api_v1_search_query_from_parts(street, house_number, suggested_place)
-        fallback = cached_search_features_for_dataset(
-            VIRTUAL_GERMANY_DATASET,
+        fallback_candidates = structured_geocoder_candidates(
+            street,
+            house_number,
+            suggested_place,
+        )
+        fallback_state = suggested_state or requested_state_context(state_key, set(active_bucket_state_keys()))
+        fallback_states = {fallback_state} if fallback_state else set(active_bucket_state_keys())
+        fallback_results = search_direct_geocoder_for_dataset(
             fallback_query,
             limit,
-            mode,
-            state=suggested_state or state_key,
+            fallback_states,
+            allow_plain_street=mode == "street",
+            candidate_override=fallback_candidates,
         )
+        fallback = {
+            "query": fallback_query,
+            "count": len(fallback_results[:limit]),
+            "results": fallback_results[:limit],
+        }
         if fallback.get("results"):
             fallback["query"] = query
             return done(fallback)
@@ -14171,7 +14890,7 @@ def api_v1_suggest_streets(
 def api_v1_suggest_gemarkungen(
     _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
     q: Annotated[str, Query(min_length=2, max_length=80)],
-    limit: Annotated[int, Query(ge=1, le=20)] = 10,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
     state: str = "",
 ) -> dict:
     return search_gemarkung_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, q, limit, state=state)

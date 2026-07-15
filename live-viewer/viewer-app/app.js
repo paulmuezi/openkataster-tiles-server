@@ -1,4 +1,4 @@
-import { createApi } from './api.js?v=20260714-search-input-only1';
+import { createApi } from './api.js?v=20260715-gemarkung-search1';
 import { createExportController } from './export.js?v=20260713-location-preview2';
 import { createLayerController } from './layers.js?v=20260714-hide-mv-topographic-points2';
 import { createLayout } from './layout.js?v=20260714-mobile-tool-tabs1';

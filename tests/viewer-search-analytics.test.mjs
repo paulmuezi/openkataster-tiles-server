@@ -39,6 +39,12 @@ assert.equal(url.searchParams.get('analytics_id'), null, 'autocomplete must rema
 assert.equal(call.options.headers.get('Authorization'), 'Bearer viewer-secret');
 assert.equal(call.options.signal, signal);
 
+await api.suggestGemarkungen('Hausen', signal);
+call = calls.at(-1);
+url = new URL(call.path, window.location.origin);
+assert.equal(url.searchParams.get('limit'), '50', 'all current exact Gemarkung homonyms must remain selectable');
+assert.equal(url.searchParams.get('analytics_id'), null, 'autocomplete must remain untracked');
+
 const cases = [
   ['place', () => api.suggestPlaces('Köln', signal, { analytics_id: 'place-id', analytics_scope: 'place' })],
   ['street', () => api.suggestStreets('Köln', 'Hauptstr.', 'Nordrhein-Westfalen', signal, { analytics_id: 'street-id', analytics_scope: 'street' })],

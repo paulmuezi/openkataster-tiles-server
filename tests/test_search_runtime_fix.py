@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from openkataster_tiles import main
@@ -23,8 +24,88 @@ ADDRESS_FALLBACK_REFERENCES_AVAILABLE = (
     and (main.DATA_DIR / "rheinland-pfalz.search.sqlite").exists()
 )
 
+GEMARKUNG_REFERENCES_AVAILABLE = all(
+    (main.DATA_DIR / f"{state}.search.sqlite").exists()
+    for state in (
+        "baden-wurttemberg",
+        "bremen",
+        "rheinland-pfalz",
+        "schleswig-holstein",
+    )
+)
+
+CENTRAL_ADDRESS_REFERENCES_AVAILABLE = (
+    main.OPENPLZ_DB.exists()
+    and all(
+        (main.DATA_DIR / f"{state}.search.sqlite").exists()
+        for state in (
+            "baden-wurttemberg",
+            "berlin",
+            "brandenburg",
+            "bremen",
+            "mecklenburg-vorpommern",
+            "niedersachsen",
+            "nordrhein-westfalen",
+            "rheinland-pfalz",
+            "saarland",
+            "schleswig-holstein",
+            "thueringen",
+        )
+    )
+)
+
 
 class SearchRuntimeFixTests(unittest.TestCase):
+    def gemarkung_suggestions_from_fixture(
+        self,
+        query: str,
+        limit: int,
+        rows_by_state: dict[str, list[tuple[str, str, str, int]]],
+    ) -> tuple[dict, ...]:
+        with TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            entries = []
+            for state, fixture_rows in rows_by_state.items():
+                path = directory / f"{state}.search.sqlite"
+                connection = sqlite3.connect(path)
+                connection.execute(
+                    """
+                    CREATE TABLE parcel_lookup (
+                        gemarkung_norm TEXT NOT NULL,
+                        gemarkung_label TEXT NOT NULL,
+                        gemarkungsnummer TEXT NOT NULL
+                    )
+                    """
+                )
+                for gemarkung_norm, label, number, parcel_count in fixture_rows:
+                    connection.executemany(
+                        "INSERT INTO parcel_lookup VALUES (?, ?, ?)",
+                        [(gemarkung_norm, label, number)] * parcel_count,
+                    )
+                connection.commit()
+                connection.close()
+                entries.append(main.FeatureDbEntry(name=state, path=path))
+            entries.sort(key=lambda entry: entry.name)
+            signature = tuple(
+                (entry.name, str(entry.path), *main.sqlite_file_signature(entry.path))
+                for entry in entries
+            )
+            main.search_gemarkung_suggestions_cached.cache_clear()
+            try:
+                with patch.object(main, "search_db_entries_for_states", return_value=tuple(entries)):
+                    return main.search_gemarkung_suggestions_cached(
+                        query,
+                        limit,
+                        tuple(entry.name for entry in entries),
+                        signature,
+                    )
+            finally:
+                main.search_gemarkung_suggestions_cached.cache_clear()
+                for entry in entries:
+                    cached = main._SEARCH_DB_CONNECTIONS.pop(str(entry.path), None)
+                    if cached:
+                        cached[1].close()
+
     def test_search_db_errors_are_structured_503s(self) -> None:
         with patch.object(
             main,
@@ -145,6 +226,142 @@ class SearchRuntimeFixTests(unittest.TestCase):
             main.search_result_city_label("70184", "70184", "baden-wurttemberg"),
         )
 
+    def test_house_number_semantics_preserve_meaningful_separators(self) -> None:
+        self.assertEqual(
+            main.normalize_house_number_semantic("17 B7"),
+            main.normalize_house_number_semantic("17 b7"),
+        )
+        self.assertEqual(
+            main.normalize_house_number_semantic("1 1⁄10"),
+            main.normalize_house_number_semantic("1 1/10"),
+        )
+        for typed, stored in (
+            ("101", "10/1"),
+            ("1719", "17/19"),
+            ("1ad", "1A-D"),
+            ("33a1", "33 a - 1"),
+        ):
+            with self.subTest(typed=typed, stored=stored):
+                self.assertNotEqual(
+                    main.normalize_house_number_semantic(typed),
+                    main.normalize_house_number_semantic(stored),
+                )
+
+    def test_fallback_place_context_rejects_neighbor_rows(self) -> None:
+        rows = [
+            {
+                "lon": 7.5,
+                "lat": 48.5,
+                "post_code": "12345",
+                "city_label": "12345",
+                "city_norm": "12345",
+            },
+            {
+                "lon": 7.5,
+                "lat": 48.5,
+                "post_code": "12345",
+                "city_label": "Nachbarort",
+                "city_norm": "nachbarort",
+            },
+            {
+                "lon": 8.5,
+                "lat": 48.5,
+                "post_code": "12345",
+                "city_label": "Zielort",
+                "city_norm": "zielort",
+            },
+            {
+                "lon": 7.6,
+                "lat": 48.6,
+                "post_code": "12345",
+                "city_label": "Veralteter Ort",
+                "city_norm": "veralteter ort",
+            },
+            {
+                "lon": 7.5,
+                "lat": 48.5,
+                "post_code": "12345",
+                "city_label": "",
+                "city_norm": "nachbarort",
+            },
+        ]
+        with (
+            patch.object(
+                main,
+                "openplz_place_comparison_norms",
+                return_value=("zielort",),
+            ),
+            patch.object(
+                main,
+                "city_norms_for_state_context",
+                side_effect=lambda value, _state: (main.normalize_geocoder_text(value),),
+            ),
+            patch.object(
+                main,
+                "gn250_place_bboxes_for_state_context",
+                side_effect=lambda value, _state, _signature: (
+                    ((7.0, 48.0, 8.0, 49.0),)
+                    if main.normalize_geocoder_text(value) == "nachbarort"
+                    else (((9.0, 50.0, 10.0, 51.0),) if value else tuple())
+                ),
+            ),
+            patch.object(main, "postcode_area_lookup", return_value="12345"),
+        ):
+            accepted = main.filter_address_rows_by_place_context(
+                rows,
+                "Zielort",
+                "test-state",
+                ((7.0, 48.0, 8.0, 49.0),),
+                (1, 1),
+            )
+        self.assertEqual([rows[0], rows[3]], accepted)
+
+    def test_structured_address_fields_do_not_round_trip_through_free_text(self) -> None:
+        self.assertEqual(
+            (("address", "Altenkesseler Straße", "17 B7", "Saarbrücken"),),
+            main.structured_geocoder_candidates(
+                "Altenkesseler Straße", "17 B7", "Saarbrücken"
+            ),
+        )
+
+    def test_free_text_parser_keeps_multi_part_house_numbers_together(self) -> None:
+        cases = (
+            (
+                "Altenkesseler Straße 17 B7 Saarbrücken",
+                ("address", "Altenkesseler Straße", "17 B7", "Saarbrücken"),
+            ),
+            (
+                "Östliche Ringstraße 1 1/10 Karben",
+                ("address", "Östliche Ringstraße", "1 1/10", "Karben"),
+            ),
+            (
+                "Chausseestraße 33 a - 1 Beetzsee",
+                ("address", "Chausseestraße", "33 a-1", "Beetzsee"),
+            ),
+        )
+        for query, expected in cases:
+            with self.subTest(query=query):
+                self.assertEqual(expected, main.geocoder_direct_candidates(query)[0])
+
+    def test_city_context_variants_handle_ot_and_kurort_generically(self) -> None:
+        kindelbrueck = main.city_norms_for_state_context(
+            "Kindelbrück OT Düppel", "thueringen"
+        )
+        self.assertIn("kindelbruck", kindelbrueck)
+        self.assertIn("duppel", kindelbrueck)
+        self.assertIn(
+            "schmalkalden kurort",
+            main.city_norms_for_state_context("Schmalkalden", "thueringen"),
+        )
+        self.assertIn(
+            "stadtgemeinde bremerhaven",
+            main.city_norms_for_state_context("Bremerhaven", "bremen"),
+        )
+        self.assertIn(
+            "Oldenburg",
+            main.gn250_place_name_aliases("Oldenburg (Oldb)", "niedersachsen"),
+        )
+
     @unittest.skipUnless(LIVE_REFERENCES_AVAILABLE, "requires mounted OpenKataster reference databases")
     def test_sachsen_suggestions_use_plain_place_name(self) -> None:
         result = main.search_street_suggestions_for_dataset(
@@ -208,6 +425,346 @@ class SearchRuntimeFixTests(unittest.TestCase):
         codes = {item["gemarkungsnummer"] for item in result["results"]}
         self.assertIn("0976", codes)
         self.assertIn("2384", codes)
+
+    def test_gemarkung_suggestions_use_producer_umlaut_normalization(self) -> None:
+        rows = self.gemarkung_suggestions_from_fixture(
+            "Überseehafen",
+            8,
+            {
+                "baden-wurttemberg": [
+                    ("uberseehafener feld", "Überseehafener Feld (1000)", "1000", 50),
+                ],
+                "bremen": [
+                    ("uberseehafen", "Überseehafen (0009)", "0009", 5),
+                ],
+            },
+        )
+        self.assertEqual(
+            [("bremen", "0009")],
+            [(item["state"], item["gemarkungsnummer"]) for item in rows],
+        )
+
+    def test_exact_gemarkung_outranks_prefixes_from_earlier_states(self) -> None:
+        rows = self.gemarkung_suggestions_from_fixture(
+            "Hemme",
+            8,
+            {
+                "baden-wurttemberg": [
+                    (f"hemmendorf {index}", f"Hemmendorf {index} ({index:04d})", f"{index:04d}", 20)
+                    for index in range(1, 9)
+                ],
+                "schleswig-holstein": [
+                    ("hemme", "Hemme (3324)", "3324", 1),
+                ],
+            },
+        )
+        self.assertEqual(
+            [("schleswig-holstein", "3324")],
+            [(item["state"], item["gemarkungsnummer"]) for item in rows],
+        )
+
+    def test_full_gemarkung_label_filters_by_displayed_code(self) -> None:
+        rows = self.gemarkung_suggestions_from_fixture(
+            "Hausen (5933)",
+            8,
+            {
+                "baden-wurttemberg": [
+                    ("hausen", "Hausen (1000)", "1000", 100),
+                    ("hausen", "Hausen (5933)", "5933", 1),
+                ],
+            },
+        )
+        self.assertEqual(
+            ["5933"],
+            [item["gemarkungsnummer"] for item in rows],
+        )
+
+    def test_primary_gemarkung_prefix_outranks_digraph_fallback(self) -> None:
+        rows = self.gemarkung_suggestions_from_fixture(
+            "Neuenk",
+            8,
+            {
+                "saarland": [
+                    ("neunkirchen", "Neunkirchen (0001)", "0001", 100),
+                    ("neuenkirchen", "Neuenkirchen (0002)", "0002", 1),
+                ],
+            },
+        )
+        self.assertEqual(
+            ["0002", "0001"],
+            [item["gemarkungsnummer"] for item in rows],
+        )
+
+    def test_viewer_limit_keeps_all_current_hausen_homonyms_selectable(self) -> None:
+        baden_codes = [f"{index:04d}" for index in range(1, 17)] + ["5933"]
+        rheinland_codes = ["1238"] + [f"9{index:03d}" for index in range(1, 12)]
+        rows = self.gemarkung_suggestions_from_fixture(
+            "Hausen",
+            50,
+            {
+                "baden-wurttemberg": [
+                    ("hausen", f"Hausen ({code})", code, len(baden_codes) - index)
+                    for index, code in enumerate(baden_codes)
+                ],
+                "rheinland-pfalz": [
+                    ("hausen", f"Hausen ({code})", code, len(rheinland_codes) - index)
+                    for index, code in enumerate(rheinland_codes)
+                ],
+            },
+        )
+        identities = {(item["state"], item["gemarkungsnummer"]) for item in rows}
+        self.assertEqual(29, len(rows))
+        self.assertIn(("baden-wurttemberg", "5933"), identities)
+        self.assertIn(("rheinland-pfalz", "1238"), identities)
+
+    def test_gemarkung_suggestion_api_accepts_viewer_limit(self) -> None:
+        parameters = main.app.openapi()["paths"]["/api/v1/suggest/gemarkungen"]["get"]["parameters"]
+        limit_parameter = next(
+            parameter for parameter in parameters if parameter["name"] == "limit"
+        )
+        self.assertEqual(50, limit_parameter["schema"]["maximum"])
+
+    @unittest.skipUnless(
+        GEMARKUNG_REFERENCES_AVAILABLE,
+        "requires mounted OpenKataster Gemarkung databases",
+    )
+    def test_live_gemarkung_edge_cases_are_selectable(self) -> None:
+        cases = (
+            ("Überseehafen", "bremen", "0009"),
+            ("Hemme", "schleswig-holstein", "3324"),
+            ("Hausen", "baden-wurttemberg", "5933"),
+            ("Hausen", "rheinland-pfalz", "1238"),
+        )
+        for query, state, number in cases:
+            with self.subTest(query=query, state=state, number=number):
+                result = main.search_gemarkung_suggestions_for_dataset(
+                    "deutschland", query, 50
+                )
+                identities = {
+                    (item["state"], item["gemarkungsnummer"])
+                    for item in result["results"]
+                }
+                self.assertIn((state, number), identities)
+
+    @unittest.skipUnless(
+        CENTRAL_ADDRESS_REFERENCES_AVAILABLE,
+        "requires mounted central address reference databases",
+    )
+    def test_legacy_house_keys_never_return_separator_collisions(self) -> None:
+        cases = (
+            (
+                "Am Hang 101 69181",
+                "Am Hang 10/1 69181",
+                "baden-wurttemberg",
+                "Am Hang 10/1",
+            ),
+            (
+                "Schlossweiherstraße 1719 Aachen",
+                "Schlossweiherstraße 17/19 Aachen",
+                "nordrhein-westfalen",
+                "Schlossweiherstraße 17/19",
+            ),
+        )
+        for false_query, true_query, state, expected in cases:
+            with self.subTest(state=state):
+                self.assertEqual(
+                    [],
+                    main.search_direct_geocoder_for_dataset(
+                        false_query, 12, {state}
+                    ),
+                )
+                positive = main.search_direct_geocoder_for_dataset(
+                    true_query, 12, {state}
+                )
+                self.assertTrue(positive)
+                self.assertTrue(all(expected in item["label"] for item in positive))
+
+    @unittest.skipUnless(
+        CENTRAL_ADDRESS_REFERENCES_AVAILABLE,
+        "requires mounted central address reference databases",
+    )
+    def test_street_postcode_fallback_never_relabels_neighbor_addresses(self) -> None:
+        cases = (
+            ("brandenburg", "Lindenstraße", "11", "Alt Tucheband"),
+            (
+                "schleswig-holstein",
+                "Massower Straße",
+                "19",
+                "Klein Pampau",
+            ),
+        )
+        for state, street, house, city in cases:
+            with self.subTest(state=state, city=city):
+                results = main.search_direct_geocoder_for_dataset(
+                    " ",
+                    12,
+                    {state},
+                    candidate_override=main.structured_geocoder_candidates(
+                        street,
+                        house,
+                        city,
+                    ),
+                )
+                self.assertEqual([], results)
+
+    @unittest.skipUnless(
+        CENTRAL_ADDRESS_REFERENCES_AVAILABLE,
+        "requires mounted central address reference databases",
+    )
+    def test_same_city_addresses_remain_visible_without_a_postcode(self) -> None:
+        results = main.search_direct_geocoder_for_dataset(
+            " ",
+            12,
+            {"saarland"},
+            candidate_override=main.structured_geocoder_candidates(
+                "Pfählerstraße",
+                "14",
+                "Saarbrücken",
+            ),
+        )
+        labels = {item["label"] for item in results}
+        self.assertIn("Pfählerstraße 14, 66125 Saarbrücken", labels)
+        self.assertIn("Pfählerstraße 14, 66128 Saarbrücken", labels)
+
+    @unittest.skipUnless(
+        CENTRAL_ADDRESS_REFERENCES_AVAILABLE,
+        "requires mounted central address reference databases",
+    )
+    def test_context_recovery_keeps_official_titles_and_stale_city_rows(self) -> None:
+        cases = (
+            (
+                "niedersachsen",
+                "Theodor-Francksen-Straße",
+                "90",
+                "Oldenburg",
+                "Theodor-Francksen-Straße 90, 26123 Oldenburg",
+            ),
+            (
+                "bremen",
+                "Anton-Schumacher-Straße",
+                "20",
+                "Bremerhaven",
+                "Anton-Schumacher-Straße 20, 27568 Bremerhaven",
+            ),
+            (
+                "rheinland-pfalz",
+                "Karlstraße",
+                "31",
+                "Wörth am Rhein",
+                "Karlstraße 31, 76744 Wörth am Rhein",
+            ),
+            (
+                "brandenburg",
+                "Klein Jamno Nr.",
+                "25",
+                "Forst (Lausitz)",
+                "Klein Jamno Nr. 25, 03149 Forst (Lausitz)",
+            ),
+            (
+                "mecklenburg-vorpommern",
+                "Neue Straße",
+                "6",
+                "Wustrow",
+                "Neue Str. 6, 18347 Wustrow",
+            ),
+        )
+        for state, street, house, city, expected in cases:
+            with self.subTest(state=state, city=city):
+                results = main.search_direct_geocoder_for_dataset(
+                    " ",
+                    12,
+                    {state},
+                    candidate_override=main.structured_geocoder_candidates(
+                        street,
+                        house,
+                        city,
+                    ),
+                )
+                self.assertIn(expected, [item["label"] for item in results])
+
+    @unittest.skipUnless(
+        CENTRAL_ADDRESS_REFERENCES_AVAILABLE,
+        "requires mounted central address reference databases",
+    )
+    def test_structured_address_edge_cases_resolve_centrally(self) -> None:
+        cases = (
+            (
+                "Altenkesseler Straße", "17 B7", "Saarbrücken", "saarland",
+                "Altenkesseler Straße 17 b7, 66115 Saarbrücken",
+            ),
+            (
+                "Bergstraße", "28a", "Schmalkalden", "thueringen",
+                "Bergstraße 28a, 98574 Schmalkalden",
+            ),
+            (
+                "Mittelgasse", "1", "Schönbrunn", "thueringen",
+                "Mittelgasse 1, 98667 Schönbrunn",
+            ),
+            (
+                "Röblingstraße", "7", "Mühlhausen", "thueringen",
+                "Röblingstraße 7, 99974 Mühlhausen",
+            ),
+            (
+                "Dorfstraße", "21", "Kindelbrück OT Düppel", "thueringen",
+                "Dorfstraße 21, 99638 Kindelbrück OT Düppel",
+            ),
+            (
+                "Guldengasse", "35", "Wyhl am Kaiserstuhl", "baden-wurttemberg",
+                "Guldengasse 35, 79369 Wyhl am Kaiserstuhl",
+            ),
+            (
+                "Hauptstraße", "44", "Endingen am Kaiserstuhl", "baden-wurttemberg",
+                "Hauptstraße 44, 79346 Endingen am Kaiserstuhl",
+            ),
+            (
+                "Feriendorf Freizeitcenter", "33", "Rheinmünster", "baden-wurttemberg",
+                "Feriendorf Freizeitcenter 33, 77836 Rheinmünster",
+            ),
+        )
+        for street, house, city, state, expected in cases:
+            with self.subTest(street=street, city=city):
+                results = main.search_direct_geocoder_for_dataset(
+                    " ",
+                    12,
+                    {state},
+                    candidate_override=main.structured_geocoder_candidates(
+                        street, house, city
+                    ),
+                )
+                self.assertIn(expected, [item["label"] for item in results])
+
+    @unittest.skipUnless(
+        CENTRAL_ADDRESS_REFERENCES_AVAILABLE,
+        "requires mounted central address reference databases",
+    )
+    def test_place_and_street_suggestions_keep_context_aliases_selectable(self) -> None:
+        places = main.search_place_suggestions_for_dataset(
+            "deutschland", "Mühlhausen", 8
+        )["results"]
+        self.assertIn(
+            ("Mühlhausen/Thüringen", "thueringen"),
+            [(item["label"], item["state"]) for item in places],
+        )
+        cases = (
+            ("Mühlhausen", "Röbl", "thueringen", "Röblingstraße"),
+            ("Schönbrunn", "Mitt", "thueringen", "Mittelgasse"),
+            ("Wyhl am Kaiserstuhl", "Guld", "baden-wurttemberg", "Guldengasse"),
+            ("Endingen am Kaiserstuhl", "Haupt", "baden-wurttemberg", "Hauptstraße"),
+            ("Rheinmünster", "Feri", "baden-wurttemberg", "Feriendorf Freizeitcenter"),
+        )
+        for place, query, state, expected in cases:
+            with self.subTest(place=place, query=query):
+                result = main.search_street_suggestions_for_dataset(
+                    "deutschland", place, query, 8, state=state
+                )
+                self.assertIn(expected, [item["label"] for item in result["results"]])
+
+    @unittest.skipUnless(
+        CENTRAL_ADDRESS_REFERENCES_AVAILABLE,
+        "requires mounted central address reference databases",
+    )
+    def test_openplz_state_slug_aliases_are_resolved_from_the_database(self) -> None:
+        self.assertIn("thuringen", main.openplz_storage_state_keys("thueringen"))
 
     @unittest.skipUnless(LIVE_REFERENCES_AVAILABLE, "requires mounted OpenKataster reference databases")
     def test_direct_search_is_place_scoped_and_labels_are_not_duplicated(self) -> None:

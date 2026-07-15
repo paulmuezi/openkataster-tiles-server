@@ -26,7 +26,7 @@ assert.doesNotMatch(stylesSource, /@media \(max-width: 760px\)[\s\S]*\.measure-p
 
 assert.match(appSource, /\.\/measure\.js\?v=20260714-mobile-ui1/);
 assert.match(appSource, /\.\/selection\.js\?v=20260715-mobile-free-notice-scroll1/);
-assert.match(indexSource, /styles\.css\?v=20260715-mobile-free-notice-scroll1/);
-assert.match(indexSource, /app\.js\?v=20260715-mobile-free-notice-scroll1/);
+assert.match(indexSource, /styles\.css\?v=20260715-gemarkung-search1/);
+assert.match(indexSource, /app\.js\?v=20260715-gemarkung-search1/);
 
 console.log('pro-plan-notice-tests=ok');

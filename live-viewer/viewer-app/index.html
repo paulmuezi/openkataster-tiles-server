@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>OpenKataster Karte</title>
+  <script>const okParams = new URLSearchParams(location.search); document.documentElement.dataset.embed = okParams.has('iframe') ? 'true' : 'false'; document.documentElement.dataset.preview = okParams.get('preview') === '1' ? 'true' : 'false'; document.documentElement.dataset.onoffice = okParams.get('onoffice') === '1' ? 'true' : 'false'; document.documentElement.dataset.shellMode = okParams.get('welcome') === '1' ? 'welcome' : 'planner';</script>
   <link rel="icon" href="/viewer-assets/viewer-app/openkataster-logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/viewer-assets/viewer-app/maplibre-gl-5.14.0.css">
-  <link rel="stylesheet" href="/viewer-assets/viewer-app/styles.css?v=20260715-mobile-free-notice-scroll1">
-  <script>document.documentElement.dataset.embed = new URLSearchParams(location.search).has('iframe') ? 'true' : 'false';</script>
+  <link rel="stylesheet" href="/viewer-assets/viewer-app/styles.css?v=20260722-bayern-height1">
 </head>
 <body>
   <header class="site-header">
@@ -24,27 +24,25 @@
       <div id="mapPane" class="map-pane">
         <div id="map"></div>
 
-        <div class="search-control">
-          <button id="searchButton" class="round-tool" type="button" aria-label="Suche öffnen" aria-expanded="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.3-4.3"/><circle cx="10.5" cy="10.5" r="6.5"/></svg>
-          </button>
-          <section id="searchPanel" class="search-panel ui-panel" hidden>
-            <header class="panel-head">
-              <select id="searchMode" aria-label="Suchart"><option value="address">Adresse</option><option value="parcel">Flurstück</option></select>
-              <button id="searchClose" class="icon-button" type="button" aria-label="Suche schließen">×</button>
-            </header>
-            <div id="addressFields" class="search-fields">
-              <label class="clear-field"><span class="sr-only">Ort</span><input id="placeInput" name="ok-search-place" type="text" placeholder="Ort erforderlich" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="placeInput" aria-label="Ort löschen">×</button><div id="placeSuggestions" class="field-suggestions" hidden></div></label>
-              <label class="clear-field"><span class="sr-only">Straße</span><input id="streetInput" name="ok-search-street" type="text" placeholder="Straße optional" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="streetInput" aria-label="Straße löschen">×</button><div id="streetSuggestions" class="field-suggestions" hidden></div></label>
-              <label class="clear-field"><span class="sr-only">Hausnummer</span><input id="houseInput" name="ok-search-house-number" type="text" placeholder="Hausnummer optional" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="houseInput" aria-label="Hausnummer löschen">×</button></label>
+        <div id="searchControl" class="search-control">
+          <section id="searchPanel" class="search-panel ui-panel" data-advanced="false" role="search" aria-label="Adresse, Flurstück oder POI suchen">
+            <div class="search-pill-row">
+              <span class="search-leading-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m21 21-4.3-4.3"/><circle cx="10.5" cy="10.5" r="6.5"/></svg></span>
+              <div id="addressFields" class="search-fields address-search-fields">
+                <div class="clear-field"><label class="sr-only" for="addressInput">Adresse, Flurstück oder POI suchen</label><input id="addressInput" name="ok-search-address" type="search" placeholder="Adresse, Flurstück oder POI suchen" role="combobox" aria-autocomplete="list" aria-controls="searchSuggestions" aria-expanded="false" aria-haspopup="listbox" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="addressInput" aria-label="Sucheingabe löschen">×</button></div>
+              </div>
+              <button id="searchModeButton" class="search-mode-button" type="button" aria-label="Flurstückssuche mit Feldern öffnen" aria-controls="parcelFields" aria-expanded="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h6M14 7h6M4 17h10M18 17h2"/><circle cx="12" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>
+              </button>
             </div>
-            <div id="parcelFields" class="search-fields" hidden>
-              <label class="clear-field"><span class="sr-only">Gemarkung</span><input id="gemarkungInput" name="ok-search-cadastre" type="text" placeholder="Gemarkung erforderlich" aria-required="true" autocomplete="new-password" spellcheck="false" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="gemarkungInput" aria-label="Gemarkung löschen">×</button><div id="gemarkungSuggestions" class="field-suggestions" hidden></div></label>
-              <label class="clear-field"><span class="sr-only">Flur</span><input id="flurInput" name="ok-search-district" type="text" placeholder="Flur optional" inputmode="numeric" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="flurInput" aria-label="Flur löschen">×</button></label>
-              <label class="clear-field"><span class="sr-only">Flurstück</span><input id="parcelInput" name="ok-search-parcel" type="text" placeholder="Flurstück erforderlich" aria-required="true" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="parcelInput" aria-label="Flurstück löschen">×</button></label>
+            <div id="searchSuggestions" class="field-suggestions search-suggestions" role="listbox" aria-label="Suchvorschläge" hidden></div>
+            <div id="parcelFields" class="search-fields parcel-search-fields" role="group" aria-label="Flurstückssuche" hidden>
+              <div class="clear-field"><label class="sr-only" for="gemarkungInput">Gemarkung</label><input id="gemarkungInput" name="ok-search-cadastre" type="text" placeholder="Gemarkung erforderlich" aria-required="true" autocomplete="new-password" spellcheck="false" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="gemarkungInput" aria-label="Gemarkung löschen">×</button><div id="gemarkungSuggestions" class="field-suggestions" hidden></div></div>
+              <div class="clear-field"><label class="sr-only" for="flurInput">Flur</label><input id="flurInput" name="ok-search-district" type="text" placeholder="Flur optional" inputmode="numeric" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="flurInput" aria-label="Flur löschen">×</button></div>
+              <div class="clear-field"><label class="sr-only" for="parcelInput">Flurstück</label><input id="parcelInput" name="ok-search-parcel" type="text" placeholder="Flurstück erforderlich" aria-required="true" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true"><button type="button" data-clear-target="parcelInput" aria-label="Flurstück löschen">×</button></div>
+              <button id="searchSubmit" class="primary-action search-submit" type="button"><span class="button-spinner" aria-hidden="true"></span><span>Flurstück suchen</span></button>
             </div>
             <div id="searchStatus" class="search-status" hidden aria-live="polite"></div>
-            <button id="searchSubmit" class="primary-action search-submit" type="button"><span class="button-spinner" aria-hidden="true"></span><span>Suchen</span></button>
             <div id="searchResults" class="search-results" hidden></div>
           </section>
         </div>
@@ -62,13 +60,15 @@
         </nav>
 
         <section id="measurePanel" class="measure-panel ui-panel" hidden aria-live="polite">
-          <div id="measureValues" class="measure-grid">
-            <div class="measure-cell"><span class="measure-symbol">↔</span><span>Abstand</span><strong id="measureDistance">0 m</strong></div>
-            <div class="measure-cell"><span class="measure-symbol">∠</span><span>Winkel zur Horizontalen</span><strong id="measureAngle">0,0°</strong></div>
-            <div class="measure-cell"><span class="measure-symbol">Σ</span><span>Kumulierter Abstand</span><strong id="measureCumulative">0 m</strong></div>
-            <div class="measure-cell"><span class="measure-symbol">▧</span><span>Fläche</span><strong id="measureArea">–</strong></div>
-          </div>
           <div id="measureLocked" class="measure-pro-lock" hidden><span>Diese Funktion ist im Pro-Plan verfügbar.</span><a class="measure-upgrade-link" href="/pro" target="_top">Pro freischalten</a></div>
+          <div id="measureValues" class="measure-grid">
+            <div class="measure-cell"><span class="measure-symbol" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 13 13 3M3 13l.2-3.4M3 13l3.4-.2M13 3l-3.4.2M13 3l-.2 3.4"/></svg></span><span>Abstand</span><strong id="measureDistance">0 m</strong></div>
+            <div class="measure-cell"><span class="measure-symbol" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M2.5 13h11M2.5 13l8.3-8.3M7 13a4.5 4.5 0 0 0-1.3-3.2"/></svg></span><span id="measureAngleLabel">Winkel</span><strong id="measureAngle">0,0°</strong></div>
+            <div class="measure-cell"><span class="measure-symbol" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M2 8h12M2 8l2-2M2 8l2 2M14 8l-2-2M14 8l-2 2M8 4v8"/></svg></span><span title="WGS 84 (EPSG:4326)" data-mobile-label="Lon">Längengrad</span><strong id="measureLongitude">–</strong></div>
+            <div class="measure-cell"><span class="measure-symbol" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 2v12M8 2 6 4M8 2l2 2M8 14l-2-2M8 14l2-2M4 8h8"/></svg></span><span title="WGS 84 (EPSG:4326)" data-mobile-label="Lat">Breitengrad</span><strong id="measureLatitude">–</strong></div>
+            <div class="measure-cell"><span class="measure-symbol" aria-hidden="true"><svg class="measure-symbol-total" viewBox="0 0 16 16"><path d="M2.5 5h4M4.5 3v4M7 12.5 13 6.5M9.5 6.5H13V10"/></svg></span><span data-mobile-label="Gesamt">Kumulierter Abstand</span><strong id="measureCumulative">0 m</strong></div>
+            <div class="measure-cell"><span class="measure-symbol" aria-hidden="true"><svg class="measure-symbol-area" viewBox="0 0 16 16"><path d="m2.5 6.5 4-4M2.5 11l8.5-8.5M5 13.5 13.5 5M9.5 13.5l4-4"/></svg></span><span>Fläche</span><strong id="measureArea">–</strong></div>
+          </div>
         </section>
 
         <div class="layer-control">
@@ -78,7 +78,8 @@
           <section id="layerMenu" class="layer-menu ui-panel" hidden>
             <strong>Layer</strong>
             <p id="layerZoomNote" class="layer-zoom-note">ALKIS und Luftbild sind ab Zoom 17 verfügbar.</p>
-            <details open><summary><label><input type="checkbox" data-layer="alkis"><span class="swatch alkis"></span>ALKIS</label></summary>
+            <details class="alkis-layer-details" open><summary><label><input type="checkbox" data-layer="alkis"><span class="swatch alkis"></span>ALKIS</label></summary>
+              <p id="layerPresentationNote" class="layer-presentation-note" hidden>Amtliche Gesamtdarstellung: Gebäude, Flurstücke und Beschriftungen werden gemeinsam angezeigt.</p>
               <div class="layer-subtree">
                 <label><input type="checkbox" data-layer="buildings"><span class="swatch building"></span>Gebäude</label>
                 <label><input type="checkbox" data-layer="parcelLines"><span class="swatch line"></span>Flurstücksgrenzen</label>
@@ -109,6 +110,7 @@
 
         <div id="zoomBadge" class="zoom-badge">Zoom –</div>
         <div class="source-control">
+          <a id="osmAttribution" class="osm-attribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener" hidden>© OpenStreetMap-Mitwirkende</a>
           <button id="sourceButton" class="source-button" type="button" aria-label="Quellen" aria-expanded="false">i</button>
           <section id="sourcePanel" class="source-panel ui-panel" hidden><ul id="sourceList"></ul></section>
         </div>
@@ -116,7 +118,7 @@
       </div>
 
       <section id="selectionDock" class="selection-dock" aria-label="Auswahl" aria-hidden="true">
-        <div id="selectionResize" class="selection-resize" role="separator" aria-orientation="horizontal" aria-label="Tabellenhöhe ändern"><span></span></div>
+        <div id="selectionResize" class="selection-resize" role="separator" aria-orientation="horizontal" aria-label="Tabellenhöhe ändern oder automatisch anpassen"><span></span></div>
         <header class="selection-head"><div><strong>Auswahl</strong><span id="selectionCount">Keine Objekte ausgewählt</span></div><button id="selectionClose" class="icon-button" type="button" aria-label="Auswahl schließen">×</button></header>
         <div id="selectionContent" class="selection-content"></div>
       </section>
@@ -154,6 +156,6 @@
   </main>
 
   <script src="/viewer-assets/viewer-app/maplibre-gl-5.14.0.js"></script>
-  <script type="module" src="/viewer-assets/viewer-app/app.js?v=20260715-mobile-free-notice-scroll1"></script>
+  <script type="module" src="/viewer-assets/viewer-app/app.js?v=20260722-bayern-height1"></script>
 </body>
 </html>

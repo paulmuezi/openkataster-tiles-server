@@ -1,4 +1,5 @@
 import { polygonizeMeasurement } from './measure-geometry.mjs?v=20260712-polygonized-measure3';
+import { formatMeasurementCoordinate } from './measure-format.mjs?v=20260717-measure-icons2';
 import { formatArea, formatDistance, haversineMeters } from './utils.js';
 
 const SNAP_LAYERS = [
@@ -6,9 +7,19 @@ const SNAP_LAYERS = [
   'selected-buildings-v2', 'selected-parcels-v2'
 ];
 
+export const LOCKED_MEASUREMENT_VALUES = Object.freeze({
+  distance: '12,4 m',
+  angle: '63,5°',
+  longitude: '9,812345° E',
+  latitude: '52,318765° N',
+  cumulative: '48,7 m',
+  area: '186 m²'
+});
+
 export function createMeasureController({ map, store, elements, finish }) {
   const {
-    measurePanel, measureValues, measureLocked, measureDistance, measureAngle, measureCumulative, measureArea
+    measurePanel, measureValues, measureLocked, measureDistance, measureAngleLabel, measureAngle,
+    measureLongitude, measureLatitude, measureCumulative, measureArea
   } = elements;
   let points = [];
   let draft = null;
@@ -29,12 +40,6 @@ export function createMeasureController({ map, store, elements, finish }) {
     map.addLayer({ id: 'measure-v2-fill', type: 'fill', source: 'measure-v2', filter: ['==', '$type', 'Polygon'], paint: { 'fill-color': '#6b7280', 'fill-opacity': .16 } });
     map.addLayer({ id: 'measure-v2-line', type: 'line', source: 'measure-v2', filter: ['==', '$type', 'LineString'], paint: { 'line-color': '#4b5563', 'line-width': 1.35, 'line-dasharray': [3.2, 2.2], 'line-opacity': .96 } });
     map.addLayer({ id: 'measure-v2-line-halo', type: 'line', source: 'measure-v2', filter: ['==', '$type', 'LineString'], paint: { 'line-color': 'rgba(255,255,255,.88)', 'line-width': 3.6, 'line-dasharray': [3.2, 2.2] } }, 'measure-v2-line');
-    map.addLayer({ id: 'measure-v2-points', type: 'circle', source: 'measure-v2', filter: ['==', '$type', 'Point'], paint: {
-      'circle-radius': ['case', ['==', ['get', 'kind'], 'start'], 5.2, 3.7],
-      'circle-color': '#fff',
-      'circle-stroke-color': ['case', ['==', ['get', 'kind'], 'start'], '#f86d14', '#4b5563'],
-      'circle-stroke-width': ['case', ['==', ['get', 'kind'], 'start'], 2, 1.4]
-    } });
     map.addLayer({ id: 'measure-snap-v2', type: 'circle', source: 'measure-snap-v2', paint: { 'circle-radius': 6.2, 'circle-color': 'rgba(255,255,255,.82)', 'circle-stroke-color': '#f86d14', 'circle-stroke-width': 2 } });
   }
 
@@ -203,45 +208,58 @@ export function createMeasureController({ map, store, elements, finish }) {
     const currentDistance = working.length >= 2 ? haversineMeters(working[working.length - 2], working[working.length - 1]) : 0;
     const cumulative = line.slice(1).reduce((sum, point, index) => sum + haversineMeters(line[index], point), 0);
     const angle = angleValue(working);
+    const coordinate = working.length ? working[working.length - 1] : null;
     return {
       distance: formatDistance(currentDistance),
       cumulative: formatDistance(cumulative),
       angleLabel: angle.label,
       angle: `${angle.value.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}°`,
+      longitude: coordinate ? formatMeasurementCoordinate(coordinate[0], 'lon') : '–',
+      latitude: coordinate ? formatMeasurementCoordinate(coordinate[1], 'lat') : '–',
       area: surface.area > 0 ? formatArea(surface.area) : '–'
     };
   }
 
   function showMetrics(metrics) {
     measureDistance.textContent = metrics.distance;
-    measureAngle.previousElementSibling.textContent = metrics.angleLabel;
+    measureAngleLabel.title = metrics.angleLabel;
+    measureAngleLabel.setAttribute('aria-label', metrics.angleLabel);
     measureAngle.textContent = metrics.angle;
+    measureLongitude.textContent = metrics.longitude;
+    measureLatitude.textContent = metrics.latitude;
     measureCumulative.textContent = metrics.cumulative;
     measureArea.textContent = metrics.area;
   }
 
   function showLockedMetrics() {
-    measureDistance.textContent = '–';
-    measureAngle.textContent = '–';
-    measureCumulative.textContent = '–';
-    measureArea.textContent = '–';
+    measureDistance.textContent = LOCKED_MEASUREMENT_VALUES.distance;
+    measureAngleLabel.title = 'Winkel';
+    measureAngleLabel.setAttribute('aria-label', 'Winkel');
+    measureAngle.textContent = LOCKED_MEASUREMENT_VALUES.angle;
+    measureLongitude.textContent = LOCKED_MEASUREMENT_VALUES.longitude;
+    measureLatitude.textContent = LOCKED_MEASUREMENT_VALUES.latitude;
+    measureCumulative.textContent = LOCKED_MEASUREMENT_VALUES.cumulative;
+    measureArea.textContent = LOCKED_MEASUREMENT_VALUES.area;
   }
 
   function render() {
-    const active = store.getState().activeTool === 'measure';
-    const pro = store.getState().access.pro;
+    const state = store.getState();
+    const active = state.activeTool === 'measure';
+    const pro = state.access.ready && state.access.pro;
     measurePanel.hidden = !active || !points.length;
-    measurePanel.closest('.planner-app')?.setAttribute('data-measure-panel-open', measurePanel.hidden ? 'false' : 'true');
-    measureValues.hidden = !pro;
+    const plannerApp = measurePanel.closest('.planner-app');
+    plannerApp?.setAttribute('data-measure-panel-open', measurePanel.hidden ? 'false' : 'true');
+    plannerApp?.setAttribute('data-measure-panel-locked', pro ? 'false' : 'true');
+    measurePanel.dataset.locked = pro ? 'false' : 'true';
+    measureValues.hidden = false;
+    measureValues.setAttribute('aria-hidden', pro ? 'false' : 'true');
     measureLocked.hidden = pro;
+    if (!pro) showLockedMetrics();
     if (!map.getSource('measure-v2')) return;
     const working = workingPoints();
     const line = lineCoordinates();
     const surface = polygonizeMeasurement(working);
     const features = [];
-    points.forEach((coordinates) => features.push({
-      type: 'Feature', properties: { kind: 'point' }, geometry: { type: 'Point', coordinates }
-    }));
     if (line.length >= 2) features.unshift({ type: 'Feature', properties: { kind: 'line' }, geometry: { type: 'LineString', coordinates: line } });
     surface.geometries.forEach((geometry) => features.unshift({
       type: 'Feature', properties: { kind: 'area' }, geometry
@@ -249,7 +267,6 @@ export function createMeasureController({ map, store, elements, finish }) {
     map.getSource('measure-v2').setData(featureCollection(features));
 
     if (pro) showMetrics(metricsFor(working, line, surface));
-    else showLockedMetrics();
     measurePanel.dataset.snapped = snapped ? 'true' : 'false';
     positionPanel();
   }
@@ -331,14 +348,14 @@ export function createMeasureController({ map, store, elements, finish }) {
         const candidate = nearestSnap(hoverEvent);
         hoverCandidate = { ...candidate, point: hoverEvent.point };
         snapped = candidate.snapped;
-        setSnapIndicator(candidate.coordinate);
+        setSnapIndicator(candidate.snapped ? candidate.coordinate : null);
       });
       return;
     }
     const candidate = nearestSnap(event);
     draft = candidate.coordinate;
     snapped = candidate.snapped;
-    setSnapIndicator(draft);
+    setSnapIndicator(candidate.snapped ? draft : null);
     render();
   });
   map.on('mouseout', () => {
@@ -352,7 +369,11 @@ export function createMeasureController({ map, store, elements, finish }) {
     render();
   });
   store.subscribe((state, reason) => {
-    if (reason !== 'tool') return;
+    if (['access', 'access-loading'].includes(reason)) {
+      render();
+      return;
+    }
+    if (!['tool', 'restore'].includes(reason)) return;
     const active = state.activeTool === 'measure';
     if (active) {
       map.doubleClickZoom.disable();

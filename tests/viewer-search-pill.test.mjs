@@ -1,0 +1,72 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const indexSource = readFileSync(new URL('../live-viewer/viewer-app/index.html', import.meta.url), 'utf8');
+const searchSource = readFileSync(new URL('../live-viewer/viewer-app/search.js', import.meta.url), 'utf8');
+const appSource = readFileSync(new URL('../live-viewer/viewer-app/app.js', import.meta.url), 'utf8');
+const stylesSource = readFileSync(new URL('../live-viewer/viewer-app/styles.css', import.meta.url), 'utf8');
+const sourcesSource = readFileSync(new URL('../live-viewer/viewer-app/sources.js', import.meta.url), 'utf8');
+
+assert.match(indexSource, /id="searchControl" class="search-control"/);
+assert.match(indexSource, /id="searchPanel"[^>]*data-advanced="false"[^>]*role="search"/);
+assert.doesNotMatch(indexSource, /id="searchPanel"[^>]*hidden/, 'the planner search surface is always expanded');
+assert.doesNotMatch(indexSource, /id="(searchButton|searchClose|searchMode|parcelModeLabel)"/, 'there is no separate open button or search mode');
+assert.match(indexSource, /class="search-leading-icon" aria-hidden="true"/, 'the magnifier is decorative');
+assert.match(indexSource, /<label class="sr-only" for="addressInput">Adresse, Flurstück oder POI suchen<\/label>/);
+assert.match(indexSource, /id="addressInput"[^>]*placeholder="Adresse, Flurstück oder POI suchen"[^>]*role="combobox"/);
+assert.match(indexSource, /id="searchModeButton"[^>]*aria-label="Flurstückssuche mit Feldern öffnen"[^>]*aria-controls="parcelFields"[^>]*aria-expanded="false"/);
+assert.match(indexSource, /id="searchSuggestions"[^>]*role="listbox"[^>]*aria-label="Suchvorschläge"[^>]*hidden/);
+assert.equal((indexSource.match(/role="listbox"/g) || []).length, 1, 'address and parcel suggestions share one listbox');
+assert.match(indexSource, /id="parcelFields"[^>]*role="group"[^>]*aria-label="Flurstückssuche"[^>]*hidden/);
+assert.match(indexSource, /id="parcelFields"[\s\S]*id="searchSubmit"[\s\S]*Flurstück suchen/, 'structured fallback stays within the same surface');
+
+assert.match(searchSource, /function setAdvanced\(open\)/);
+assert.match(searchSource, /searchPanel\.dataset\.advanced = advancedOpen \? 'true' : 'false'/);
+assert.match(searchSource, /searchPanel\.dataset\.suggestionsOpen = 'false'/);
+assert.match(searchSource, /searchPanel\.dataset\.suggestionsOpen = results\.length \? 'true' : 'false'/);
+assert.match(searchSource, /searchModeButton\.setAttribute\('aria-expanded', advancedOpen \? 'true' : 'false'\)/);
+assert.match(searchSource, /advancedOpen \? 'Flurstückssuche mit Feldern schließen' : 'Flurstückssuche mit Feldern öffnen'/);
+assert.match(searchSource, /searchModeButton\.addEventListener\('click', \(\) => setAdvanced\(!advancedOpen\)\)/);
+assert.match(searchSource, /suggestedResults\[activeSuggestion >= 0 \? activeSuggestion : 0\]/);
+assert.match(searchSource, /else requestSuggestions\(addressInput\.value\.trim\(\), \{ pickFirst: true \}\)/, 'Enter also chooses the first result while autocomplete is still loading');
+assert.match(searchSource, /function closeSuggestionsOrAdvanced\(\)[\s\S]*!searchSuggestions\.hidden[\s\S]*!gemarkungSuggestions\.hidden[\s\S]*advancedOpen/, 'Escape closes suggestions before the advanced area');
+assert.doesNotMatch(searchSource, /layout\.setTool\('search'\)|state\.activeTool === 'search'/, 'other tools never hide the search bar');
+assert.match(searchSource, /return \{ setAdvanced, submitParcel: submitStructuredParcel, searchAddress \}/);
+
+assert.match(stylesSource, /\.search-panel \{[^}]*width: min\(410px, calc\(100vw - 26px\)\);[^}]*border-radius: 24px;/);
+assert.match(stylesSource, /\.search-pill-row \{[^}]*min-height: 46px;/);
+assert.match(stylesSource, /\.round-tool \{[^}]*width: 48px;[^}]*height: 48px;/, 'round tool buttons match the search panel outer height');
+assert.match(stylesSource, /\.search-leading-icon \{[^}]*pointer-events: none;/);
+assert.match(stylesSource, /\.search-panel\[data-suggestions-open="true"\] \.search-mode-button \{[^}]*border-radius: 0 23px 0 0;/);
+assert.match(stylesSource, /\.search-panel\[data-advanced="false"\] > \.search-suggestions:not\(\[hidden\]\) \{[^}]*position: static;[^}]*border-top: 1px solid var\(--ok-border-soft\);[^}]*border-radius: 0 0 23px 23px;[^}]*box-shadow: none;/);
+assert.match(stylesSource, /\.search-panel\[data-advanced="false"\] > \.search-suggestions:not\(\[hidden\]\) > button:last-child \{ border-bottom: 0; \}/);
+assert.match(stylesSource, /\.parcel-search-fields \{[^}]*border-top: 1px solid var\(--ok-border-soft\);/);
+assert.match(stylesSource, /\.search-result-type-address \{/);
+assert.match(stylesSource, /\.search-result-type-parcel \{/);
+assert.match(stylesSource, /\.search-result-type-poi \{/);
+assert.match(stylesSource, /\.poi-search-marker \{/);
+assert.match(stylesSource, /@media \(max-width: 760px\)[\s\S]*\.search-control \{ left: 13px; right: 74px; \}[\s\S]*\.search-panel \{ width: 100%; \}[\s\S]*\.search-panel input,[\s\S]*font-size: 16px;/);
+assert.match(stylesSource, /@media \(max-width: 760px\)[\s\S]*\.search-panel \.address-search-fields \.clear-field input \{ font-size: 16px; \}/, 'the specific mobile override wins over the 14px desktop address input rule and prevents iOS focus zoom');
+assert.match(stylesSource, /html\[data-preview="true"\] \.search-control/);
+assert.match(stylesSource, /html\[data-shell-mode="welcome"\] \.search-control/);
+
+assert.match(appSource, /'searchControl','searchPanel','searchModeButton','addressFields','parcelFields'/);
+assert.doesNotMatch(appSource, /'searchButton'|'searchClose'|'searchMode'|'parcelModeLabel'/);
+assert.match(appSource, /\.\/search\.js\?v=20260717-poi-selection-attribution2/);
+assert.match(appSource, /\.\/sources\.js\?v=20260722-hybrid-layers1/);
+assert.match(indexSource, /styles\.css\?v=20260722-bayern-height1/);
+assert.match(indexSource, /app\.js\?v=20260722-bayern-height1/);
+assert.match(indexSource, /id="osmAttribution"[^>]+openstreetmap\.org\/copyright[^>]+hidden/);
+assert.match(appSource, /showCompactAttribution: \(\) => false/, 'the production viewer must never reveal compact OSM attribution');
+assert.match(sourcesSource, /showCompactAttribution = \(\) => false/, 'future source-controller instances default to hidden attribution');
+assert.match(sourcesSource, /compactAttributionDurationMs = 5000/);
+assert.match(sourcesSource, /compactAttributionCollapsed/);
+assert.match(sourcesSource, /!showCompactAttribution\(\)/);
+assert.match(sourcesSource, /window\.setTimeout\(\s*collapseCompactAttribution/);
+assert.match(sourcesSource, /'pointerdown',\s*collapseCompactAttribution/);
+assert.match(sourcesSource, /'wheel',\s*collapseCompactAttribution/);
+assert.match(sourcesSource, /function closePanel\(\)[\s\S]*sourcePanel\.hidden = true[\s\S]*aria-expanded', 'false'[\s\S]*renderCompactAttribution\(\)/);
+assert.match(sourcesSource, /return \{[\s\S]*render,[\s\S]*closePanel,[\s\S]*revealCompactAttribution,[\s\S]*collapseCompactAttribution[\s\S]*\}/);
+assert.match(stylesSource, /\.osm-attribution\s*\{[^}]*font-size:\s*10px/);
+
+console.log('viewer-search-pill-tests=ok');

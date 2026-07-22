@@ -16,13 +16,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-ANALYTICS_CATEGORIES = ("address", "parcel")
-ANALYTICS_SCOPES = ("place", "street", "address", "parcel")
+ANALYTICS_CATEGORIES = ("address", "parcel", "poi")
+ANALYTICS_SCOPES = ("place", "street", "address", "parcel", "poi")
 SCOPE_CATEGORY = {
     "place": "address",
     "street": "address",
     "address": "address",
     "parcel": "parcel",
+    "poi": "poi",
 }
 _ANALYTICS_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{15,79}$")
 _STATE_RE = re.compile(r"[^a-z0-9_-]+")
@@ -36,6 +37,7 @@ _PUBLIC_TYPES = {
     "object",
     "parcel",
     "place",
+    "poi",
     "street",
 }
 
@@ -156,8 +158,20 @@ def public_result_summary(payload: Mapping[str, Any], scope: str) -> tuple[int, 
                 entries.append((item, "building", "Gebäude"))
     else:
         results = payload.get("results")
-        fallback_type = {"place": "place", "street": "street", "address": "address", "parcel": "parcel"}.get(scope, "object")
-        fallback_label = {"place": "Ort", "street": "Straße", "address": "Adresse", "parcel": "Flurstück"}.get(scope, "Treffer")
+        fallback_type = {
+            "place": "place",
+            "street": "street",
+            "address": "address",
+            "parcel": "parcel",
+            "poi": "poi",
+        }.get(scope, "object")
+        fallback_label = {
+            "place": "Ort",
+            "street": "Straße",
+            "address": "Adresse",
+            "parcel": "Flurstück",
+            "poi": "Ort von Interesse",
+        }.get(scope, "Treffer")
         for item in results if isinstance(results, list) else []:
             if isinstance(item, Mapping):
                 entries.append((item, fallback_type, fallback_label))
@@ -243,6 +257,155 @@ class SearchAnalytics:
         connection.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
         return connection
 
+    @staticmethod
+    def _table_sql(connection: sqlite3.Connection, table: str) -> str:
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        return str(row[0] or "") if row is not None else ""
+
+    @staticmethod
+    def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+        return {
+            str(row[1])
+            for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+
+    @staticmethod
+    def _schema_supports_poi(sql: str) -> bool:
+        normalized = _WHITESPACE_RE.sub(" ", sql.casefold())
+        for column in ("category", "scope"):
+            match = re.search(
+                rf"check\s*\(\s*[`\"\[]?{column}[`\"\]]?\s+in\s*\(([^)]*)\)",
+                normalized,
+            )
+            if match is None or re.search(r"['\"]poi['\"]", match.group(1)) is None:
+                return False
+        return True
+
+    @staticmethod
+    def _create_events_table(connection: sqlite3.Connection, table: str) -> None:
+        if table not in {"search_events", "search_events__poi_migration"}:
+            raise ValueError("unexpected analytics event table")
+        connection.execute(
+            f"""
+            CREATE TABLE {table} (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              occurred_at INTEGER NOT NULL,
+              day TEXT NOT NULL,
+              category TEXT NOT NULL CHECK(category IN ('address', 'parcel', 'object', 'poi')),
+              scope TEXT NOT NULL CHECK(scope IN ('place', 'street', 'address', 'parcel', 'map_selection', 'poi')),
+              query_text TEXT NOT NULL,
+              query_key TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT '',
+              outcome TEXT NOT NULL CHECK(outcome IN ('found', 'not_found')),
+              result_count INTEGER NOT NULL DEFAULT 0,
+              counts_json TEXT NOT NULL DEFAULT '{{}}',
+              labels_json TEXT NOT NULL DEFAULT '[]',
+              types_json TEXT NOT NULL DEFAULT '[]',
+              access_mode TEXT NOT NULL,
+              latency_ms INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+
+    @staticmethod
+    def _create_daily_table(connection: sqlite3.Connection, table: str) -> None:
+        if table not in {"search_daily", "search_daily__poi_migration"}:
+            raise ValueError("unexpected analytics daily table")
+        connection.execute(
+            f"""
+            CREATE TABLE {table} (
+              day TEXT NOT NULL,
+              category TEXT NOT NULL CHECK(category IN ('address', 'parcel', 'object', 'poi')),
+              scope TEXT NOT NULL CHECK(scope IN ('place', 'street', 'address', 'parcel', 'map_selection', 'poi')),
+              outcome TEXT NOT NULL CHECK(outcome IN ('found', 'not_found')),
+              searches INTEGER NOT NULL DEFAULT 0,
+              result_count_sum INTEGER NOT NULL DEFAULT 0,
+              latency_ms_sum INTEGER NOT NULL DEFAULT 0,
+              updated_at INTEGER NOT NULL,
+              PRIMARY KEY(day, category, scope, outcome)
+            ) WITHOUT ROWID
+            """
+        )
+
+    def _migrate_events_for_poi(self, connection: sqlite3.Connection) -> None:
+        required = {
+            "id",
+            "occurred_at",
+            "day",
+            "category",
+            "scope",
+            "query_text",
+            "query_key",
+            "state",
+            "outcome",
+            "result_count",
+            "counts_json",
+            "labels_json",
+            "types_json",
+            "access_mode",
+            "latency_ms",
+        }
+        if not required.issubset(self._table_columns(connection, "search_events")):
+            raise sqlite3.DatabaseError("unsupported search_events schema")
+        connection.execute("DROP TABLE IF EXISTS search_events__poi_migration")
+        self._create_events_table(connection, "search_events__poi_migration")
+        connection.execute(
+            """
+            INSERT INTO search_events__poi_migration(
+              id, occurred_at, day, category, scope, query_text, query_key, state,
+              outcome, result_count, counts_json, labels_json, types_json,
+              access_mode, latency_ms
+            )
+            SELECT id, occurred_at, day, category, scope, query_text, query_key, state,
+              outcome, result_count, counts_json, labels_json, types_json,
+              access_mode, latency_ms
+            FROM search_events
+            ORDER BY id
+            """
+        )
+        connection.execute("DROP TABLE search_events")
+        connection.execute(
+            "ALTER TABLE search_events__poi_migration RENAME TO search_events"
+        )
+
+    def _migrate_daily_for_poi(self, connection: sqlite3.Connection) -> None:
+        required = {
+            "day",
+            "category",
+            "scope",
+            "outcome",
+            "searches",
+            "result_count_sum",
+            "latency_ms_sum",
+            "updated_at",
+        }
+        if not required.issubset(self._table_columns(connection, "search_daily")):
+            raise sqlite3.DatabaseError("unsupported search_daily schema")
+        connection.execute("DROP TABLE IF EXISTS search_daily__poi_migration")
+        self._create_daily_table(connection, "search_daily__poi_migration")
+        # Early development databases used query-level aggregate keys. Grouping
+        # here both preserves every numeric counter and removes those raw fields
+        # from the long-lived aggregate schema.
+        connection.execute(
+            """
+            INSERT INTO search_daily__poi_migration(
+              day, category, scope, outcome, searches, result_count_sum,
+              latency_ms_sum, updated_at
+            )
+            SELECT day, category, scope, outcome, SUM(searches),
+              SUM(result_count_sum), SUM(latency_ms_sum), MAX(updated_at)
+            FROM search_daily
+            GROUP BY day, category, scope, outcome
+            """
+        )
+        connection.execute("DROP TABLE search_daily")
+        connection.execute(
+            "ALTER TABLE search_daily__poi_migration RENAME TO search_daily"
+        )
+
     def initialize(self) -> bool:
         if self._initialized:
             return True
@@ -253,52 +416,65 @@ class SearchAnalytics:
                 with closing(self._connect()) as connection:
                     connection.execute("PRAGMA journal_mode=WAL")
                     connection.execute("PRAGMA synchronous=NORMAL")
-                    daily_columns = {
-                        str(row[1])
-                        for row in connection.execute("PRAGMA table_info(search_daily)").fetchall()
-                    }
-                    # Remove an early development schema which copied raw query
-                    # fields into long-lived aggregates. Aggregates intentionally
-                    # contain numeric counters only.
-                    if daily_columns & {"query_text", "query_key", "state", "access_mode", "labels_json", "types_json"}:
-                        connection.execute("DROP TABLE search_daily")
-                    connection.executescript(
-                        """
-                        CREATE TABLE IF NOT EXISTS search_events (
-                          id INTEGER PRIMARY KEY AUTOINCREMENT,
-                          occurred_at INTEGER NOT NULL,
-                          day TEXT NOT NULL,
-                          category TEXT NOT NULL CHECK(category IN ('address', 'parcel', 'object')),
-                          scope TEXT NOT NULL CHECK(scope IN ('place', 'street', 'address', 'parcel', 'map_selection')),
-                          query_text TEXT NOT NULL,
-                          query_key TEXT NOT NULL,
-                          state TEXT NOT NULL DEFAULT '',
-                          outcome TEXT NOT NULL CHECK(outcome IN ('found', 'not_found')),
-                          result_count INTEGER NOT NULL DEFAULT 0,
-                          counts_json TEXT NOT NULL DEFAULT '{}',
-                          labels_json TEXT NOT NULL DEFAULT '[]',
-                          types_json TEXT NOT NULL DEFAULT '[]',
-                          access_mode TEXT NOT NULL,
-                          latency_ms INTEGER NOT NULL DEFAULT 0
-                        );
-                        CREATE INDEX IF NOT EXISTS search_events_time_idx ON search_events(occurred_at DESC);
-                        CREATE INDEX IF NOT EXISTS search_events_miss_idx ON search_events(outcome, query_key, occurred_at DESC);
+                    # CHECK constraints cannot be widened in place in SQLite.
+                    # An immediate transaction serializes this migration across
+                    # API worker processes. The table swaps are transactional,
+                    # so another worker sees either the complete old schema or
+                    # the complete new schema, never a partially copied table.
+                    connection.execute("BEGIN IMMEDIATE")
+                    try:
+                        events_sql = self._table_sql(connection, "search_events")
+                        if not events_sql:
+                            self._create_events_table(connection, "search_events")
+                        elif not self._schema_supports_poi(events_sql):
+                            self._migrate_events_for_poi(connection)
 
-                        CREATE TABLE IF NOT EXISTS search_daily (
-                          day TEXT NOT NULL,
-                          category TEXT NOT NULL CHECK(category IN ('address', 'parcel', 'object')),
-                          scope TEXT NOT NULL CHECK(scope IN ('place', 'street', 'address', 'parcel', 'map_selection')),
-                          outcome TEXT NOT NULL CHECK(outcome IN ('found', 'not_found')),
-                          searches INTEGER NOT NULL DEFAULT 0,
-                          result_count_sum INTEGER NOT NULL DEFAULT 0,
-                          latency_ms_sum INTEGER NOT NULL DEFAULT 0,
-                          updated_at INTEGER NOT NULL,
-                          PRIMARY KEY(day, category, scope, outcome)
-                        ) WITHOUT ROWID;
-                        CREATE INDEX IF NOT EXISTS search_daily_day_idx ON search_daily(day DESC);
-                        CREATE INDEX IF NOT EXISTS search_daily_miss_idx ON search_daily(outcome, day DESC, searches DESC);
-                        """
-                    )
+                        daily_sql = self._table_sql(connection, "search_daily")
+                        daily_columns = self._table_columns(connection, "search_daily")
+                        private_daily_columns = {
+                            "query_text",
+                            "query_key",
+                            "state",
+                            "access_mode",
+                            "labels_json",
+                            "types_json",
+                        }
+                        if not daily_sql:
+                            self._create_daily_table(connection, "search_daily")
+                        elif (
+                            not self._schema_supports_poi(daily_sql)
+                            or bool(daily_columns & private_daily_columns)
+                        ):
+                            self._migrate_daily_for_poi(connection)
+
+                        connection.execute(
+                            """
+                            CREATE INDEX IF NOT EXISTS search_events_time_idx
+                              ON search_events(occurred_at DESC)
+                            """
+                        )
+                        connection.execute(
+                            """
+                            CREATE INDEX IF NOT EXISTS search_events_miss_idx
+                              ON search_events(outcome, query_key, occurred_at DESC)
+                            """
+                        )
+                        connection.execute(
+                            """
+                            CREATE INDEX IF NOT EXISTS search_daily_day_idx
+                              ON search_daily(day DESC)
+                            """
+                        )
+                        connection.execute(
+                            """
+                            CREATE INDEX IF NOT EXISTS search_daily_miss_idx
+                              ON search_daily(outcome, day DESC, searches DESC)
+                            """
+                        )
+                        connection.execute("COMMIT")
+                    except BaseException:
+                        connection.execute("ROLLBACK")
+                        raise
                 self._initialized = True
                 return True
             except (OSError, sqlite3.Error, ValueError):
@@ -566,14 +742,14 @@ class SearchAnalytics:
                           COALESCE(SUM(result_count), 0) AS result_sum,
                           COALESCE(SUM(latency_ms), 0) AS latency_sum
                         FROM search_events
-                        WHERE occurred_at >= ? AND category IN ('address', 'parcel')
+                        WHERE occurred_at >= ? AND category IN ('address', 'parcel', 'poi')
                     """
                     category_sql = """
                         SELECT category, COUNT(*) AS searches,
                           SUM(CASE WHEN outcome = 'found' THEN 1 ELSE 0 END) AS found,
                           SUM(result_count) AS result_sum, SUM(latency_ms) AS latency_sum
                         FROM search_events
-                        WHERE occurred_at >= ? AND category IN ('address', 'parcel')
+                        WHERE occurred_at >= ? AND category IN ('address', 'parcel', 'poi')
                         GROUP BY category
                     """
                     scope_sql = """
@@ -581,7 +757,7 @@ class SearchAnalytics:
                           SUM(CASE WHEN outcome = 'found' THEN 1 ELSE 0 END) AS found,
                           SUM(result_count) AS result_sum, SUM(latency_ms) AS latency_sum
                         FROM search_events
-                        WHERE occurred_at >= ? AND category IN ('address', 'parcel')
+                        WHERE occurred_at >= ? AND category IN ('address', 'parcel', 'poi')
                         GROUP BY scope
                     """
                     timeline_key = (
@@ -593,10 +769,11 @@ class SearchAnalytics:
                         SELECT {timeline_key} AS timestamp, COUNT(*) AS searches,
                           SUM(CASE WHEN category = 'address' THEN 1 ELSE 0 END) AS address_searches,
                           SUM(CASE WHEN category = 'parcel' THEN 1 ELSE 0 END) AS parcel_searches,
+                          SUM(CASE WHEN category = 'poi' THEN 1 ELSE 0 END) AS poi_searches,
                           SUM(CASE WHEN outcome = 'found' THEN 1 ELSE 0 END) AS found
                         FROM search_events
                         WHERE occurred_at >= ? AND occurred_at <= ?
-                          AND category IN ('address', 'parcel')
+                          AND category IN ('address', 'parcel', 'poi')
                         GROUP BY timestamp ORDER BY timestamp
                     """
                     stats_parameter: str | int = raw_cutoff
@@ -611,14 +788,14 @@ class SearchAnalytics:
                           COALESCE(SUM(result_count_sum), 0) AS result_sum,
                           COALESCE(SUM(latency_ms_sum), 0) AS latency_sum
                         FROM search_daily
-                        WHERE day >= ? AND category IN ('address', 'parcel')
+                        WHERE day >= ? AND category IN ('address', 'parcel', 'poi')
                     """
                     category_sql = """
                         SELECT category, SUM(searches) AS searches,
                           SUM(CASE WHEN outcome = 'found' THEN searches ELSE 0 END) AS found,
                           SUM(result_count_sum) AS result_sum, SUM(latency_ms_sum) AS latency_sum
                         FROM search_daily
-                        WHERE day >= ? AND category IN ('address', 'parcel')
+                        WHERE day >= ? AND category IN ('address', 'parcel', 'poi')
                         GROUP BY category
                     """
                     scope_sql = """
@@ -626,16 +803,17 @@ class SearchAnalytics:
                           SUM(CASE WHEN outcome = 'found' THEN searches ELSE 0 END) AS found,
                           SUM(result_count_sum) AS result_sum, SUM(latency_ms_sum) AS latency_sum
                         FROM search_daily
-                        WHERE day >= ? AND category IN ('address', 'parcel')
+                        WHERE day >= ? AND category IN ('address', 'parcel', 'poi')
                         GROUP BY scope
                     """
                     daily_sql = """
                         SELECT day || 'T00:00:00Z' AS timestamp, SUM(searches) AS searches,
                           SUM(CASE WHEN category = 'address' THEN searches ELSE 0 END) AS address_searches,
                           SUM(CASE WHEN category = 'parcel' THEN searches ELSE 0 END) AS parcel_searches,
+                          SUM(CASE WHEN category = 'poi' THEN searches ELSE 0 END) AS poi_searches,
                           SUM(CASE WHEN outcome = 'found' THEN searches ELSE 0 END) AS found
                         FROM search_daily
-                        WHERE day >= ? AND category IN ('address', 'parcel')
+                        WHERE day >= ? AND category IN ('address', 'parcel', 'poi')
                         GROUP BY day ORDER BY day
                     """
                     stats_parameter = start_day
@@ -679,6 +857,7 @@ class SearchAnalytics:
                         "searches": int(row["searches"] or 0),
                         "address_searches": int(row["address_searches"] or 0),
                         "parcel_searches": int(row["parcel_searches"] or 0),
+                        "poi_searches": int(row["poi_searches"] or 0),
                         "found": int(row["found"] or 0),
                         "not_found": int(row["searches"] or 0) - int(row["found"] or 0),
                     }
@@ -690,7 +869,7 @@ class SearchAnalytics:
                         """
                         SELECT COUNT(*)
                         FROM search_events
-                        WHERE occurred_at >= ? AND category IN ('address', 'parcel')
+                        WHERE occurred_at >= ? AND category IN ('address', 'parcel', 'poi')
                         """,
                         (raw_cutoff,),
                     ).fetchone()[0]
@@ -726,7 +905,7 @@ class SearchAnalytics:
                           outcome, result_count, counts_json, labels_json, types_json,
                           access_mode, latency_ms
                         FROM search_events
-                        WHERE occurred_at >= ? AND category IN ('address', 'parcel')
+                        WHERE occurred_at >= ? AND category IN ('address', 'parcel', 'poi')
                         ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?
                         """,
                         (
@@ -753,7 +932,7 @@ class SearchAnalytics:
                           COUNT(*) AS searches, MAX(occurred_at) AS last_seen
                         FROM search_events
                         WHERE occurred_at >= ? AND outcome = 'not_found'
-                          AND category IN ('address', 'parcel')
+                          AND category IN ('address', 'parcel', 'poi')
                         GROUP BY category, scope, query_key, state
                         ORDER BY searches DESC, last_seen DESC, query_key ASC
                         LIMIT 50
@@ -765,13 +944,13 @@ class SearchAnalytics:
                 raw_retention = connection.execute(
                     """
                     SELECT COUNT(*) AS rows, MIN(occurred_at) AS oldest, MAX(occurred_at) AS newest
-                    FROM search_events WHERE category IN ('address', 'parcel')
+                    FROM search_events WHERE category IN ('address', 'parcel', 'poi')
                     """
                 ).fetchone()
                 aggregate_retention = connection.execute(
                     """
                     SELECT COUNT(*) AS rows, MIN(day) AS oldest, MAX(day) AS newest
-                    FROM search_daily WHERE category IN ('address', 'parcel')
+                    FROM search_daily WHERE category IN ('address', 'parcel', 'poi')
                     """
                 ).fetchone()
                 base["retention"].update(

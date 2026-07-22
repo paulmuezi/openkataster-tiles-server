@@ -192,12 +192,16 @@ KATASTER_WMS_CONFIGS = {
         "version": "1.3.0",
         "transparent": True,
         "tile_size": 512,
-        "dpi": 120,
+        "map_tile_size": 512,
+        "screen_dpi": 120,
+        "max_render_scale": 2,
+        "metatile_size": 2,
+        "bleed_pixels": 32,
         "timeout": 20,
         "attempts": 2,
         "minzoom": 17,
         "maxzoom": 22,
-        "revision": "by-parzellarkarte-farbe-screen-dpi120-v2",
+        "revision": "by-parzellarkarte-metatile2-dpi120-hidpi-v4",
         "attribution": "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de · CC BY 4.0",
         "cache_ttl_seconds": 24 * 60 * 60,
         "cache_control": "public, max-age=86400, stale-while-revalidate=3600",
@@ -219,12 +223,16 @@ KATASTER_WMS_CONFIGS = {
         "version": "1.3.0",
         "transparent": True,
         "tile_size": 512,
-        "dpi": 120,
+        "map_tile_size": 512,
+        "screen_dpi": 120,
+        "max_render_scale": 2,
+        "metatile_size": 2,
+        "bleed_pixels": 32,
         "timeout": 20,
         "attempts": 2,
         "minzoom": 17,
         "maxzoom": 22,
-        "revision": "st-adv-alkis-farbe-screen-dpi120-v2",
+        "revision": "st-adv-alkis-metatile2-dpi120-hidpi-v4",
         "attribution": "© GeoBasis-DE / LVermGeo ST · Datenlizenz Deutschland – Namensnennung – Version 2.0",
         "cache_ttl_seconds": 24 * 60 * 60,
         "cache_control": "public, max-age=86400, stale-while-revalidate=3600",
@@ -385,7 +393,9 @@ def _write_luftbild_cache(cache_path: Path, data: bytes) -> bool:
         if _luftbild_cache_disk_free() - len(data) < LUFTBILD_MIN_FREE_BYTES:
             return False
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.tmp")
+        tmp_path = cache_path.with_name(
+            f".{cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
         try:
             tmp_path.write_bytes(data)
             os.replace(tmp_path, cache_path)
@@ -12759,10 +12769,13 @@ def _cadastre_rendering_capability(state_slug: str) -> dict | None:
     config = KATASTER_WMS_CONFIGS.get(state_slug)
     if not config:
         return None
+    max_scale = max(1, min(2, int(config.get("max_render_scale", 1))))
+    ratio_suffix = "{ratio}" if max_scale >= 2 else ""
     return {
         "profile": "official-wms-full-v1",
-        "tile_template": f"/katasterbild/{state_slug}/{{z}}/{{x}}/{{y}}.png",
-        "tile_size": int(config.get("tile_size", 512)),
+        "tile_template": f"/katasterbild/{state_slug}/{{z}}/{{x}}/{{y}}{ratio_suffix}.png",
+        "tile_size": int(config.get("map_tile_size", config.get("tile_size", 512))),
+        "max_scale": max_scale,
         "minzoom": int(config.get("minzoom", 17)),
         "maxzoom": int(config.get("maxzoom", 22)),
         "revision": str(config.get("revision") or "official-wms-v1"),
@@ -14494,6 +14507,79 @@ def bootstrap_backdrop(state: str) -> FileResponse:
     return FileResponse(path, media_type="image/webp")
 
 
+def _buffered_wms_frame(
+    bbox: list[float],
+    tile_size: int,
+    bleed_pixels: int,
+) -> tuple[list[float], int, int]:
+    """Expand a WMS request without changing its map units per pixel."""
+    bleed_pixels = max(0, min(tile_size // 4, int(bleed_pixels)))
+    if not bleed_pixels:
+        return list(bbox), tile_size, 0
+
+    min_x, min_y, max_x, max_y = bbox
+    units_per_pixel_x = (max_x - min_x) / tile_size
+    units_per_pixel_y = (max_y - min_y) / tile_size
+    buffered_bbox = [
+        min_x - bleed_pixels * units_per_pixel_x,
+        min_y - bleed_pixels * units_per_pixel_y,
+        max_x + bleed_pixels * units_per_pixel_x,
+        max_y + bleed_pixels * units_per_pixel_y,
+    ]
+    return buffered_bbox, tile_size + 2 * bleed_pixels, bleed_pixels
+
+
+_WMS_RENDER_LOCKS = tuple(threading.Lock() for _ in range(64))
+
+
+def _wms_render_lock(cache_key: str) -> threading.Lock:
+    digest = hashlib.sha256(cache_key.encode("utf-8")).digest()
+    return _WMS_RENDER_LOCKS[int.from_bytes(digest[:2], "big") % len(_WMS_RENDER_LOCKS)]
+
+
+def _split_wms_metatile(
+    data: bytes,
+    *,
+    request_size: int,
+    tile_size: int,
+    metatile_size: int,
+    bleed_pixels: int,
+    media_type: str,
+) -> dict[tuple[int, int], bytes]:
+    if metatile_size == 1 and not bleed_pixels:
+        return {(0, 0): data}
+
+    from io import BytesIO
+
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(BytesIO(data)) as source:
+            if source.size != (request_size, request_size):
+                raise ValueError(
+                    f"unexpected WMS image size {source.size!r}; "
+                    f"expected {(request_size, request_size)!r}"
+                )
+            source.load()
+            tiles: dict[tuple[int, int], bytes] = {}
+            for row in range(metatile_size):
+                for column in range(metatile_size):
+                    left = bleed_pixels + column * tile_size
+                    top = bleed_pixels + row * tile_size
+                    cropped = source.crop((left, top, left + tile_size, top + tile_size))
+                    output = BytesIO()
+                    if media_type == "image/jpeg":
+                        if cropped.mode not in {"L", "RGB"}:
+                            cropped = cropped.convert("RGB")
+                        cropped.save(output, format="JPEG", quality=92, subsampling=0)
+                    else:
+                        cropped.save(output, format="PNG", compress_level=6)
+                    tiles[(column, row)] = output.getvalue()
+            return tiles
+    except (OSError, UnidentifiedImageError, ValueError) as exc:
+        raise ValueError("invalid WMS metatile image") from exc
+
+
 def _wms_tile(
     state_slug: str,
     z: int,
@@ -14503,6 +14589,75 @@ def _wms_tile(
     configs: dict[str, dict],
     service_name: str,
     cache_namespace: str = "",
+    render_scale: int = 1,
+) -> Response:
+    config = configs.get(state_slug) or {}
+    try:
+        metatile_size = max(1, min(4, int(config.get("metatile_size", 1))))
+    except (TypeError, ValueError):
+        metatile_size = 1
+    if metatile_size == 1:
+        return _wms_tile_locked(
+            state_slug,
+            z,
+            x,
+            y,
+            configs=configs,
+            service_name=service_name,
+            cache_namespace=cache_namespace,
+            render_scale=render_scale,
+        )
+
+    anchor_x = x - x % metatile_size
+    anchor_y = y - y % metatile_size
+    lock_key = "\x1f".join(
+        (cache_namespace, state_slug, str(z), str(anchor_x), str(anchor_y), str(render_scale))
+    )
+    lock_digest = hashlib.sha256(lock_key.encode("utf-8")).digest()
+    with _wms_render_lock(lock_key):
+        lock_dir = LUFTBILD_CACHE_DIR / ".render-locks"
+        try:
+            lock_dir.mkdir(parents=True, exist_ok=True)
+            lock_path = lock_dir / f"{int.from_bytes(lock_digest[:2], 'big') % 64:02d}.lock"
+            lock_file = lock_path.open("a+b")
+        except OSError:
+            return _wms_tile_locked(
+                state_slug,
+                z,
+                x,
+                y,
+                configs=configs,
+                service_name=service_name,
+                cache_namespace=cache_namespace,
+                render_scale=render_scale,
+            )
+        with lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                return _wms_tile_locked(
+                    state_slug,
+                    z,
+                    x,
+                    y,
+                    configs=configs,
+                    service_name=service_name,
+                    cache_namespace=cache_namespace,
+                    render_scale=render_scale,
+                )
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _wms_tile_locked(
+    state_slug: str,
+    z: int,
+    x: int,
+    y: int,
+    *,
+    configs: dict[str, dict],
+    service_name: str,
+    cache_namespace: str = "",
+    render_scale: int = 1,
 ) -> Response:
     if state_slug not in configs:
         raise HTTPException(status_code=404, detail=f"{service_name} not configured")
@@ -14526,13 +14681,42 @@ def _wms_tile(
     image_format = str(config.get("format", "image/png"))
     media_type = _luftbild_media_type(image_format)
     try:
-        tile_size = max(256, min(2048, int(config.get("tile_size", LUFTBILD_TILE_SIZE))))
+        base_tile_size = max(256, min(2048, int(config.get("tile_size", LUFTBILD_TILE_SIZE))))
     except (TypeError, ValueError):
-        tile_size = LUFTBILD_TILE_SIZE
+        base_tile_size = LUFTBILD_TILE_SIZE
     try:
-        output_dpi = max(0, min(600, int(config.get("dpi", 0))))
+        map_tile_size = max(256, min(2048, int(config.get("map_tile_size", base_tile_size))))
     except (TypeError, ValueError):
-        output_dpi = 0
+        map_tile_size = base_tile_size
+    try:
+        max_render_scale = max(1, min(2, int(config.get("max_render_scale", 1))))
+        render_scale = int(render_scale)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid render scale") from exc
+    if render_scale < 1 or render_scale > max_render_scale:
+        raise HTTPException(status_code=400, detail="Invalid render scale")
+    tile_size = base_tile_size * render_scale
+    try:
+        screen_dpi = max(0, min(300, int(config.get("screen_dpi", config.get("dpi", 0)))))
+    except (TypeError, ValueError):
+        screen_dpi = 0
+    output_dpi = (
+        max(0, min(600, int(round(screen_dpi * tile_size / map_tile_size))))
+        if screen_dpi
+        else 0
+    )
+    try:
+        configured_bleed = max(0, int(config.get("bleed_pixels", 0)))
+    except (TypeError, ValueError):
+        configured_bleed = 0
+    bleed_pixels = max(
+        0,
+        min(tile_size // 4, int(round(configured_bleed * tile_size / map_tile_size))),
+    )
+    try:
+        metatile_size = max(1, min(4, int(config.get("metatile_size", 1))))
+    except (TypeError, ValueError):
+        metatile_size = 1
     try:
         upstream_timeout = max(1.0, min(30.0, float(config.get("timeout", 20))))
     except (TypeError, ValueError):
@@ -14545,16 +14729,25 @@ def _wms_tile(
     cache_state = f"{cache_namespace}-{state_slug}" if cache_namespace else state_slug
     cache_layer = str(layer)
     if cache_namespace:
-        cache_layer = "__".join(
+        revision = str(config.get("revision") or "v1")
+        cache_signature = "\x1f".join(
             (
-                str(config.get("revision") or "v1"),
+                revision,
                 str(layer),
                 str(config.get("styles") or "default"),
                 str(config.get("version") or "1.3.0"),
                 "transparent" if config.get("transparent") else "opaque",
+                f"logical-{map_tile_size}",
+                f"scale-{render_scale}",
+                f"screen-dpi-{screen_dpi}" if screen_dpi else "screen-dpi-default",
                 f"dpi-{output_dpi}" if output_dpi else "dpi-default",
+                f"metatile-{metatile_size}",
+                f"screen-bleed-{configured_bleed}",
+                f"physical-bleed-{bleed_pixels}",
             )
         )
+        cache_digest = hashlib.sha256(cache_signature.encode("utf-8")).hexdigest()[:20]
+        cache_layer = f"{revision}__{cache_digest}"
     cache_path = _luftbild_cache_path(
         cache_state,
         cache_layer,
@@ -14586,7 +14779,27 @@ def _wms_tile(
             },
         )
 
-    bbox, _center_lat = _luftbild_wms_bbox(config, z, x, y)
+    anchor_x = x - x % metatile_size
+    anchor_y = y - y % metatile_size
+    top_left_bbox, _center_lat = _luftbild_wms_bbox(config, z, anchor_x, anchor_y)
+    bottom_right_bbox, _center_lat = _luftbild_wms_bbox(
+        config,
+        z,
+        anchor_x + metatile_size - 1,
+        anchor_y + metatile_size - 1,
+    )
+    bbox = [
+        top_left_bbox[0],
+        bottom_right_bbox[1],
+        bottom_right_bbox[2],
+        top_left_bbox[3],
+    ]
+    metatile_pixel_size = tile_size * metatile_size
+    request_bbox, request_size, request_bleed_pixels = _buffered_wms_frame(
+        bbox,
+        metatile_pixel_size,
+        bleed_pixels,
+    )
     params = {
         "SERVICE": "WMS",
         "REQUEST": "GetMap",
@@ -14596,15 +14809,15 @@ def _wms_tile(
         "FORMAT": image_format,
         "TRANSPARENT": "true" if config.get("transparent") else "false",
         "CRS": config["crs"],
-        "BBOX": ",".join(f"{value:.3f}" for value in bbox),
-        "WIDTH": str(tile_size),
-        "HEIGHT": str(tile_size),
+        "BBOX": ",".join(f"{value:.3f}" for value in request_bbox),
+        "WIDTH": str(request_size),
+        "HEIGHT": str(request_size),
     }
     if output_dpi:
         # XtraServer scales labels and cartographic symbols through the WMS
-        # DPI parameter. The XYZ BBOX and logical 512 px MapLibre tile stay
-        # unchanged, so this improves screen legibility without changing the
-        # map position, zoom level or feature geometry.
+        # DPI parameter. For a 2x response the request DPI is doubled too, so
+        # downsampling to the logical MapLibre tile preserves the chosen
+        # on-screen symbol size.
         params["DPI"] = str(output_dpi)
     url = f"{config['url']}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(url, headers={"User-Agent": "OpenKataster/1.0"})
@@ -14662,13 +14875,43 @@ def _wms_tile(
             headers={"Cache-Control": "no-store"},
         )
 
-    _write_luftbild_cache(cache_path, data)
+    try:
+        rendered_tiles = _split_wms_metatile(
+            data,
+            request_size=request_size,
+            tile_size=tile_size,
+            metatile_size=metatile_size,
+            bleed_pixels=request_bleed_pixels,
+            media_type=media_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"{service_name} WMS returned an invalid metatile image",
+            headers={"Cache-Control": "no-store"},
+        ) from exc
+
+    for (column, row), tile_data in rendered_tiles.items():
+        sibling_cache_path = _luftbild_cache_path(
+            cache_state,
+            cache_layer,
+            str(config["crs"]),
+            z,
+            anchor_x + column,
+            anchor_y + row,
+            tile_size=tile_size,
+            image_format=image_format,
+        )
+        _write_luftbild_cache(sibling_cache_path, tile_data)
+    data = rendered_tiles[(x - anchor_x, y - anchor_y)]
     return Response(
         content=data,
         media_type=media_type,
         headers={
             "Cache-Control": cache_control,
             "X-OpenKataster-Cache": "MISS",
+            "X-OpenKataster-Metatile": str(metatile_size),
+            "X-OpenKataster-Scale": str(render_scale),
         },
     )
 
@@ -14685,7 +14928,27 @@ def luftbild_tile(state_slug: str, z: int, x: int, y: int) -> Response:
     )
 
 
-@app.api_route("/katasterbild/{state_slug}/{z}/{x}/{y}.png", methods=["GET", "HEAD"])
+@app.api_route(
+    "/katasterbild/{state_slug}/{z:int}/{x:int}/{y:int}@2x.png",
+    methods=["GET", "HEAD"],
+)
+def katasterbild_tile_2x(state_slug: str, z: int, x: int, y: int) -> Response:
+    return _wms_tile(
+        state_slug,
+        z,
+        x,
+        y,
+        configs=KATASTER_WMS_CONFIGS,
+        service_name="Katasterbild",
+        cache_namespace="katasterbild",
+        render_scale=2,
+    )
+
+
+@app.api_route(
+    "/katasterbild/{state_slug}/{z:int}/{x:int}/{y:int}.png",
+    methods=["GET", "HEAD"],
+)
 def katasterbild_tile(state_slug: str, z: int, x: int, y: int) -> Response:
     return _wms_tile(
         state_slug,

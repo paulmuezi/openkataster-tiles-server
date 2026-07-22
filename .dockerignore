@@ -1,0 +1,10 @@
+.git
+.env
+.DS_Store
+**/.DS_Store
+._*
+**/._*
+__pycache__
+**/__pycache__
+*.pyc
+

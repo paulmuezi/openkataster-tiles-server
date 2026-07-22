@@ -1,5 +1,30 @@
+export function selectionTableAutoFitHeight({
+  minimumHeight,
+  maximumHeight,
+  chromeHeight,
+  contentHeight,
+  scrollbarHeight = 0
+}) {
+  const minimum = Math.max(0, Number(minimumHeight) || 0);
+  const maximum = Math.max(minimum, Number(maximumHeight) || minimum);
+  const naturalHeight = Math.max(0, Number(chromeHeight) || 0)
+    + Math.max(0, Number(contentHeight) || 0)
+    + Math.max(0, Number(scrollbarHeight) || 0);
+  return Math.min(maximum, Math.max(minimum, Math.ceil(naturalHeight)));
+}
+
 export function createLayout({ app, map, store, elements }) {
-  const { exportSidebar, selectionDock, selectionResize, exportTool, selectTool, measureTool, mobileExportSettings } = elements;
+  const {
+    exportSidebar,
+    selectionDock,
+    selectionResize,
+    selectionContent,
+    exportTool,
+    selectTool,
+    measureTool,
+    exportClose,
+    mobileExportSettings
+  } = elements;
   let resizing = false;
   let layoutTransitionTimer = 0;
 
@@ -16,6 +41,55 @@ export function createLayout({ app, map, store, elements }) {
       ? exportSidebar.getBoundingClientRect().height
       : 0;
     return Math.ceil(Math.max(150, handleHeight + headerHeight + exportOverlayHeight + 12));
+  }
+
+  function maximumTableHeight(layout = store.getState().layout) {
+    const minimumHeight = minimumTableHeight(layout);
+    return Math.max(minimumHeight, app.clientHeight * 0.66);
+  }
+
+  function numericStyle(element, property) {
+    if (!element || typeof window.getComputedStyle !== 'function') return 0;
+    return Number.parseFloat(window.getComputedStyle(element)[property]) || 0;
+  }
+
+  function intrinsicSelectionContentHeight() {
+    const contentRect = selectionContent.getBoundingClientRect();
+    const scrollTop = Number(selectionContent.scrollTop) || 0;
+    let contentBottom = 0;
+
+    for (const child of selectionContent.children || []) {
+      const childRect = child.getBoundingClientRect();
+      contentBottom = Math.max(contentBottom, childRect.bottom - contentRect.top + scrollTop);
+    }
+
+    const paddingBottom = numericStyle(selectionContent, 'paddingBottom');
+    if (contentBottom > 0) return contentBottom + paddingBottom;
+
+    const scrollHeight = Number(selectionContent.scrollHeight) || 0;
+    const clientHeight = Number(selectionContent.clientHeight) || 0;
+    if (scrollHeight > clientHeight + 1) return scrollHeight;
+    return numericStyle(selectionContent, 'paddingTop') + paddingBottom;
+  }
+
+  function autoFitTableHeight() {
+    const state = store.getState();
+    const dockRect = selectionDock.getBoundingClientRect();
+    const contentRect = selectionContent.getBoundingClientRect();
+    const chromeHeight = Math.max(0, dockRect.height - contentRect.height);
+    const scrollbarHeight = Math.max(
+      0,
+      (Number(selectionContent.offsetHeight) || 0) - (Number(selectionContent.clientHeight) || 0)
+    );
+    const tableHeight = selectionTableAutoFitHeight({
+      minimumHeight: minimumTableHeight(state.layout),
+      maximumHeight: maximumTableHeight(state.layout),
+      chromeHeight,
+      contentHeight: intrinsicSelectionContentHeight(),
+      scrollbarHeight
+    });
+    store.setState({ layout: { ...state.layout, tableHeight } }, 'table');
+    return tableHeight;
   }
 
   function scheduleMapResize(reason) {
@@ -43,6 +117,7 @@ export function createLayout({ app, map, store, elements }) {
     exportTool.classList.toggle('is-active', activeTool === 'export');
     selectTool.classList.toggle('is-active', activeTool === 'select');
     measureTool.classList.toggle('is-active', activeTool === 'measure');
+    exportClose.setAttribute('aria-label', isMobile() ? 'Exporteinstellungen schließen' : 'Export schließen');
     mobileExportSettings.setAttribute('aria-pressed', layout.mobileExportSettings ? 'true' : 'false');
     if (reason !== 'boot') scheduleMapResize(reason);
   }
@@ -122,6 +197,15 @@ export function createLayout({ app, map, store, elements }) {
     setSidebar(false);
   }
 
+  function closeExportSettingsOrPanel() {
+    const state = store.getState();
+    if (isMobile()) {
+      if (state.layout.mobileExportSettings) closeMobileExportSettings();
+      return;
+    }
+    closeExportPanel();
+  }
+
   function setTable(open) {
     const state = store.getState();
     const mobile = isMobile();
@@ -150,38 +234,73 @@ export function createLayout({ app, map, store, elements }) {
   }
 
   function beginTableResize(event) {
+    if (resizing || event.isPrimary === false) return;
+    if (event.pointerType === 'mouse' && Number.isFinite(event.button) && event.button !== 0) return;
     event.preventDefault();
     resizing = true;
     app.dataset.resizing = 'true';
+    const startX = Number(event.clientX) || 0;
     const startY = event.clientY;
     const initialLayout = store.getState().layout;
     const startHeight = Math.max(initialLayout.tableHeight, minimumTableHeight(initialLayout));
     const pointerId = event.pointerId;
     const handle = event.currentTarget;
+    let didDrag = false;
     handle.setPointerCapture(pointerId);
 
     const move = (moveEvent) => {
-      if (!resizing) return;
+      if (!resizing || moveEvent.pointerId !== pointerId) return;
+      if (!didDrag) {
+        const movement = Math.hypot((Number(moveEvent.clientX) || 0) - startX, moveEvent.clientY - startY);
+        if (movement <= 6) return;
+        didDrag = true;
+      }
       const state = store.getState();
       const minHeight = minimumTableHeight(state.layout);
-      const maxHeight = Math.max(minHeight, app.clientHeight * 0.66);
+      const maxHeight = maximumTableHeight(state.layout);
       const tableHeight = Math.min(maxHeight, Math.max(minHeight, startHeight + startY - moveEvent.clientY));
       store.setState({ layout: { ...state.layout, tableHeight } }, 'resize');
     };
-    const finish = () => {
+    const finish = (finishEvent) => {
+      if (finishEvent.pointerId !== pointerId) return;
+      const shouldAutoFit = finishEvent.type === 'pointerup' && !didDrag;
       resizing = false;
       app.dataset.resizing = 'false';
       handle.removeEventListener('pointermove', move);
       handle.removeEventListener('pointerup', finish);
       handle.removeEventListener('pointercancel', finish);
-      window.requestAnimationFrame(() => map.resize());
+      handle.removeEventListener('lostpointercapture', finish);
+      if (typeof handle.hasPointerCapture !== 'function' || handle.hasPointerCapture(pointerId)) {
+        try {
+          handle.releasePointerCapture(pointerId);
+        } catch (_) {
+          // Capture may already have been released by the browser.
+        }
+      }
+      if (shouldAutoFit) {
+        autoFitTableHeight();
+      } else {
+        window.requestAnimationFrame(() => map.resize());
+      }
     };
     handle.addEventListener('pointermove', move);
     handle.addEventListener('pointerup', finish);
     handle.addEventListener('pointercancel', finish);
+    handle.addEventListener('lostpointercapture', finish);
   }
 
   store.subscribe(render);
   render(store.getState(), 'boot');
-  return { isMobile, setTool, setSidebar, setTable, toggleMobileExportSettings, closeMobileExportSettings, closeExportPanel, beginTableResize };
+  return {
+    isMobile,
+    setTool,
+    setSidebar,
+    setTable,
+    toggleMobileExportSettings,
+    closeMobileExportSettings,
+    closeExportPanel,
+    closeExportSettingsOrPanel,
+    autoFitTableHeight,
+    beginTableResize
+  };
 }

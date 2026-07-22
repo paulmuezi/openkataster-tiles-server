@@ -41,6 +41,51 @@ export function locationLabelFromFeatures(features) {
   return '';
 }
 
+export function exportFrameFitPadding({
+  width,
+  height,
+  topInset = 0,
+  leftInset = 0,
+  rightInset = 0,
+  bottomInset = 0,
+  mobile = false
+}) {
+  const viewportWidth = Math.max(0, Number(width) || 0);
+  const viewportHeight = Math.max(0, Number(height) || 0);
+  const shortestSide = Math.min(viewportWidth, viewportHeight);
+  const gap = Math.round(Math.min(
+    mobile ? 22 : 32,
+    Math.max(mobile ? 16 : 24, shortestSide * .025)
+  ));
+  const maximumHorizontal = Math.max(0, Math.floor((viewportWidth - 64) / 2));
+  const maximumVertical = Math.max(0, Math.floor((viewportHeight - 64) / 2));
+  const horizontal = Math.min(
+    maximumHorizontal,
+    Math.max(gap, Number(leftInset) + gap || 0, Number(rightInset) + gap || 0)
+  );
+  const vertical = Math.min(
+    maximumVertical,
+    Math.max(gap, Number(topInset) + gap || 0, Number(bottomInset) + gap || 0)
+  );
+  return { top: vertical, right: horizontal, bottom: vertical, left: horizontal };
+}
+
+export function fitMapToExportFrame(map, frameBounds, padding, duration = 280) {
+  if (!map?.fitBounds || !frameBounds) return false;
+  const coordinates = [
+    [Number(frameBounds.west), Number(frameBounds.south)],
+    [Number(frameBounds.east), Number(frameBounds.north)]
+  ];
+  if (coordinates.flat().some((value) => !Number.isFinite(value))) return false;
+  map.fitBounds(coordinates, {
+    padding,
+    duration: Math.max(0, Number(duration) || 0),
+    linear: true,
+    retainPadding: false
+  });
+  return true;
+}
+
 function coordinateLocationLabel(value) {
   const lat = Number(value?.lat);
   const lon = Number(value?.lng ?? value?.lon);
@@ -48,15 +93,26 @@ function coordinateLocationLabel(value) {
   return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
 }
 
-export function createExportController({ map, api, store, elements }) {
+export function createExportController({
+  map,
+  api,
+  store,
+  elements,
+  onOfficeMode = false,
+  onWorkspaceChange = () => {}
+}) {
   const {
     exportFrame, exportPageBox, exportFrameBox, exportCenterMarker, exportOutput, exportPaper,
     exportOrientationField, exportOrientation, exportScale, exportLayout, exportHighlight,
-    exportSummary, exportStatus, exportPreview
+    exportSummary, exportStatus, exportPreview, exportSidebar
   } = elements;
   let drag = null;
   let pinch = null;
+  let pendingFitTimer = 0;
+  let pendingFitFrame = 0;
   const activePointers = new Map();
+
+  if (onOfficeMode && exportOutput.value === 'dxf') exportOutput.value = 'pdf';
 
   const PAPER_MM = {
     a4: [210, 297],
@@ -116,6 +172,32 @@ export function createExportController({ map, api, store, elements }) {
     return value || map.getCenter();
   }
 
+  function explicitBounds() {
+    const value = store.getState().export.bbox;
+    const west = Number(value?.west);
+    const south = Number(value?.south);
+    const east = Number(value?.east);
+    const north = Number(value?.north);
+    if (
+      ![west, south, east, north].every(Number.isFinite)
+      || west >= east
+      || south >= north
+    ) return null;
+    const boundsCenter = { lng: (west + east) / 2, lat: (south + north) / 2 };
+    const metersPerLng = Math.max(1, 111320 * Math.cos(boundsCenter.lat * Math.PI / 180));
+    return {
+      center: boundsCenter,
+      size: {
+        width: (east - west) * metersPerLng,
+        height: (north - south) * 111320
+      },
+      west,
+      south,
+      east,
+      north
+    };
+  }
+
   function boundsForSize(size, value = center()) {
     const metersPerLng = Math.max(1, 111320 * Math.cos(value.lat * Math.PI / 180));
     const halfLng = size.width / 2 / metersPerLng;
@@ -124,10 +206,14 @@ export function createExportController({ map, api, store, elements }) {
   }
 
   function pageBounds() {
+    const restored = explicitBounds();
+    if (restored && (!exportLayout.checked || !isDocumentFormat())) return restored;
     return boundsForSize(pageSizeMeters());
   }
 
   function bounds() {
+    const restored = explicitBounds();
+    if (restored) return restored;
     const page = pageBounds();
     if (!exportLayout.checked || !isDocumentFormat()) return page;
     const metrics = layoutMetrics();
@@ -143,19 +229,185 @@ export function createExportController({ map, api, store, elements }) {
   }
   function setCenter(lngLat) {
     const state = store.getState();
-    store.setState({ export: { ...state.export, center: { lng: Number(lngLat.lng), lat: Number(lngLat.lat) } } }, 'export');
+    store.setState({
+      export: {
+        ...state.export,
+        center: { lng: Number(lngLat.lng), lat: Number(lngLat.lat) },
+        bbox: null
+      }
+    }, 'export');
+  }
+
+  function workspaceState() {
+    const value = store.getState().export.center;
+    const lng = Number(value?.lng);
+    const lat = Number(value?.lat);
+    const frame = bounds();
+    return {
+      output: onOfficeMode && exportOutput.value === 'dxf' ? 'pdf' : exportOutput.value,
+      format: exportPaper.value,
+      orientation: exportOrientation.value,
+      scale: Number(exportScale.value),
+      layout: Boolean(exportLayout.checked && !exportLayout.disabled),
+      highlight_selection: Boolean(exportHighlight.checked && !exportHighlight.disabled),
+      center: Number.isFinite(lng) && Number.isFinite(lat) ? { lng, lat } : null,
+      bbox: {
+        west: frame.west,
+        south: frame.south,
+        east: frame.east,
+        north: frame.north
+      }
+    };
+  }
+
+  function restoreWorkspace(value = {}) {
+    clearScheduledFit();
+    const setSelectValue = (control, nextValue) => {
+      const normalized = String(nextValue ?? '');
+      if ([...control.options].some((option) => option.value === normalized && !option.disabled)) {
+        control.value = normalized;
+      }
+    };
+    setSelectValue(exportOutput, onOfficeMode && value.output === 'dxf' ? 'pdf' : value.output);
+    exportLayout.checked = Boolean(value.layout);
+    updateControlState();
+    setSelectValue(exportPaper, value.format);
+    updateControlState();
+    setSelectValue(exportOrientation, value.orientation);
+    setSelectValue(exportScale, value.scale);
+    exportHighlight.checked = Boolean(value.highlight_selection);
+    const bboxCenter = {
+      lng: (
+        Number(value.bbox?.west) + Number(value.bbox?.east)
+      ) / 2,
+      lat: (
+        Number(value.bbox?.south) + Number(value.bbox?.north)
+      ) / 2
+    };
+    const lng = Number(value.center?.lng ?? value.center?.lon ?? bboxCenter.lng);
+    const lat = Number(value.center?.lat ?? bboxCenter.lat);
+    const state = store.getState();
+    store.setState({
+      export: {
+        ...state.export,
+        center: Number.isFinite(lng) && Number.isFinite(lat) ? { lng, lat } : null,
+        bbox: value.bbox && [value.bbox.west, value.bbox.south, value.bbox.east, value.bbox.north].every(Number.isFinite)
+          ? {
+              west: Number(value.bbox.west),
+              south: Number(value.bbox.south),
+              east: Number(value.bbox.east),
+              north: Number(value.bbox.north)
+            }
+          : null
+      }
+    }, 'restore-export');
+    updateControlState();
+    render();
+    return workspaceState();
+  }
+
+  function mediaMatches(query) {
+    return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(query).matches;
+  }
+
+  function visibleRect(element) {
+    if (!element || element.hidden || typeof element.getBoundingClientRect !== 'function') return null;
+    const rect = element.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) return null;
+    return rect;
+  }
+
+  function fitPadding() {
+    const container = map.getContainer();
+    const mapRect = visibleRect(container) || {
+      left: 0,
+      top: 0,
+      right: Number(container?.clientWidth) || 0,
+      bottom: Number(container?.clientHeight) || 0,
+      width: Number(container?.clientWidth) || 0,
+      height: Number(container?.clientHeight) || 0
+    };
+    const surface = container?.parentElement;
+    const searchRect = visibleRect(surface?.querySelector?.('.search-pill-row'));
+    const layerRect = visibleRect(surface?.querySelector?.('#layerButton'));
+    const toolRect = visibleRect(surface?.querySelector?.('.tool-stack'));
+    const mobile = mediaMatches('(max-width: 760px)');
+    const footerRect = mobile && store.getState().layout.sidebarOpen
+      ? visibleRect(exportSidebar?.querySelector?.('footer'))
+      : null;
+    const topInset = Math.max(
+      0,
+      searchRect ? searchRect.bottom - mapRect.top : 0,
+      layerRect ? layerRect.bottom - mapRect.top : 0
+    );
+    const leftInset = Math.max(0, toolRect ? toolRect.right - mapRect.left : 0);
+    const bottomInset = Math.max(0, footerRect ? footerRect.height : 0);
+    return exportFrameFitPadding({
+      width: mapRect.width,
+      height: mapRect.height,
+      topInset,
+      leftInset,
+      bottomInset,
+      mobile
+    });
+  }
+
+  function fitFrame({ duration } = {}) {
+    updateControlState();
+    const reducedMotion = mediaMatches('(prefers-reduced-motion: reduce)');
+    return fitMapToExportFrame(
+      map,
+      pageBounds(),
+      fitPadding(),
+      duration ?? (reducedMotion ? 0 : 280)
+    );
+  }
+
+  function clearScheduledFit() {
+    if (pendingFitTimer && typeof window !== 'undefined') window.clearTimeout(pendingFitTimer);
+    if (pendingFitFrame && typeof window !== 'undefined') window.cancelAnimationFrame(pendingFitFrame);
+    pendingFitTimer = 0;
+    pendingFitFrame = 0;
+  }
+
+  function scheduleFitFrame(delay = 0) {
+    clearScheduledFit();
+    if (typeof window === 'undefined') return fitFrame({ duration: 0 });
+    const run = () => {
+      pendingFitTimer = 0;
+      if (store.getState().activeTool !== 'export' || !store.getState().layout.sidebarOpen) return;
+      map.resize();
+      pendingFitFrame = window.requestAnimationFrame(() => {
+        pendingFitFrame = 0;
+        fitFrame();
+      });
+    };
+    if (delay > 0) pendingFitTimer = window.setTimeout(run, delay);
+    else pendingFitFrame = window.requestAnimationFrame(() => {
+      pendingFitFrame = 0;
+      run();
+    });
+    return true;
+  }
+
+  function layoutIsTransitioning() {
+    return map.getContainer()?.closest?.('.planner-app')?.dataset?.layoutTransitioning === 'true';
   }
 
   function updateControlState() {
+    if (onOfficeMode && exportOutput.value === 'dxf') exportOutput.value = 'pdf';
     const pdf = exportOutput.value === 'pdf';
+    const png = exportOutput.value === 'png';
+    const layoutRequested = Boolean(exportLayout.checked);
     for (const option of exportPaper.options) {
       const imageOnly = ['square', 'ratio43'].includes(option.value);
-      option.disabled = pdf && imageOnly;
-      option.hidden = pdf && imageOnly;
+      const blocked = imageOnly && (pdf || ((pdf || png) && layoutRequested));
+      option.disabled = blocked;
+      option.hidden = blocked;
     }
-    if (pdf && !isDocumentFormat()) exportPaper.value = 'a4';
+    if ((pdf || ((pdf || png) && layoutRequested)) && !isDocumentFormat()) exportPaper.value = 'a4';
     exportOrientationField.hidden = !isDocumentFormat();
-    const layoutAvailable = pdf && isDocumentFormat();
+    const layoutAvailable = (pdf || png) && isDocumentFormat();
     exportLayout.disabled = !layoutAvailable;
     exportLayout.closest('label').hidden = !layoutAvailable;
     if (!layoutAvailable) exportLayout.checked = false;
@@ -381,7 +633,7 @@ export function createExportController({ map, api, store, elements }) {
     }
     const wantsPdf = exportOutput.value === 'pdf';
     const wantsPng = exportOutput.value === 'png';
-    const wantsDxf = exportOutput.value === 'dxf';
+    const wantsDxf = !onOfficeMode && exportOutput.value === 'dxf';
     exportPreview.disabled = true;
     exportStatus.textContent = 'Export wird vorbereitet …';
     try {
@@ -456,13 +708,39 @@ export function createExportController({ map, api, store, elements }) {
   map.on('click', (event) => { if (store.getState().activeTool === 'export' && !drag) setCenter(event.lngLat); });
   map.on('move', render);
   map.on('zoom', render);
-  store.subscribe((state, reason) => { if (['sidebar', 'tool', 'export', 'restore', 'layers', 'selection', 'selection-clear'].includes(reason)) render(state); });
+  let previousActiveTool = store.getState().activeTool;
+  store.subscribe((state, reason) => {
+    const exportActivated = previousActiveTool !== 'export' && state.activeTool === 'export';
+    previousActiveTool = state.activeTool;
+    if (exportActivated) {
+      setCenter(map.getCenter());
+      scheduleFitFrame(430);
+      return;
+    }
+    if (state.activeTool !== 'export') clearScheduledFit();
+    if (['sidebar', 'tool', 'export', 'restore', 'layers', 'selection', 'selection-clear'].includes(reason)) render(state);
+  });
   exportFrameBox.addEventListener('pointerdown', beginDrag);
   exportFrameBox.addEventListener('pointermove', moveDrag);
   exportFrameBox.addEventListener('pointerup', endDrag);
   exportFrameBox.addEventListener('pointercancel', endDrag);
   exportFrameBox.addEventListener('wheel', forwardWheelToMap, { passive: false });
-  for (const control of [exportOutput, exportPaper, exportOrientation, exportScale, exportLayout, exportHighlight]) control.addEventListener('change', render);
+  for (const control of [exportOutput, exportPaper, exportOrientation, exportScale, exportLayout]) {
+    control.addEventListener('change', () => {
+      const state = store.getState();
+      if (state.export.bbox) {
+        store.setState({ export: { ...state.export, bbox: null } }, 'export-options');
+      }
+      render();
+      if (layoutIsTransitioning()) scheduleFitFrame(430);
+      else fitFrame();
+      onWorkspaceChange();
+    });
+  }
+  exportHighlight.addEventListener('change', () => {
+    render();
+    onWorkspaceChange();
+  });
   exportPreview.addEventListener('click', preview);
-  return { render, setCenter, preview };
+  return { render, setCenter, fitFrame, preview, workspaceState, restoreWorkspace };
 }

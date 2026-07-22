@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { resolveHitStack, withoutSelectionItem } from '../live-viewer/viewer-app/selection.js';
-import { selectionPreferenceForSearchResult } from '../live-viewer/viewer-app/search.js';
+import {
+  selectionCenterForPoiAddress,
+  selectionPreferenceForSearchResult,
+  structuredPoiAddress
+} from '../live-viewer/viewer-app/search.js';
 
 const selectionSource = readFileSync(new URL('../live-viewer/viewer-app/selection.js', import.meta.url), 'utf8');
 assert.match(selectionSource, /HIDDEN_DYNAMIC_FIELDS[\s\S]*?'flurstuecksfolge'/, 'Flurstücksfolge muss auch als dynamische Zusatzspalte verborgen bleiben.');
@@ -165,6 +169,65 @@ assert.deepEqual(result, { buildings: [buildingA], parcels: [parcelA] }, 'Ein le
 assert.equal(selectionPreferenceForSearchResult({ result_type: 'address', kind: 'building' }), 'all');
 assert.equal(selectionPreferenceForSearchResult({ kind: 'building' }), 'all');
 assert.equal(selectionPreferenceForSearchResult({ kind: 'parcel' }), 'parcel');
+assert.equal(selectionPreferenceForSearchResult({ kind: 'poi', result_type: 'poi' }), null);
+assert.equal(selectionPreferenceForSearchResult({
+  kind: 'poi',
+  result_type: 'poi',
+  feature: { street: 'Holztorstraße', house_number: '1' }
+}), 'all');
+assert.equal(selectionPreferenceForSearchResult({
+  kind: 'poi',
+  street: 'Holztorstraße',
+  housenumber: '1'
+}), 'all');
+assert.equal(selectionPreferenceForSearchResult({
+  kind: 'poi',
+  feature: { street: 'Holztorstraße', address: 'Holztorstraße 1' }
+}), null, 'free-form address text alone must not trigger an unrelated object hit');
+assert.equal(selectionPreferenceForSearchResult({
+  kind: 'poi',
+  feature: { house_number: '1' }
+}), null);
 assert.equal(selectionPreferenceForSearchResult({ result_type: 'street' }), null);
+
+const addressedPoi = {
+  kind: 'poi',
+  feature: {
+    street: 'Ernst-August-Platz',
+    house_number: '1',
+    post_code: '30159',
+    city: 'Hannover'
+  }
+};
+assert.deepEqual(structuredPoiAddress(addressedPoi), {
+  street: 'Ernst-August-Platz',
+  houseNumber: '1',
+  postCode: '30159',
+  city: 'Hannover'
+});
+assert.deepEqual(
+  selectionCenterForPoiAddress(addressedPoi, [{
+    address: { street: 'Ernst August Platz', house_number: '1' },
+    center: [9.7402, 52.3761]
+  }], [9.7398, 52.3763]),
+  [9.7402, 52.3761],
+  'the exact ALKIS address center must replace a POI point outside the building'
+);
+assert.deepEqual(
+  selectionCenterForPoiAddress(addressedPoi, [{
+    address: { street: 'Ernst-August-Platz', house_number: '10A' },
+    center: [9.7402, 52.3761]
+  }], [9.7398, 52.3763]),
+  [9.7398, 52.3763],
+  'a neighboring house number must not be linked'
+);
+assert.deepEqual(
+  selectionCenterForPoiAddress(addressedPoi, [{
+    address: { street: 'Ernst-August-Platz', house_number: '1' },
+    center: [11.0, 53.0]
+  }], [9.7398, 52.3763]),
+  [9.7398, 52.3763],
+  'an implausibly distant equal address must fall back to the POI point'
+);
 
 console.log('selection-hit-stack-tests=ok');

@@ -3,7 +3,6 @@ import { pointInGeometry } from './utils.js';
 const SOURCE_ID = 'alkis-v2';
 const DETAIL_ZOOM = 17;
 const BKG_SOURCES = new Set(['smarttiles_de', 'germany_geojson', 'states_geojson', 'state_labels_source', 'world_countries_geojson', 'europe_countries_geojson']);
-const AERIAL_STATES = new Set(['baden-wurttemberg', 'berlin', 'brandenburg', 'bremen', 'hamburg', 'hessen', 'mecklenburg-vorpommern', 'niedersachsen', 'nordrhein-westfalen', 'rheinland-pfalz', 'saarland', 'sachsen', 'schleswig-holstein', 'thueringen', 'thuringen']);
 
 const GROUPS = {
   surfaces: ['alkis-surface-fills', 'alkis-traffic-surface-fills'],
@@ -19,11 +18,13 @@ const GROUPS = {
 };
 
 export function createLayerController({ map, store, elements }) {
-  const { layerButton, layerMenu, layerInputs, layerZoomNote } = elements;
+  const { layerButton, layerMenu, layerInputs, layerZoomNote, layerPresentationNote } = elements;
   const layerControl = layerMenu?.closest('.layer-control');
   const baseVisibility = new Map();
   let stateFeatures = [];
+  let sourceMetadata = null;
   let activeAerial = '';
+  let activeCadastre = '';
   let basemapVisible = true;
 
   function updateLayerOverflowHint() {
@@ -60,16 +61,50 @@ export function createLayerController({ map, store, elements }) {
     return aliases[raw] || raw.replaceAll(' ', '-').replaceAll('ü', 'u').replaceAll('ä', 'a').replaceAll('ö', 'o').replaceAll('ß', 'ss');
   }
 
+  function officialCadastreCapability(slug) {
+    const state = sourceMetadata?.states?.find((candidate) => candidate?.slug === slug);
+    const capability = state?.rendering?.cadastre_raster;
+    if (!capability?.tile_template) return null;
+    return capability;
+  }
+
+  function aerialCapability(slug) {
+    const state = sourceMetadata?.states?.find((candidate) => candidate?.slug === slug);
+    const capability = state?.rendering?.aerial_raster;
+    if (!capability?.tile_template) return null;
+    return capability;
+  }
+
+  function updateUnavailableStateMask() {
+    const layerId = 'State_Overlay_Bavaria_SaxonyAnhalt_GeoJSON';
+    if (!map.getLayer(layerId)) return;
+    const visuallyCoveredStates = new Set(
+      (sourceMetadata?.states || [])
+        .filter((state) => state?.visual_active !== false && (
+          state?.active !== false || state?.rendering?.cadastre_raster?.tile_template
+        ))
+        .map((state) => state?.slug)
+    );
+    const maskedNames = [];
+    if (!visuallyCoveredStates.has('bayern')) maskedNames.push('Bayern', 'Bayern (Bodensee)');
+    if (!visuallyCoveredStates.has('sachsen-anhalt')) maskedNames.push('Sachsen-Anhalt');
+    const filters = maskedNames.map((name) => ['==', 'gen', name]);
+    map.setFilter(layerId, filters.length ? ['any', ...filters] : ['==', 'gen', '__openkataster_no_state__']);
+  }
+
   function addAlkisLayers() {
     if (map.getSource(SOURCE_ID)) return;
     map.addSource(SOURCE_ID, {
       type: 'vector',
       tiles: [`${window.location.origin}/api/v1/tiles/deutschland/{z}/{x}/{y}.mvt?client=viewer&v=20260714-runtime-schema3`],
       minzoom: 0,
-      maxzoom: 17
+      maxzoom: 17,
+      promoteId: { surfaces: 'gml_id', building_fills: 'gml_id' }
     });
     const before = firstToolLayer();
     const add = (layer) => map.addLayer(layer, before);
+    const welcomeHover = ['boolean', ['feature-state', 'welcomeHover'], false];
+    const welcomeVisibility = document.documentElement.dataset.shellMode === 'welcome' ? 'visible' : 'none';
     add({ id: 'alkis-surface-fills', type: 'fill', source: SOURCE_ID, 'source-layer': 'surfaces', minzoom: DETAIL_ZOOM,
       filter: ['all', ['!=', ['get', 'theme_index'], 0], ['!=', ['get', 'thema'], 'Verkehr']],
       paint: { 'fill-color': ['case',
@@ -129,6 +164,22 @@ export function createLayerController({ map, store, elements }) {
         ['==', ['get', 'signaturnummer'], '3629'],
         ['==', ['slice', ['coalesce', ['get', 'gml_id'], ''], 0, 4], 'DEMV']]],
       paint: { 'fill-color': ['coalesce', ['get', 'fill_color'], '#111111'], 'fill-opacity': 1 } });
+    // These hit/paint layers deliberately sit above the normal ALKIS rendering.
+    // Their idle opacity is effectively invisible; feature-state reveals exactly
+    // one locally queried feature without a hover request to the server. The
+    // stronger welcome-only stroke remains legible through the parent veil.
+    add({ id: 'welcome-hover-parcel-hit', type: 'fill', source: SOURCE_ID, 'source-layer': 'surfaces', minzoom: DETAIL_ZOOM,
+      layout: { visibility: welcomeVisibility }, filter: ['==', ['get', 'theme_index'], 0],
+      paint: { 'fill-color': '#ed3c32', 'fill-opacity': .001 } });
+    add({ id: 'welcome-hover-parcel-line', type: 'line', source: SOURCE_ID, 'source-layer': 'surfaces', minzoom: DETAIL_ZOOM,
+      layout: { visibility: welcomeVisibility }, filter: ['==', ['get', 'theme_index'], 0],
+      paint: { 'line-color': '#c92f26', 'line-width': 4, 'line-dasharray': [2.5, 1.35], 'line-opacity': ['case', welcomeHover, 1, 0] } });
+    add({ id: 'welcome-hover-building-hit', type: 'fill', source: SOURCE_ID, 'source-layer': 'building_fills', minzoom: DETAIL_ZOOM,
+      layout: { visibility: welcomeVisibility }, filter: ['!=', ['get', 'render_fill_role'], 'underground'],
+      paint: { 'fill-color': '#ed3c32', 'fill-opacity': .001 } });
+    add({ id: 'welcome-hover-building-line', type: 'line', source: SOURCE_ID, 'source-layer': 'building_fills', minzoom: DETAIL_ZOOM,
+      layout: { visibility: welcomeVisibility }, filter: ['!=', ['get', 'render_fill_role'], 'underground'],
+      paint: { 'line-color': '#c92f26', 'line-width': 4.6, 'line-opacity': ['case', welcomeHover, 1, 0] } });
   }
 
   function labelLayer(id, filter, baseSize, bold) {
@@ -160,18 +211,96 @@ export function createLayerController({ map, store, elements }) {
     return (map.getStyle().layers || []).find((layer) => String(layer.id).startsWith('selected-') || String(layer.id).startsWith('measure-'))?.id;
   }
 
+  function firstInteractiveOverlay() {
+    return map.getLayer('welcome-hover-parcel-hit') ? 'welcome-hover-parcel-hit' : firstToolLayer();
+  }
+
+  function ensureRasterStack() {
+    const layerIds = () => (map.getStyle().layers || []).map((layer) => layer.id);
+    const overlay = firstInteractiveOverlay();
+    if (activeCadastre && overlay && map.getLayer(activeCadastre) && map.getLayer(overlay)) {
+      const ids = layerIds();
+      if (ids.indexOf(activeCadastre) > ids.indexOf(overlay)) map.moveLayer(activeCadastre, overlay);
+    }
+    if (activeAerial && activeCadastre && map.getLayer(activeAerial) && map.getLayer(activeCadastre)) {
+      const ids = layerIds();
+      if (ids.indexOf(activeAerial) > ids.indexOf(activeCadastre)) map.moveLayer(activeAerial, activeCadastre);
+    }
+  }
+
   function updateAerial(show) {
     const slug = currentStateSlug();
-    if (!show || !AERIAL_STATES.has(slug)) {
+    const capability = aerialCapability(slug);
+    if (!show || !capability) {
       for (const layer of map.getStyle().layers || []) if (String(layer.id).startsWith('aerial-') && map.getLayer(layer.id)) map.setLayoutProperty(layer.id, 'visibility', 'none');
       activeAerial = '';
       return;
     }
     const sourceId = `aerial-${slug}`;
-    if (!map.getSource(sourceId)) map.addSource(sourceId, { type: 'raster', tiles: [`/luftbild/${slug}/{z}/{x}/{y}.png?v=1024-webmercator`], tileSize: 512 });
-    if (!map.getLayer(sourceId)) map.addLayer({ id: sourceId, type: 'raster', source: sourceId, minzoom: DETAIL_ZOOM, paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 } }, 'alkis-surface-fills');
+    const revision = encodeURIComponent(String(capability.revision || 'aerial-wms-v1'));
+    const separator = String(capability.tile_template).includes('?') ? '&' : '?';
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
+        type: 'raster',
+        tiles: [`${capability.tile_template}${separator}v=${revision}`],
+        tileSize: Number(capability.tile_size) || 512
+      });
+    }
+    if (!map.getLayer(sourceId)) {
+      map.addLayer({
+        id: sourceId,
+        type: 'raster',
+        source: sourceId,
+        minzoom: Number(capability.minzoom) || DETAIL_ZOOM,
+        maxzoom: Number(capability.maxzoom) || 22,
+        paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 }
+      }, 'alkis-surface-fills');
+    }
     for (const layer of map.getStyle().layers || []) if (String(layer.id).startsWith('aerial-') && map.getLayer(layer.id)) map.setLayoutProperty(layer.id, 'visibility', layer.id === sourceId ? 'visible' : 'none');
-    activeAerial = slug;
+    activeAerial = sourceId;
+  }
+
+  function updateOfficialCadastre(show, aerialVisible = false) {
+    const slug = currentStateSlug();
+    const capability = officialCadastreCapability(slug);
+    if (!show || !capability) {
+      for (const layer of map.getStyle().layers || []) {
+        if (String(layer.id).startsWith('official-cadastre-') && map.getLayer(layer.id)) {
+          map.setLayoutProperty(layer.id, 'visibility', 'none');
+        }
+      }
+      activeCadastre = '';
+      return;
+    }
+
+    const sourceId = `official-cadastre-${slug}`;
+    const revision = encodeURIComponent(String(capability.revision || 'official-wms-v1'));
+    const separator = String(capability.tile_template).includes('?') ? '&' : '?';
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
+        type: 'raster',
+        tiles: [`${capability.tile_template}${separator}v=${revision}`],
+        tileSize: Number(capability.tile_size) || 512
+      });
+    }
+    if (!map.getLayer(sourceId)) {
+      map.addLayer({
+        id: sourceId,
+        type: 'raster',
+        source: sourceId,
+        minzoom: Number(capability.minzoom) || DETAIL_ZOOM,
+        maxzoom: Number(capability.maxzoom) || 22,
+        paint: { 'raster-opacity': aerialVisible ? .62 : 1, 'raster-fade-duration': 0 }
+      }, firstInteractiveOverlay());
+    }
+    for (const layer of map.getStyle().layers || []) {
+      if (!String(layer.id).startsWith('official-cadastre-') || !map.getLayer(layer.id)) continue;
+      const visible = layer.id === sourceId;
+      map.setLayoutProperty(layer.id, 'visibility', visible ? 'visible' : 'none');
+      if (visible) map.setPaintProperty(layer.id, 'raster-opacity', aerialVisible ? .62 : 1);
+    }
+    activeCadastre = sourceId;
+    ensureRasterStack();
   }
 
   function setBasemapVisible(visible) {
@@ -197,13 +326,25 @@ export function createLayerController({ map, store, elements }) {
 
   function apply(state = store.getState()) {
     if (!map.isStyleLoaded()) return;
+    updateUnavailableStateMask();
     const detail = map.getZoom() >= DETAIL_ZOOM;
     const layers = state.layers;
+    const slug = currentStateSlug();
+    const cadastreCapability = officialCadastreCapability(slug);
+    const aerial = aerialCapability(slug);
+    const fullPresentation = cadastreCapability?.presentation === 'full';
     document.body.dataset.detailLayers = detail ? 'enabled' : 'disabled';
-    if (layerZoomNote) layerZoomNote.hidden = detail;
+    if (layerZoomNote) {
+      layerZoomNote.hidden = detail;
+      layerZoomNote.textContent = fullPresentation
+        ? 'Amtliche Gesamtdarstellung und Luftbild sind ab Zoom 17 verfügbar.'
+        : 'ALKIS und Luftbild sind ab Zoom 17 verfügbar.';
+    }
     if (layerMenu) layerMenu.dataset.detailUnavailable = detail ? 'false' : 'true';
+    if (layerMenu) layerMenu.dataset.cadastrePresentation = fullPresentation ? 'full' : 'individual';
+    if (layerPresentationNote) layerPresentationNote.hidden = !fullPresentation;
     for (const [group, ids] of Object.entries(GROUPS)) {
-      const visible = detail && layers.alkis && layers[group];
+      const visible = detail && layers.alkis && layers[group] && !fullPresentation;
       for (const id of ids) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
     }
     if (map.getLayer('alkis-building-fills')) {
@@ -214,11 +355,17 @@ export function createLayerController({ map, store, elements }) {
       if (map.getLayer(id)) map.setPaintProperty(id, 'fill-opacity', detail && layers.aerial ? .18 : 1);
     }
     updateAerial(detail && layers.aerial);
-    const detailBackground = detail && ((layers.alkis && sourceReady(SOURCE_ID)) || (layers.aerial && sourceReady(activeAerial)));
+    updateOfficialCadastre(detail && layers.alkis, detail && layers.aerial);
+    ensureRasterStack();
+    const detailBackground = detail && (
+      (layers.alkis && sourceReady(activeCadastre || SOURCE_ID))
+      || (layers.aerial && sourceReady(activeAerial))
+    );
     setBasemapVisible(!detailBackground);
     for (const input of layerInputs) {
       input.checked = !!layers[input.dataset.layer];
-      input.disabled = !detail;
+      const isSublayer = !['alkis', 'aerial'].includes(input.dataset.layer);
+      input.disabled = !detail || (input.dataset.layer === 'aerial' && !aerial) || (fullPresentation && isSublayer);
     }
   }
 
@@ -238,6 +385,7 @@ export function createLayerController({ map, store, elements }) {
   layerMenu.addEventListener('scroll', updateLayerOverflowHint, { passive: true });
   window.addEventListener('resize', updateLayerOverflowHint, { passive: true });
   for (const input of layerInputs) input.addEventListener('change', () => {
+    if (input.disabled) return;
     const state = store.getState();
     const layers = { ...state.layers, [input.dataset.layer]: input.checked };
     if (input.dataset.layer === 'alkis' && input.checked) Object.assign(layers, { buildings: true, parcelLines: true, surfaceOutlines: true, houseNumbers: true, streetNames: true, extended: true, parcelLabels: true, surfaces: true, buildingUsage: true, buildingLabels: true, boundaryPoints: true, symbols: true });
@@ -249,8 +397,16 @@ export function createLayerController({ map, store, elements }) {
   map.on('zoom', () => apply());
   map.on('moveend', () => apply());
   map.on('sourcedata', (event) => {
-    if (event.sourceId === SOURCE_ID || event.sourceId === activeAerial) apply();
+    if (event.sourceId === SOURCE_ID || event.sourceId === activeAerial || event.sourceId === activeCadastre) apply();
   });
   store.subscribe((state, reason) => { if (reason === 'layers' || reason === 'restore') apply(state); });
-  return { apply, currentStateSlug, isBasemapVisible: () => basemapVisible };
+  return {
+    apply,
+    currentStateSlug,
+    isBasemapVisible: () => basemapVisible,
+    setSourceMetadata(metadata) {
+      sourceMetadata = metadata || null;
+      apply();
+    }
+  };
 }

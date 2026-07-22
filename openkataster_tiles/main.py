@@ -6,6 +6,7 @@ import fcntl
 import gzip
 import hashlib
 import hmac
+import http.client
 import json
 import math
 import os
@@ -21,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import lru_cache
@@ -45,6 +47,12 @@ from openkataster_tiles.search_analytics import (
     SearchAnalytics,
     install_queryless_uvicorn_access_logging,
     valid_analytics_marker,
+)
+from openkataster_tiles.poi_search import (
+    poi_index_available,
+    poi_index_metadata,
+    search_poi_by_id,
+    search_poi_suggestions,
 )
 
 try:
@@ -122,21 +130,103 @@ FEATURE_DB_SUFFIX = ".features.sqlite"
 SEARCH_DB_SUFFIX = ".search.sqlite"
 LUFTBILD_WMS_CONFIGS = {
     "baden-wurttemberg": {"url": "https://owsproxy.lgl-bw.de/owsproxy/ows/WMS_LGL-BW_ATKIS_DOP_20_C", "layer": "IMAGES_DOP_20_RGB", "crs": "EPSG:25832", "format": "image/png", "version": "1.3.0"},
+    "bayern": {
+        "url": "https://geoservices.bayern.de/od/wms/dop/v1/dop20",
+        "layer": "by_dop20c",
+        "crs": "EPSG:3857",
+        "format": "image/jpeg",
+        "version": "1.3.0",
+        "tile_size": 512,
+        "map_tile_size": 512,
+        "timeout": 12,
+        "attempts": 2,
+        "revision": "by-dop20c-512-jpeg-v1",
+        "attribution": "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de · CC BY 4.0",
+    },
     "berlin": {"url": "https://isk.geobasis-bb.de/mapproxy/dop20c/service/wms", "layer": "bebb_dop20c", "crs": "EPSG:25833", "format": "image/png"},
     "brandenburg": {"url": "https://isk.geobasis-bb.de/mapproxy/dop20c/service/wms", "layer": "bebb_dop20c", "crs": "EPSG:25833", "format": "image/png"},
     "bremen": {"url": "https://geodienste.bremen.de/wms_dop20_2023", "layer": "DOP20_2023_HB", "layer_alt": "DOP20_2023_BHV", "crs": "EPSG:25832", "format": "image/png"},
     "hamburg": {"url": "https://geodienste.hamburg.de/wms_dop_zeitreihe_belaubt", "layer": "dop_zeitreihe_belaubt", "crs": "EPSG:25832", "format": "image/png"},
     "hessen": {"url": "https://www.gds-srv.hessen.de/cgi-bin/lika-services/ogc-free-images.ows", "layer": "he_dop20_rgb", "crs": "EPSG:25832", "format": "image/png"},
     "mecklenburg-vorpommern": {"url": "https://www.geodaten-mv.de/dienste/adv_dop", "layer": "mv_dop", "crs": "EPSG:25833", "format": "image/png"},
-    "niedersachsen": {"url": "https://opendata.lgln.niedersachsen.de/doorman/noauth/dop_wms", "layer": "ni_dop20", "crs": "EPSG:25832", "format": "image/png"},
+    "niedersachsen": {
+        "url": "https://opendata.geoservices.lgln.niedersachsen.de/dop_wms",
+        "layer": "ni_dop",
+        "crs": "EPSG:3857",
+        "format": "image/jpeg",
+        "tile_size": 512,
+        "timeout": 8,
+        "attempts": 2,
+        "map_tile_size": 512,
+        "revision": "ni-dop-512-jpeg-direct-wms1",
+    },
     "nordrhein-westfalen": {"url": "https://www.wms.nrw.de/geobasis/wms_nw_dop", "layer": "nw_dop_rgb", "crs": "EPSG:25832", "format": "image/png"},
     "rheinland-pfalz": {"url": "https://geo4.service24.rlp.de/wms/rp_dop20.fcgi", "layer": "rp_dop20", "crs": "EPSG:25832", "format": "image/png"},
     "saarland": {"url": "https://geoportal.saarland.de/freewms/dop2020", "layer": "sl_dop2020", "crs": "EPSG:25832", "format": "image/png"},
     "sachsen": {"url": "https://geodienste.sachsen.de/wms_geosn_dop-rgb/guest", "layer": "sn_dop_020", "crs": "EPSG:25833", "format": "image/png"},
-    "sachsen-anhalt": {"url": "https://www.geodatenportal.sachsen-anhalt.de/wss/service/ST_LVermGeo_DOP_WMS_OpenData/guest", "layer": "lsa_lvermgeo_dop20_2", "crs": "EPSG:25832", "format": "image/png"},
+    "sachsen-anhalt": {
+        "url": "https://www.geodatenportal.sachsen-anhalt.de/wss/service/ST_LVermGeo_DOP_WMS_OpenData/guest",
+        "layer": "lsa_lvermgeo_dop20_2",
+        "crs": "EPSG:25832",
+        "format": "image/png",
+        "map_tile_size": 512,
+        "revision": "st-dop20-open-data-v1",
+        "attribution": "© GeoBasis-DE / LVermGeo ST · Datenlizenz Deutschland – Namensnennung – Version 2.0",
+    },
     "schleswig-holstein": {"url": "https://dienste.gdi-sh.de/WMS_SH_DOP20col_OpenGBD", "layer": "sh_dop20_rgb", "crs": "EPSG:25832", "format": "image/png"},
     "thueringen": {"url": "https://www.geoproxy.geoportal-th.de/geoproxy/services/DOP20", "layer": "th_dop", "crs": "EPSG:25832", "format": "image/png"},
     "thuringen": {"url": "https://www.geoproxy.geoportal-th.de/geoproxy/services/DOP20", "layer": "th_dop", "crs": "EPSG:25832", "format": "image/png"},
+}
+
+# Some states publish the authoritative cadastral presentation only (Bavaria)
+# or most reliably (Saxony-Anhalt) as a WMS.  OpenKataster keeps its local
+# vector/SQLite artefacts for search, hit-testing and export, while this raster
+# is used purely as the visible, official cartographic presentation.
+KATASTER_WMS_CONFIGS = {
+    "bayern": {
+        "url": "https://geoservices.bayern.de/od/wms/alkis/v1/parzellarkarte",
+        "layer": "by_alkis_parzellarkarte_farbe",
+        "styles": "Farbe",
+        "crs": "EPSG:3857",
+        "format": "image/png",
+        "version": "1.3.0",
+        "transparent": True,
+        "tile_size": 512,
+        "timeout": 20,
+        "attempts": 2,
+        "minzoom": 17,
+        "maxzoom": 22,
+        "revision": "by-parzellarkarte-farbe-20260701-v1",
+        "attribution": "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de · CC BY 4.0",
+        "cache_ttl_seconds": 24 * 60 * 60,
+        "cache_control": "public, max-age=86400, stale-while-revalidate=3600",
+    },
+    "sachsen-anhalt": {
+        "url": "https://www.geodatenportal.sachsen-anhalt.de/wss/service/ST_LVermGeo_ALKIS_WMS_AdV_konform_App/guest",
+        "layer": ",".join(
+            (
+                "adv_alkis_tatsaechliche_nutzung",
+                "adv_alkis_gesetzl_festlegungen",
+                "adv_alkis_weiteres",
+                "adv_alkis_gebaeude",
+                "adv_alkis_flurstuecke",
+            )
+        ),
+        "styles": ",".join(("Farbe",) * 5),
+        "crs": "EPSG:3857",
+        "format": "image/png",
+        "version": "1.3.0",
+        "transparent": True,
+        "tile_size": 512,
+        "timeout": 20,
+        "attempts": 2,
+        "minzoom": 17,
+        "maxzoom": 22,
+        "revision": "st-adv-alkis-farbe-v1",
+        "attribution": "© GeoBasis-DE / LVermGeo ST · Datenlizenz Deutschland – Namensnennung – Version 2.0",
+        "cache_ttl_seconds": 24 * 60 * 60,
+        "cache_control": "public, max-age=86400, stale-while-revalidate=3600",
+    },
 }
 
 
@@ -212,10 +302,28 @@ def _luftbild_wms_bbox(config: dict, z: int, x: int, y: int) -> tuple[list[float
     return [min(xs), min(ys), max(xs), max(ys)], center_lat
 
 
-def _luftbild_cache_path(state_slug: str, layer: str, crs: str, z: int, x: int, y: int) -> Path:
+def _luftbild_media_type(image_format: str) -> str:
+    normalized = str(image_format or "").split(";", 1)[0].strip().lower()
+    if normalized in {"image/jpeg", "image/jpg"}:
+        return "image/jpeg"
+    return "image/png"
+
+
+def _luftbild_cache_path(
+    state_slug: str,
+    layer: str,
+    crs: str,
+    z: int,
+    x: int,
+    y: int,
+    *,
+    tile_size: int = LUFTBILD_TILE_SIZE,
+    image_format: str = "image/png",
+) -> Path:
     safe_layer = re.sub(r"[^a-zA-Z0-9_.-]+", "_", layer).strip("_") or "layer"
     safe_crs = re.sub(r"[^a-zA-Z0-9_.-]+", "_", crs).strip("_") or "crs"
-    return LUFTBILD_CACHE_DIR / str(LUFTBILD_TILE_SIZE) / state_slug / safe_layer / safe_crs / str(z) / str(x) / f"{y}.png"
+    suffix = ".jpg" if _luftbild_media_type(image_format) == "image/jpeg" else ".png"
+    return LUFTBILD_CACHE_DIR / str(tile_size) / state_slug / safe_layer / safe_crs / str(z) / str(x) / f"{y}{suffix}"
 
 
 def _luftbild_cache_usage() -> tuple[int, list[tuple[float, int, Path]]]:
@@ -223,13 +331,14 @@ def _luftbild_cache_usage() -> tuple[int, list[tuple[float, int, Path]]]:
     files: list[tuple[float, int, Path]] = []
     if not LUFTBILD_CACHE_DIR.exists():
         return total, files
-    for path in LUFTBILD_CACHE_DIR.rglob("*.png"):
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        total += stat.st_size
-        files.append((stat.st_mtime, stat.st_size, path))
+    for pattern in ("*.png", "*.jpg", "*.jpeg"):
+        for path in LUFTBILD_CACHE_DIR.rglob(pattern):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            total += stat.st_size
+            files.append((stat.st_mtime, stat.st_size, path))
     files.sort(key=lambda item: item[0])
     return total, files
 
@@ -423,6 +532,18 @@ LOCAL_STATE_METADATA = {
     "baden-wurttemberg": {
         "bundesland": "Baden-Württemberg",
         "quellenvermerk": "Datenquelle: LGL, www.lgl-bw.de, dl-de/by-2-0",
+        "lizenz": "dl-de/by-2-0",
+    },
+    "bayern": {
+        "bundesland": "Bayern",
+        "datenstand": "14.07.2026",
+        "datenjahr": 2026,
+        "quellenvermerk": "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de",
+        "lizenz": "CC BY 4.0",
+    },
+    "sachsen-anhalt": {
+        "bundesland": "Sachsen-Anhalt",
+        "quellenvermerk": "© GeoBasis-DE / LVermGeo ST",
         "lizenz": "dl-de/by-2-0",
     },
 }
@@ -1217,6 +1338,20 @@ class MosaicEntry:
 class FeatureDbEntry:
     name: str
     path: Path
+
+
+FEATURE_ADDRESS_RELATION_LIMIT = 25
+
+
+@dataclass(frozen=True)
+class FeatureAddressRelations:
+    addresses: list[dict]
+    total: int = 0
+    limit: int = FEATURE_ADDRESS_RELATION_LIMIT
+
+    @property
+    def truncated(self) -> bool:
+        return self.total > self.limit
 
 
 @dataclass(frozen=True)
@@ -4070,6 +4205,266 @@ def load_properties(raw: str | bytes | None) -> dict:
         return {}
 
 
+_SACHSEN_ANHALT_COMMON_FEATURE_FIELDS = frozenset(
+    {
+        # Stable references and trusted runtime geometry. These fields are not
+        # rendered as table columns, but are required for selection restore,
+        # geometry downloads and onOffice hand-off.
+        "id",
+        "source_db",
+        "gml_id",
+        "geometry",
+        "bbox",
+        "center",
+        "address",
+        "addresses",
+        "address_relation_count",
+        "address_relation_limit",
+        "address_relations_truncated",
+    }
+)
+
+_SACHSEN_ANHALT_LOCATION_DISPLAY_MAX_LENGTH = 240
+
+_BAYERN_LOD2_BUILDING_FEATURE_FIELDS = _SACHSEN_ANHALT_COMMON_FEATURE_FIELDS | frozenset(
+    {
+        # Keep the useful LoD2 facts in the object table. Raw CityGML IDs,
+        # source tiles, EPSG values, codelist codes and acquisition-method
+        # fields remain in features.sqlite for auditability, but are not
+        # meaningful columns for map users.
+        "gebaeudefunktion_text",
+        "name",
+        "geschosse_oberirdisch",
+        "dachform_text",
+        "geometrische_flaeche_m2",
+    }
+)
+
+_SACHSEN_ANHALT_BUILDING_FEATURE_FIELDS = _SACHSEN_ANHALT_COMMON_FEATURE_FIELDS | frozenset(
+    {
+        "gebaeudefunktion",
+        "gebaeudefunktion_text",
+        "gebaeudekennzeichen",
+        "name",
+        "geschosse_oberirdisch",
+        "geschosse_unterirdisch",
+        "dachform",
+        "dachform_text",
+        "dachart",
+        "dachgeschossausbau",
+        "dachgeschossausbau_text",
+        "bauweise",
+        "bauweise_text",
+        "baujahr",
+        "umbauter_raum_m3",
+        "objekthoehe_m",
+        "lage_zur_erdoberflaeche",
+        "lage_zur_erdoberflaeche_text",
+        "hochhaus",
+        "weitere_gebaeudefunktion",
+        "weitere_gebaeudefunktion_text",
+        "zustand",
+        "zustand_text",
+        "geschossflaeche_m2",
+        "grundflaeche_m2",
+        "amtliche_flaeche_m2",
+        "geometrische_flaeche_m2",
+    }
+)
+
+_SACHSEN_ANHALT_PARCEL_FEATURE_FIELDS = _SACHSEN_ANHALT_COMMON_FEATURE_FIELDS | frozenset(
+    {
+        "gemarkungsschluessel",
+        "gemarkung_key",
+        "gemarkung",
+        "gemarkungsnummer",
+        "flur",
+        "flurstueck",
+        "flurstueckskennzeichen",
+        "zaehler",
+        "nenner",
+        "nutzungen",
+        "nutzung_haupt",
+        "nutzung",
+        "tatsaechliche_nutzung",
+        "thema",
+        "lage",
+        "gemeindeteil",
+        "abweichender_rechtszustand",
+        "rechtsbehelfsverfahren",
+        "zweifelhafter_flurstuecksnachweis",
+        "zeitpunkt_der_entstehung",
+        "amtliche_flaeche_m2",
+    }
+)
+
+
+def _sachsen_anhalt_usage_detail_values(raw: str) -> list[str]:
+    """Return useful ALKIS qualifiers while dropping technical ``null`` values."""
+    matches = list(re.finditer(r"(?:^|,)\s*([\wäöüÄÖÜß]+)\s*:\s*", raw))
+    values: list[str] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+        value = raw[match.end() : end].strip(" ,")
+        if not value or value.casefold() == "null":
+            continue
+        if value not in values:
+            values.append(value)
+    return values
+
+
+def normalize_sachsen_anhalt_usages(raw: object) -> list[dict]:
+    """Convert the legacy ``Theme(details);area|...`` value into UI data."""
+    if not isinstance(raw, str) or not raw.strip():
+        return []
+    usages: list[dict] = []
+    for component in raw.split("|"):
+        component = component.strip()
+        if not component:
+            continue
+        descriptor, separator, raw_area = component.rpartition(";")
+        if not separator:
+            descriptor, raw_area = component, ""
+        descriptor = descriptor.strip()
+        match = re.fullmatch(r"(.*?)\((.*)\)", descriptor)
+        if match:
+            theme = match.group(1).strip()
+            details = _sachsen_anhalt_usage_detail_values(match.group(2))
+        else:
+            theme = descriptor
+            details = []
+        if not theme:
+            continue
+        label = f"{theme} ({', '.join(details)})" if details else theme
+        entry: dict[str, object] = {"thema": label}
+        try:
+            area = float(raw_area.strip())
+        except (TypeError, ValueError):
+            area = 0.0
+        if area > 0:
+            entry["flaeche_m2"] = int(area) if area.is_integer() else area
+        usages.append(entry)
+
+    usages.sort(key=lambda entry: (-float(entry.get("flaeche_m2") or 0), str(entry["thema"])))
+    total_area = sum(float(entry.get("flaeche_m2") or 0) for entry in usages)
+    if total_area > 0:
+        for entry in usages:
+            area = float(entry.get("flaeche_m2") or 0)
+            if area > 0:
+                entry["anteil"] = area / total_area
+    return usages
+
+
+def _sachsen_anhalt_address_display_values(properties: dict) -> list[str]:
+    values: list[str] = []
+    raw_addresses = properties.get("addresses")
+    addresses = raw_addresses if isinstance(raw_addresses, list) else []
+    if properties.get("address"):
+        addresses = [*addresses, properties["address"]]
+    for address in addresses:
+        if isinstance(address, str):
+            candidates = (address, address.split(",", 1)[0])
+        elif isinstance(address, dict):
+            street_house = str(address.get("street_house") or "").strip()
+            if not street_house:
+                street_house = " ".join(
+                    part
+                    for part in (
+                        str(address.get("street") or "").strip(),
+                        str(address.get("house_number") or "").strip(),
+                    )
+                    if part
+                )
+            label = str(address.get("label") or "").strip()
+            candidates = (street_house, label, label.split(",", 1)[0])
+        else:
+            continue
+        for candidate in candidates:
+            candidate = str(candidate or "").strip()
+            if candidate and candidate not in values:
+                values.append(candidate)
+    return values
+
+
+def _hide_redundant_sachsen_anhalt_location(properties: dict) -> None:
+    """Keep useful cadastral locations, but suppress address copies and raw lists."""
+    raw_location = properties.get("lage")
+    if not isinstance(raw_location, (str, int, float)):
+        properties.pop("lage", None)
+        return
+    location = str(raw_location).strip()
+    if not location or len(location) > _SACHSEN_ANHALT_LOCATION_DISPLAY_MAX_LENGTH:
+        properties.pop("lage", None)
+        return
+    location_key = fast_compact_norm(location)
+    if location_key and any(
+        fast_compact_norm(candidate) == location_key
+        for candidate in _sachsen_anhalt_address_display_values(properties)
+    ):
+        properties.pop("lage", None)
+        return
+    properties["lage"] = location
+
+
+def normalize_feature_properties_for_response(state: str, kind: str, properties: dict) -> dict:
+    """Expose stable, user-facing contracts for hybrid cadastral sources.
+
+    The first Sachsen-Anhalt runtime was assembled from presentation-oriented
+    intermediate data. Its JSON therefore contains renderer colors, duplicated
+    aliases and a compact usage string. Keep that source untouched, but never
+    leak those implementation fields into the object-information table. The
+    Bavarian LoD2 adapter similarly retains audit/provenance fields in SQLite
+    while exposing only meaningful building facts to the UI.
+    """
+    props = dict(properties or {})
+    state_key = normalize_state_key(state)
+    source_key = normalize_state_key(str(props.get("source_db") or ""))
+    kind = str(kind or props.get("type") or "").strip().lower()
+
+    if source_key == "bayern-lod2" and kind == "building":
+        return {
+            key: value
+            for key, value in props.items()
+            if key in _BAYERN_LOD2_BUILDING_FEATURE_FIELDS
+            and value is not None
+            and value != ""
+            and value != []
+            and value != {}
+        }
+
+    if state_key != "sachsen-anhalt" and source_key != "sachsen-anhalt":
+        return props
+
+    if kind == "building":
+        function = props.get("gebaeudefunktion_text") or props.get("funktion")
+        if function:
+            props["gebaeudefunktion_text"] = function
+        relative_location = str(props.get("rellage") or "").strip()
+        if relative_location and not props.get("lage_zur_erdoberflaeche_text"):
+            props["lage_zur_erdoberflaeche_text"] = relative_location
+        elif props.get("underground") is True and not props.get("lage_zur_erdoberflaeche_text"):
+            props["lage_zur_erdoberflaeche_text"] = "Unter der Erdoberfläche"
+        allowed = _SACHSEN_ANHALT_BUILDING_FEATURE_FIELDS
+    elif kind == "parcel":
+        props["gemarkungsschluessel"] = props.get("gemarkungsschluessel") or props.get("gemaschl")
+        usages = props.get("nutzungen")
+        if not isinstance(usages, list):
+            usages = normalize_sachsen_anhalt_usages(props.get("usage"))
+        if usages:
+            props["nutzungen"] = usages
+            props["nutzung_haupt"] = props.get("nutzung_haupt") or usages[0].get("thema")
+        _hide_redundant_sachsen_anhalt_location(props)
+        allowed = _SACHSEN_ANHALT_PARCEL_FEATURE_FIELDS
+    else:
+        return props
+
+    return {
+        key: value
+        for key, value in props.items()
+        if key in allowed and value is not None and value != "" and value != [] and value != {}
+    }
+
+
 def sqlite_table_exists(con: sqlite3.Connection, name: str) -> bool:
     row = con.execute(
         "SELECT 1 FROM sqlite_master WHERE name = ? LIMIT 1",
@@ -4944,6 +5339,67 @@ def nearest_municipality(state: str, lon: float, lat: float) -> dict | None:
 
 
 def municipality_at(state: str, lon: float, lat: float) -> dict | None:
+    # Point lookups should not materialize and normalize the complete GN250
+    # catalogue.  The state prefix index reduces this to a few thousand cheap
+    # bbox comparisons and preserves the exact ranking used by the in-memory
+    # fallback below.
+    if GN250_PLACES_DB.exists():
+        try:
+            con = sqlite3.connect(
+                f"file:{GN250_PLACES_DB}?mode=ro",
+                uri=True,
+            )
+            con.row_factory = sqlite3.Row
+            try:
+                rows = con.execute(
+                    """
+                    SELECT
+                      class, name, municipality,
+                      min_lon, min_lat, max_lon, max_lat
+                    FROM places
+                    WHERE state_key = ?
+                      AND min_lon <= ? AND max_lon >= ?
+                      AND min_lat <= ? AND max_lat >= ?
+                    """,
+                    [
+                        gn250_storage_state_key(state),
+                        float(lon),
+                        float(lon),
+                        float(lat),
+                        float(lat),
+                    ],
+                ).fetchall()
+            finally:
+                con.close()
+        except sqlite3.Error:
+            rows = None
+        if rows is not None:
+            matches = []
+            for row in rows:
+                min_lon = fast_float(row["min_lon"])
+                min_lat = fast_float(row["min_lat"])
+                max_lon = fast_float(row["max_lon"])
+                max_lat = fast_float(row["max_lat"])
+                area = max(0.0, max_lon - min_lon) * max(
+                    0.0,
+                    max_lat - min_lat,
+                )
+                place_class = str(row["class"] or "")
+                municipality = str(row["municipality"] or "").strip()
+                name = str(row["name"] or "").strip()
+                city = municipality or name
+                if not city:
+                    continue
+                class_rank = 0 if place_class == "Gemeinde" else 1
+                matches.append((class_rank, area, city))
+            if not matches:
+                return None
+            _, _, name = min(matches, key=lambda item: item[:2])
+            return {
+                "name": name,
+                "folded": normalize_place_search_text(name),
+            }
+
     matches = []
     for entry in gn250_place_entries(gn250_places_signature()):
         if normalize_state_key(str(entry.get("state") or "")) != normalize_state_key(state):
@@ -5151,7 +5607,7 @@ def compact_feature_subtitle(kind: str, properties: dict) -> str:
         parts = [
             f"Gemarkung {properties.get('gemarkung')}" if properties.get("gemarkung") else "",
             f"Flur {properties.get('flur')}" if properties.get("flur") else "",
-            properties.get("lage") or properties.get("address") or "",
+            properties.get("address") or "",
         ]
         return " · ".join(part for part in parts if part)
     parts = [
@@ -5209,6 +5665,62 @@ def compact_address_properties(row: sqlite3.Row) -> dict:
         address["street"] = match.group(1).strip()
         address["house_number"] = match.group(2).strip()
     return address
+
+
+def compact_feature_relation_addresses(
+    con: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> FeatureAddressRelations:
+    if not sqlite_table_exists(con, "feature_addresses"):
+        return FeatureAddressRelations([])
+    required_columns = {
+        "feature_id",
+        "parcel_id",
+        "address",
+        "street_house",
+        "lon",
+        "lat",
+        "source",
+    }
+    available_columns = {
+        str(column["name"]) for column in con.execute("PRAGMA table_info(feature_addresses)")
+    }
+    if not required_columns.issubset(available_columns):
+        return FeatureAddressRelations([])
+
+    kind = str(row["kind"] or "")
+    if kind == "building":
+        relation_column = "feature_id"
+    elif kind == "parcel":
+        relation_column = "parcel_id"
+    else:
+        return FeatureAddressRelations([])
+
+    count_row = con.execute(
+        f"SELECT COUNT(*) AS relation_count FROM feature_addresses WHERE {relation_column} = ?",
+        (row["id"],),
+    ).fetchone()
+    relation_count = int(count_row["relation_count"] or 0) if count_row else 0
+    address_rows = con.execute(
+        f"""
+        SELECT
+          address AS compact_address,
+          street_house AS compact_street_house,
+          parcel_id AS compact_address_parcel_id,
+          lon AS compact_address_lon,
+          lat AS compact_address_lat,
+          source AS compact_address_source
+        FROM feature_addresses
+        WHERE {relation_column} = ?
+        ORDER BY address, street_house, rowid
+        LIMIT ?
+        """,
+        (row["id"], FEATURE_ADDRESS_RELATION_LIMIT),
+    ).fetchall()
+    return FeatureAddressRelations(
+        [compact_address_properties(address_row) for address_row in address_rows],
+        total=relation_count,
+    )
 
 
 
@@ -5624,6 +6136,26 @@ def canonical_address_label(street: str, house_numbers: list[str], postcode: str
     return base or locality or fallback
 
 
+def sachsen_anhalt_city_from_address_label(address: dict) -> str:
+    """Read the municipality carried by the official building-reference label.
+
+    Sachsen-Anhalt's source labels use either
+    ``street house, municipality, Sachsen-Anhalt`` or
+    ``street house, municipality, municipality type, Sachsen-Anhalt``.  The
+    municipality is source data and must win over a GN250 bbox approximation,
+    especially close to municipal boundaries.
+    """
+    label = str(address.get("label") or "").strip()
+    parts = [part.strip() for part in label.split(",")]
+    if len(parts) < 3 or normalize_state_key(parts[-1]) != "sachsen-anhalt":
+        return ""
+
+    street_house = str(address.get("street_house") or "").strip()
+    if street_house and fast_compact_norm(parts[0]) != fast_compact_norm(street_house):
+        return ""
+    return parts[1]
+
+
 def group_addresses_for_display(addresses: list[dict]) -> list[dict]:
     grouped: dict[tuple[str, str, str], dict] = {}
     passthrough: list[dict] = []
@@ -5631,20 +6163,39 @@ def group_addresses_for_display(addresses: list[dict]) -> list[dict]:
         street, house_number = address_display_parts(address)
         postcode = str(address.get("post_code") or address.get("postal_code") or "").strip()
         city = str(address.get("city") or address.get("municipality") or address.get("locality") or "").strip()
+        normalized_address = {
+            **address,
+            "street": street,
+            "city": city,
+        }
+        if postcode:
+            normalized_address["post_code"] = postcode
+            normalized_address["postal_code"] = postcode
+        else:
+            normalized_address.pop("post_code", None)
+            normalized_address.pop("postal_code", None)
         if not street or not house_number:
+            # Official building references may deliberately have no separate
+            # house number (for example Bavarian ``o.Nr.`` labels). Preserve
+            # those facts as an ungrouped address instead of hiding them from
+            # the object table or inventing a number.
+            if street or city or str(address.get("label") or "").strip():
+                normalized_address["house_number"] = house_number
+                normalized_address["street_house"] = " ".join(
+                    part for part in (street, house_number) if part
+                ).strip()
+                normalized_address["label"] = canonical_address_label(
+                    street,
+                    [house_number] if house_number else [],
+                    postcode,
+                    city,
+                    str(address.get("label") or ""),
+                )
+                passthrough.append(normalized_address)
             continue
         key = (street.casefold(), postcode, city.casefold())
-        group = grouped.setdefault(
-            key,
-            {
-                **address,
-                "street": street,
-                "post_code": postcode,
-                "postal_code": postcode,
-                "city": city,
-                "_house_numbers": [],
-            },
-        )
+        normalized_address["_house_numbers"] = []
+        group = grouped.setdefault(key, normalized_address)
         if house_number not in group["_house_numbers"]:
             group["_house_numbers"].append(house_number)
 
@@ -5652,6 +6203,9 @@ def group_addresses_for_display(addresses: list[dict]) -> list[dict]:
     for group in grouped.values():
         house_numbers = sorted(group.pop("_house_numbers", []), key=house_number_sort_key)
         group["house_number"] = "/".join(house_numbers)
+        group["street_house"] = " ".join(
+            part for part in (str(group.get("street") or ""), group["house_number"]) if part
+        ).strip()
         group["label"] = canonical_address_label(
             str(group.get("street") or ""),
             house_numbers,
@@ -5668,6 +6222,10 @@ def enrich_addresses_with_postcode(addresses: list[dict], lon: float | None = No
     enriched: list[dict] = []
     for address in addresses:
         address = dict(address)
+        if normalize_state_key(state) == "sachsen-anhalt" and not str(address.get("city") or "").strip():
+            source_city = sachsen_anhalt_city_from_address_label(address)
+            if source_city:
+                address["city"] = source_city
         try:
             address_lon = float(address.get("lon") if address.get("lon") is not None else lon)
             address_lat = float(address.get("lat") if address.get("lat") is not None else lat)
@@ -5693,17 +6251,35 @@ def enrich_addresses_with_postcode(addresses: list[dict], lon: float | None = No
     return group_addresses_for_display(enriched)
 
 
-def feature_relation_addresses(con: sqlite3.Connection, source_db: str, kind: str, gml_id: str) -> list[dict]:
+def feature_relation_addresses(
+    con: sqlite3.Connection,
+    source_db: str,
+    kind: str,
+    gml_id: str,
+) -> FeatureAddressRelations:
+    count_row = con.execute(
+        """
+        SELECT COUNT(*) AS relation_count
+        FROM feature_addresses
+        WHERE source_db = ? AND kind = ? AND gml_id = ?
+        """,
+        (source_db, kind, gml_id),
+    ).fetchone()
+    relation_count = int(count_row["relation_count"] or 0) if count_row else 0
     rows = con.execute(
         """
         SELECT properties_json
         FROM feature_addresses
         WHERE source_db = ? AND kind = ? AND gml_id = ?
-        LIMIT 25
+        ORDER BY rowid
+        LIMIT ?
         """,
-        (source_db, kind, gml_id),
+        (source_db, kind, gml_id, FEATURE_ADDRESS_RELATION_LIMIT),
     ).fetchall()
-    return [load_properties(row["properties_json"]) for row in rows]
+    return FeatureAddressRelations(
+        [load_properties(row["properties_json"]) for row in rows],
+        total=relation_count,
+    )
 
 
 def feature_spatial_addresses(con: sqlite3.Connection, source_db: str, geom) -> list[dict]:
@@ -5762,15 +6338,37 @@ def parcel_relation_addresses_for_geometry(con: sqlite3.Connection, source_db: s
     return addresses
 
 
-def addresses_for_feature(con: sqlite3.Connection, feature: dict, geom) -> list[dict]:
+def addresses_for_feature(con: sqlite3.Connection, feature: dict, geom) -> FeatureAddressRelations:
     source_db = feature.get("source_db") or ""
     kind = feature.get("kind") or ""
     gml_id = feature.get("gml_id") or ""
-    addresses = []
+    relations = FeatureAddressRelations([])
     if kind in {"building", "parcel"}:
-        addresses.extend(feature_relation_addresses(con, source_db, kind, gml_id))
+        relations = feature_relation_addresses(con, source_db, kind, gml_id)
+    addresses = list(relations.addresses)
     addresses.extend(feature_spatial_addresses(con, source_db, geom))
-    return dedupe_addresses(addresses)[:25]
+    return FeatureAddressRelations(
+        dedupe_addresses(addresses)[:FEATURE_ADDRESS_RELATION_LIMIT],
+        total=relations.total,
+        limit=relations.limit,
+    )
+
+
+def apply_feature_address_relation_metadata(
+    properties: dict,
+    relations: FeatureAddressRelations,
+) -> None:
+    for key in (
+        "address_relation_count",
+        "address_relation_limit",
+        "address_relations_truncated",
+    ):
+        properties.pop(key, None)
+    if not relations.truncated:
+        return
+    properties["address_relation_count"] = relations.total
+    properties["address_relation_limit"] = relations.limit
+    properties["address_relations_truncated"] = True
 
 
 def compact_feature_area_m2(con: sqlite3.Connection, feature_id: str) -> int | float | None:
@@ -5887,46 +6485,25 @@ def query_features_in_index(path: Path, lon: float, lat: float) -> tuple[list[di
                     properties["bbox"] = result["bbox"]
                     properties["center"] = result["center"]
                     properties["geometry"] = mapping(geom)
-                    if row["kind"] == "building" and sqlite_table_exists(con, "feature_addresses"):
-                        address_rows = con.execute(
-                            """
-                            SELECT
-                              address AS compact_address,
-                              street_house AS compact_street_house,
-                              parcel_id AS compact_address_parcel_id,
-                              lon AS compact_address_lon,
-                              lat AS compact_address_lat,
-                              source AS compact_address_source
-                            FROM feature_addresses
-                            WHERE feature_id = ?
-                            LIMIT 25
-                            """,
-                            (row["id"],),
-                        ).fetchall()
-                        properties["addresses"] = enrich_addresses_with_postcode([compact_address_properties(address_row) for address_row in address_rows], properties.get("center", [None, None])[0], properties.get("center", [None, None])[1], state_key)
+                    address_relations = compact_feature_relation_addresses(con, row)
+                    if address_relations.addresses:
+                        properties["addresses"] = enrich_addresses_with_postcode(
+                            address_relations.addresses,
+                            properties.get("center", [None, None])[0],
+                            properties.get("center", [None, None])[1],
+                            state_key,
+                        )
                         properties["address"] = properties["addresses"][0]["label"] if properties["addresses"] else properties.get("address", "")
-                    if row["kind"] == "parcel" and sqlite_table_exists(con, "feature_addresses"):
-                        address_rows = con.execute(
-                            """
-                            SELECT
-                              address AS compact_address,
-                              street_house AS compact_street_house,
-                              parcel_id AS compact_address_parcel_id,
-                              lon AS compact_address_lon,
-                              lat AS compact_address_lat,
-                              source AS compact_address_source
-                            FROM feature_addresses
-                            WHERE parcel_id = ?
-                            LIMIT 25
-                            """,
-                            (row["id"],),
-                        ).fetchall()
-                        properties["addresses"] = enrich_addresses_with_postcode([compact_address_properties(address_row) for address_row in address_rows], properties.get("center", [None, None])[0], properties.get("center", [None, None])[1], state_key)
-                        properties["address"] = properties["addresses"][0]["label"] if properties["addresses"] else properties.get("address", "")
+                    apply_feature_address_relation_metadata(properties, address_relations)
                     if row["kind"] == "parcel":
                         area_m2 = compact_feature_area_m2(con, row["id"])
                         if area_m2 is not None:
                             properties["amtliche_flaeche_m2"] = area_m2
+                    properties = normalize_feature_properties_for_response(
+                        state_key,
+                        str(row["kind"] or ""),
+                        properties,
+                    )
                     matched.append((row["kind"], float(geom.area or 0.0), properties))
                 if matched:
                     for kind, _, properties in sorted(matched, key=lambda item: item[1]):
@@ -5965,28 +6542,20 @@ def query_features_in_index(path: Path, lon: float, lat: float) -> tuple[list[di
                 properties = result["feature"]
                 properties["bbox"] = result["bbox"]
                 properties["center"] = result["center"]
-                if row["kind"] == "building" and sqlite_table_exists(con, "feature_addresses"):
-                    address_rows = con.execute(
-                        """
-                        SELECT
-                          address AS compact_address,
-                          street_house AS compact_street_house,
-                          parcel_id AS compact_address_parcel_id,
-                          lon AS compact_address_lon,
-                          lat AS compact_address_lat,
-                          source AS compact_address_source
-                        FROM feature_addresses
-                        WHERE feature_id = ?
-                        LIMIT 25
-                        """,
-                        (row["id"],),
-                    ).fetchall()
-                    properties["addresses"] = [compact_address_properties(address_row) for address_row in address_rows]
+                address_relations = compact_feature_relation_addresses(con, row)
+                if address_relations.addresses:
+                    properties["addresses"] = address_relations.addresses
                     properties["address"] = properties["addresses"][0]["label"] if properties["addresses"] else properties.get("address", "")
+                apply_feature_address_relation_metadata(properties, address_relations)
                 if row["kind"] == "parcel":
                     area_m2 = compact_feature_area_m2(con, row["id"])
                     if area_m2 is not None:
                         properties["amtliche_flaeche_m2"] = area_m2
+                properties = normalize_feature_properties_for_response(
+                    state_key,
+                    str(row["kind"] or ""),
+                    properties,
+                )
                 area = (float(row["max_lon"]) - float(row["min_lon"])) * (float(row["max_lat"]) - float(row["min_lat"]))
                 matched.append((row["kind"], area, properties))
             for kind, _, properties in sorted(matched, key=lambda item: item[1]):
@@ -6020,9 +6589,21 @@ def query_features_in_index(path: Path, lon: float, lat: float) -> tuple[list[di
             properties["gml_id"] = properties.get("gml_id") or row["gml_id"]
             if row["kind"] == "parcel":
                 enrich_gemarkung_from_lookup(path, properties)
-            properties["addresses"] = enrich_addresses_with_postcode(addresses_for_feature(con, dict(row), geom), geom.representative_point().x, geom.representative_point().y, state_key)
+            address_relations = addresses_for_feature(con, dict(row), geom)
+            properties["addresses"] = enrich_addresses_with_postcode(
+                address_relations.addresses,
+                geom.representative_point().x,
+                geom.representative_point().y,
+                state_key,
+            )
             properties["address"] = properties["addresses"][0]["label"] if properties["addresses"] else ""
+            apply_feature_address_relation_metadata(properties, address_relations)
             properties["geometry"] = mapping(geom)
+            properties = normalize_feature_properties_for_response(
+                state_key,
+                str(row["kind"] or ""),
+                properties,
+            )
             matched.append((row["kind"], geom.area, properties))
 
     for kind, _, properties in sorted(matched, key=lambda item: item[1]):
@@ -6412,7 +6993,103 @@ def city_display_name_for_state(city: str | None, state: str | None) -> str:
         if normalize_geocoder_text(alias)
     }:
         return state_display_name(state_key)
-    return value
+    # Correctly cased source labels are authoritative.  Canonical recovery is
+    # only for the all-lowercase values observed in a few ALKIS/OpenPLZ rows;
+    # broad rewriting would undesirably turn e.g. ``Oldenburg`` into
+    # ``Oldenburg (Oldb)`` or ``Mühlhausen`` into ``Mühlhausen/Thüringen``.
+    if value != value.casefold():
+        return value
+    return _official_city_display_name_cached(
+        value,
+        state_key,
+        gn250_places_signature(),
+    )
+
+
+@lru_cache(maxsize=16384)
+def _official_city_display_name_cached(
+    city: str,
+    state: str,
+    signature: tuple[int, int],
+) -> str:
+    """Return official GN250 casing/qualifiers for an exact locality.
+
+    Search shards and OpenPLZ occasionally contain lower-case localities.  We
+    deliberately do not apply title-casing because it corrupts names such as
+    ``Buchholz i. d. N.``.  Only an exact GN250 alias is allowed to replace
+    the source spelling (for example ``freden`` -> ``Freden (Leine)``).
+    """
+    value = str(city or "").strip()
+    state_key = normalize_state_key(state)
+    if not value or not state_key or signature == (0, 0) or not GN250_PLACES_DB.exists():
+        return value
+    storage_state = gn250_storage_state_key(state_key)
+    escaped_prefix = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    try:
+        con = sqlite3.connect(f"file:{GN250_PLACES_DB}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            rows = con.execute(
+                """
+                SELECT name, municipality, class, population
+                FROM places
+                WHERE state_key = ?
+                  AND (
+                    name LIKE ? ESCAPE '\\' COLLATE NOCASE
+                    OR municipality LIKE ? ESCAPE '\\' COLLATE NOCASE
+                  )
+                ORDER BY
+                  CASE class WHEN 'Gemeinde' THEN 0 WHEN 'Ort' THEN 1 ELSE 2 END,
+                  COALESCE(population, 0) DESC,
+                  name
+                LIMIT 128
+                """,
+                (storage_state, f"{escaped_prefix}%", f"{escaped_prefix}%"),
+            ).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return value
+    candidates: list[tuple[tuple[int, int, int, str], str]] = []
+    seen: set[tuple[str, str]] = set()
+    requested_keys = exact_place_key_variants(value)
+    for row in rows:
+        name = str(row["name"] or "").strip()
+        municipality = str(row["municipality"] or "").strip()
+        display_candidates = []
+        if name:
+            display_candidates.append(name)
+        if municipality and municipality not in display_candidates:
+            display_candidates.append(municipality)
+        for display_name in display_candidates:
+            aliases = gn250_place_name_aliases(display_name, state_key)
+            alias_keys = {
+                key
+                for alias in aliases
+                for key in exact_place_key_variants(alias)
+            }
+            if not requested_keys.intersection(alias_keys):
+                continue
+            dedupe_key = (
+                normalize_place_search_text(display_name),
+                normalize_place_search_text(municipality),
+            )
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            candidates.append((
+                (
+                    0 if municipality and normalize_place_search_text(display_name) == normalize_place_search_text(municipality) else 1,
+                    0 if normalize_place_search_text(value) == normalize_place_search_text(display_name) else 1,
+                    -len(display_name),
+                    display_name.casefold(),
+                ),
+                display_name,
+            ))
+    if not candidates:
+        return value
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
 
 
 def normalize_geocoder_house(value: str | None) -> str:
@@ -8181,7 +8858,10 @@ def search_gemarkung_suggestions_cached(
     if len(query) < 2:
         return tuple()
     requested_code = ""
-    code_match = re.search(r"\(\s*([0-9A-Za-z]+)\s*\)\s*$", query)
+    code_match = re.search(
+        r"\(\s*((?=[0-9A-Za-z]*[0-9])[0-9A-Za-z]+)\s*\)\s*$",
+        query,
+    )
     if code_match:
         requested_code = code_match.group(1).strip()
         query = query[:code_match.start()].strip()
@@ -8473,6 +9153,174 @@ def structured_geocoder_candidates(
 
 
 
+def _unified_exact_place_span(
+    value: str,
+    allowed_states: set[str],
+) -> tuple[str, tuple[dict, ...], str]:
+    """Extract an exact GN250 place at either edge of a free-form query."""
+    tokens = [token.strip(" ,;") for token in re.findall(r"\S+", value or "")]
+    tokens = [token for token in tokens if token]
+    if not tokens:
+        return "", tuple(), ""
+    index = exact_place_context_index(gn250_places_signature())
+    candidates: list[tuple[int, int, int, str, tuple[dict, ...]]] = []
+    token_count = len(tokens)
+    for start in range(token_count):
+        for end in range(start + 1, token_count + 1):
+            # Edge-only matching covers both common address orders while
+            # avoiding arbitrary place-name matches inside a street name.
+            if start != 0 and end != token_count:
+                continue
+            phrase = " ".join(tokens[start:end]).strip()
+            if len(phrase) < 2 or any(character.isdigit() for character in phrase):
+                continue
+            matches: list[dict] = []
+            seen: set[tuple[str, str, str]] = set()
+            for key in exact_place_key_variants(phrase):
+                for context in index.get(key, tuple()):
+                    state = normalize_state_key(str(context.get("state") or ""))
+                    if state not in allowed_states:
+                        continue
+                    dedupe_key = (
+                        state,
+                        normalize_place_search_text(str(context.get("name") or "")),
+                        normalize_place_search_text(str(context.get("municipality") or "")),
+                    )
+                    if dedupe_key in seen:
+                        continue
+                    seen.add(dedupe_key)
+                    matches.append(dict(context))
+            if matches:
+                candidates.append((end - start, 1 if end == token_count else 0, start, phrase, tuple(matches)))
+    if not candidates:
+        return "", tuple(), " ".join(tokens)
+    _, _, start, phrase, contexts = max(candidates, key=lambda item: (item[0], item[1], -item[2]))
+    phrase_length = len(phrase.split())
+    remainder = " ".join(tokens[:start] + tokens[start + phrase_length:]).strip()
+    return phrase, contexts, remainder
+
+
+def parse_unified_address_query(query: str, allowed_states: set[str]) -> dict:
+    """Parse place, postcode, street and house number from one input line."""
+    raw_query = re.sub(r"\s+", " ", str(query or "").replace(",", " ")).strip()
+    postcode_match = re.search(r"(?<!\d)(\d{5})(?!\d)", raw_query)
+    postcode = postcode_match.group(1) if postcode_match else ""
+    without_postcode = re.sub(r"(?<!\d)\d{5}(?!\d)", " ", raw_query, count=1)
+    without_postcode = re.sub(r"\s+", " ", without_postcode).strip()
+    place, place_contexts, remainder = _unified_exact_place_span(without_postcode, allowed_states)
+
+    address_candidates = [
+        candidate
+        for candidate in geocoder_direct_candidates(remainder)
+        if candidate[0] == "address" and not candidate[3].strip()
+    ]
+    chosen_address = max(
+        address_candidates,
+        key=lambda candidate: (
+            len(search_tokens(candidate[1])),
+            len(candidate[1]),
+            len(candidate[2]),
+        ),
+        default=None,
+    )
+    street = str(chosen_address[1] if chosen_address else remainder).strip(" ,;")
+    house_number = str(chosen_address[2] if chosen_address else "").strip(" ,;")
+    place_context = dict(place_contexts[0]) if place_contexts else None
+    return {
+        "query": str(query or "").strip(),
+        "postcode": postcode,
+        "place": place,
+        "place_context": place_context,
+        "place_contexts": [dict(context) for context in place_contexts],
+        "street": street,
+        "house_number": house_number,
+        "has_house_number": bool(house_number),
+    }
+
+
+def _unified_result_distance(item: dict, near_lon: float | None, near_lat: float | None) -> float:
+    if near_lon is None or near_lat is None:
+        return 0.0
+    center = item.get("center") if isinstance(item.get("center"), (list, tuple)) else []
+    if len(center) < 2:
+        return float("inf")
+    try:
+        lon = float(center[0])
+        lat = float(center[1])
+    except (TypeError, ValueError):
+        return float("inf")
+    lon_scale = max(0.35, math.cos(math.radians((lat + float(near_lat)) / 2.0)))
+    return ((lon - float(near_lon)) * lon_scale) ** 2 + (lat - float(near_lat)) ** 2
+
+
+def rank_unified_search_results(
+    results: list[dict],
+    parsed: dict,
+    near_lon: float | None = None,
+    near_lat: float | None = None,
+) -> list[dict]:
+    """Globally rank and de-duplicate address, street and place results."""
+    requested_street_norms = set(normalize_geocoder_text_variants(str(parsed.get("street") or "")))
+    requested_house = normalize_house_number_semantic(str(parsed.get("house_number") or ""))
+    requested_postcode = str(parsed.get("postcode") or "").strip()
+    requested_place_norms: set[str] = set()
+    place_values = [parsed.get("place")]
+    singular_context = parsed.get("place_context") if isinstance(parsed.get("place_context"), dict) else {}
+    place_values.extend((singular_context.get("name"), singular_context.get("municipality")))
+    for context in parsed.get("place_contexts") or []:
+        place_values.extend((context.get("name"), context.get("municipality")))
+    for value in place_values:
+        requested_place_norms.update(normalize_geocoder_text_variants(str(value or "")))
+
+    ranked: list[tuple[tuple, int, dict]] = []
+    for original_index, item in enumerate(results):
+        result_type = str(item.get("result_type") or item.get("kind") or "")
+        address = item.get("address") if isinstance(item.get("address"), dict) else {}
+        feature = item.get("feature") if isinstance(item.get("feature"), dict) else {}
+        street_value = str(address.get("street") or feature.get("street") or item.get("street") or item.get("label") or "")
+        street_norms = set(normalize_geocoder_text_variants(street_value))
+        house_value = normalize_house_number_semantic(str(address.get("house_number") or ""))
+        postcode = str(address.get("post_code") or address.get("postal_code") or item.get("post_code") or "").strip()
+        city = str(address.get("city") or feature.get("municipality") or item.get("municipality") or "")
+        city_norms = set(normalize_geocoder_text_variants(city))
+
+        if parsed.get("has_house_number"):
+            type_rank = {"address": 0, "street": 1, "place": 2}.get(result_type, 3)
+        elif parsed.get("street"):
+            type_rank = {"street": 0, "address": 1, "place": 2}.get(result_type, 3)
+        else:
+            type_rank = {"place": 0, "street": 1, "address": 2}.get(result_type, 3)
+        rank = (
+            type_rank,
+            0 if not requested_postcode or postcode == requested_postcode else 1,
+            0 if not requested_place_norms or requested_place_norms.intersection(city_norms) else 1,
+            0 if not requested_street_norms or requested_street_norms.intersection(street_norms) else 1,
+            0 if not requested_house or house_value == requested_house else 1,
+            _unified_result_distance(item, near_lon, near_lat),
+            original_index,
+            str(item.get("label") or "").casefold(),
+        )
+        ranked.append((rank, original_index, item))
+    ranked.sort(key=lambda entry: entry[0])
+
+    visible: list[dict] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for _rank, _index, item in ranked:
+        center = item.get("center") if isinstance(item.get("center"), (list, tuple)) else []
+        center_key = ",".join(f"{fast_float(value):.5f}" for value in center[:2])
+        key = (
+            str(item.get("result_type") or item.get("kind") or ""),
+            normalize_state_key(str(item.get("state") or "")),
+            normalize_geocoder_text(str(item.get("label") or "")),
+            center_key,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        visible.append(item)
+    return visible
+
+
 def search_direct_geocoder_for_dataset(
     query: str,
     limit: int,
@@ -8492,6 +9340,2389 @@ def search_direct_geocoder_for_dataset(
         candidate_override=candidate_override,
     )
     return sqlite_results[:int(limit)]
+
+
+@lru_cache(maxsize=8192)
+def _openplz_locality_for_address_cached(
+    state: str,
+    street: str,
+    postcode: str,
+    signature: tuple[int, int],
+) -> str:
+    """Return a locality only when street, postcode and state identify one."""
+    state_key = normalize_state_key(state)
+    storage_states = openplz_storage_state_keys(state_key, signature)
+    street_norms = openplz_street_norm_variants(street)
+    if signature == (0, 0) or not storage_states or not street_norms or not postcode:
+        return ""
+    try:
+        con = sqlite3.connect(f"file:{OPENPLZ_DB}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT DISTINCT locality
+            FROM streets
+            WHERE street_norm IN ({','.join('?' for _ in street_norms)})
+              AND state_key IN ({','.join('?' for _ in storage_states)})
+              AND postal_code = ?
+            LIMIT 8
+            """,
+            [*street_norms, *storage_states, postcode],
+        ).fetchall()
+        con.close()
+    except sqlite3.Error:
+        return ""
+    localities: dict[str, str] = {}
+    for row in rows:
+        locality = str(row["locality"] or "").strip()
+        if locality:
+            localities.setdefault(normalize_place_search_text(locality), locality)
+    return next(iter(localities.values())) if len(localities) == 1 else ""
+
+
+def _format_unified_address_result(item: dict) -> dict:
+    address = item.get("address") if isinstance(item.get("address"), dict) else {}
+    state = normalize_state_key(str(item.get("state") or ""))
+    street = str(address.get("street") or "").strip()
+    house_number = str(address.get("house_number") or "").strip()
+    postcode = str(address.get("post_code") or address.get("postal_code") or "").strip()
+    city = str(address.get("city") or "").strip()
+    if not city and postcode:
+        city = _openplz_locality_for_address_cached(state, street, postcode, openplz_signature())
+    if not city:
+        center = item.get("center") if isinstance(item.get("center"), (list, tuple)) else []
+        if len(center) >= 2:
+            municipality = municipality_at(state, fast_float(center[0]), fast_float(center[1]))
+            city = str((municipality or {}).get("name") or "").strip()
+    if city:
+        address["city"] = city
+    primary = " ".join(part for part in (street, house_number) if part).strip() or "Adresse"
+    locality = " ".join(part for part in (postcode, city) if part).strip()
+    state_label = state_display_name(state)
+    secondary = " · ".join(part for part in (locality, state_label) if part)
+    label = f"{primary}, {locality}" if locality else primary
+    item["label"] = label
+    item["primary_label"] = primary
+    item["secondary_label"] = secondary
+    item["subtitle"] = secondary or "Adresse"
+    item["query"] = label
+    item["address"] = address
+    feature = item.get("feature") if isinstance(item.get("feature"), dict) else {}
+    feature["address"] = label
+    feature["addresses"] = [address]
+    item["feature"] = feature
+    return item
+
+
+def _unified_address_results(
+    parsed: dict,
+    allowed_states: set[str],
+    limit: int,
+    near_lon: float | None,
+    near_lat: float | None,
+    exact_house_number: bool = False,
+) -> list[dict]:
+    street = str(parsed.get("street") or "").strip()
+    house_number = str(parsed.get("house_number") or "").strip()
+    street_norms = normalize_geocoder_text_variants(street)
+    house_norm = normalize_geocoder_house(house_number)
+    requested_house = normalize_house_number_semantic(house_number)
+    postcode = str(parsed.get("postcode") or "").strip()
+    if not street_norms or not house_norm or not requested_house:
+        return []
+
+    context_states = {
+        normalize_state_key(str(context.get("state") or ""))
+        for context in parsed.get("place_contexts") or []
+        if normalize_state_key(str(context.get("state") or "")) in allowed_states
+    }
+    search_states = context_states or allowed_states
+    results: list[dict] = []
+    per_state_limit = max(24, min(int(limit) * 8, 128))
+    street_placeholders = ",".join("?" for _ in street_norms)
+    for entry in search_db_entries_for_states(tuple(sorted(search_states))):
+        clauses = [f"street_norm IN ({street_placeholders})", "feature_kind = 'building'"]
+        where_params: list[object] = [*street_norms]
+        if exact_house_number:
+            clauses.append("house_number_norm = ?")
+            where_params.append(house_norm)
+        else:
+            clauses.extend(("house_number_norm >= ?", "house_number_norm < ?"))
+            where_params.extend((house_norm, f"{house_norm}\uffff"))
+        if postcode:
+            clauses.append("post_code = ?")
+            where_params.append(postcode)
+        order_sql = "CASE WHEN house_number_norm = ? THEN 0 ELSE 1 END"
+        order_params: list[object] = [house_norm]
+        if near_lon is not None and near_lat is not None:
+            order_sql += ", ((lon - ?) * (lon - ?) + (lat - ?) * (lat - ?))"
+            order_params.extend([near_lon, near_lon, near_lat, near_lat])
+        try:
+            rows = search_db_fetchall(
+                entry.path,
+                f"""
+                SELECT *
+                FROM address_lookup
+                WHERE {' AND '.join(clauses)}
+                ORDER BY {order_sql}, label
+                LIMIT ?
+                """,
+                [*where_params, *order_params, per_state_limit],
+            )
+        except sqlite3.Error:
+            continue
+        rows = [
+            row
+            for row in rows
+            if (
+                normalize_house_number_semantic(str(row["house_number_label"] or "")) == requested_house
+                if exact_house_number
+                else normalize_house_number_semantic(str(row["house_number_label"] or "")).startswith(requested_house)
+            )
+        ]
+        place = str(parsed.get("place") or "").strip()
+        if place:
+            place_bboxes = gn250_place_bboxes_for_state_context(
+                place,
+                entry.name,
+                gn250_places_signature(),
+            )
+            if place_bboxes:
+                rows = filter_address_rows_by_place_context(
+                    rows,
+                    place,
+                    entry.name,
+                    place_bboxes,
+                    postcode_areas_signature(),
+                )
+        for row in rows:
+            item = search_address_result_from_row(row, entry.name, place)
+            results.append(_format_unified_address_result(item))
+    return rank_unified_search_results(results, parsed, near_lon, near_lat)[:max(int(limit) * 3, int(limit))]
+
+
+def _openplz_street_geometry(
+    locality: str,
+    state: str,
+    place_signature: tuple[int, int] | None = None,
+) -> tuple[list[float] | None, list[float] | None]:
+    state_key = normalize_state_key(state)
+    signature = place_signature if place_signature is not None else gn250_places_signature()
+    index = exact_place_context_index(signature)
+    raw_bbox = None
+    for key in exact_place_key_variants(locality):
+        raw_bbox = next(
+            (
+                context.get("bbox")
+                for context in index.get(key, tuple())
+                if normalize_state_key(str(context.get("state") or "")) == state_key
+            ),
+            None,
+        )
+        if raw_bbox:
+            break
+    bbox = normalized_bbox(raw_bbox)
+    if not bbox:
+        return None, None
+    min_lon, min_lat, max_lon, max_lat = bbox
+    return [
+        (min_lon + max_lon) / 2.0,
+        (min_lat + max_lat) / 2.0,
+    ], [min_lon, min_lat, max_lon, max_lat]
+
+
+def _format_unified_street_result(item: dict, street_label: str, locality: str, postcode: str) -> dict:
+    state = normalize_state_key(str(item.get("state") or ""))
+    state_label = str(item.get("state_label") or state_display_name(state)).strip()
+    locality_label = " ".join(part for part in (postcode, locality) if part).strip()
+    full_label = f"{street_label}, {locality_label}" if locality_label else street_label
+    secondary = " · ".join(part for part in (locality_label, state_label) if part)
+    item["label"] = full_label
+    item["value"] = full_label
+    item["query"] = full_label
+    item["primary_label"] = street_label
+    item["secondary_label"] = secondary
+    item["subtitle"] = secondary or "Straße"
+    item["street"] = street_label
+    item["post_code"] = postcode
+    item["municipality"] = locality
+    item["state"] = state
+    item["state_label"] = state_label
+    return item
+
+
+def _openplz_global_street_suggestions(
+    parsed: dict,
+    allowed_states: set[str],
+    limit: int,
+) -> list[dict]:
+    street = str(parsed.get("street") or "").strip()
+    prefixes = openplz_street_norm_variants(street)
+    postcode = str(parsed.get("postcode") or "").strip()
+    place = str(parsed.get("place") or "").strip()
+    openplz_db_signature = openplz_signature()
+    if len(street) < 2 or not prefixes or openplz_db_signature == (0, 0):
+        return []
+    place_signature = gn250_places_signature()
+    context_states = {
+        normalize_state_key(str(context.get("state") or ""))
+        for context in parsed.get("place_contexts") or []
+        if normalize_state_key(str(context.get("state") or "")) in allowed_states
+    }
+    search_states = context_states or allowed_states
+    results: list[dict] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    try:
+        con = sqlite3.connect(f"file:{OPENPLZ_DB}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        for state in sorted(search_states):
+            storage_states = openplz_storage_state_keys(state, openplz_db_signature)
+            if not storage_states:
+                continue
+            prefix_clause = " OR ".join("(street_norm >= ? AND street_norm < ?)" for _ in prefixes)
+            params: list[object] = [bound for prefix in prefixes for bound in (prefix, f"{prefix}\uffff")]
+            clauses = [f"({prefix_clause})", f"state_key IN ({','.join('?' for _ in storage_states)})"]
+            params.extend(storage_states)
+            if postcode:
+                clauses.append("postal_code = ?")
+                params.append(postcode)
+            if place:
+                locality_norms = city_norms_for_state_context(place, state)
+                if locality_norms:
+                    clauses.append(f"locality_norm IN ({','.join('?' for _ in locality_norms)})")
+                    params.extend(locality_norms)
+            rows = con.execute(
+                f"""
+                SELECT street, street_norm, postal_code, locality, state_key
+                FROM streets
+                WHERE {' AND '.join(clauses)}
+                ORDER BY street_norm, locality_norm, postal_code
+                LIMIT ?
+                """,
+                [*params, max(48, min(int(limit) * 8, 128))],
+            ).fetchall()
+            for row in rows:
+                street_label = str(row["street"] or "").strip()
+                locality = str(row["locality"] or "").strip()
+                post_code = str(row["postal_code"] or "").strip()
+                state_key = normalize_state_key(str(row["state_key"] or state))
+                key = (state_key, normalize_geocoder_text(street_label), post_code, normalize_place_search_text(locality))
+                if not street_label or key in seen:
+                    continue
+                seen.add(key)
+                center, bbox = _openplz_street_geometry(locality, state_key, place_signature)
+                item = {
+                    "kind": "street",
+                    "result_type": "street",
+                    "state": state_key,
+                    "state_label": state_display_name(state_key),
+                    "center": center,
+                    "bbox": bbox,
+                    "zoom": 17.4,
+                    "requires_resolution": True,
+                    "feature": {
+                        "street": street_label,
+                        "municipality": locality,
+                        "post_code": post_code,
+                        "country": "Deutschland",
+                    },
+                }
+                results.append(_format_unified_street_result(item, street_label, locality, post_code))
+        con.close()
+    except sqlite3.Error:
+        return []
+    return results
+
+
+def _state_index_street_suggestions(
+    parsed: dict,
+    allowed_states: set[str],
+    limit: int,
+) -> list[dict]:
+    """Development fallback used only when the central OpenPLZ DB is absent."""
+    prefixes = normalize_geocoder_text_variants(str(parsed.get("street") or ""))
+    if not prefixes:
+        return []
+    results: list[dict] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    prefix_clause = " OR ".join("(street_norm >= ? AND street_norm < ?)" for _ in prefixes)
+    prefix_params = [bound for prefix in prefixes for bound in (prefix, f"{prefix}\uffff")]
+    for entry in search_db_entries_for_states(tuple(sorted(allowed_states))):
+        try:
+            rows = search_db_fetchall(
+                entry.path,
+                f"""
+                SELECT *
+                FROM street_lookup
+                WHERE {prefix_clause}
+                ORDER BY address_count DESC, label
+                LIMIT ?
+                """,
+                [*prefix_params, max(12, int(limit) * 2)],
+            )
+        except sqlite3.Error:
+            continue
+        for row in rows:
+            street_label = str(row["street_label"] or "").strip()
+            postcode = str(row["post_code"] or "").strip()
+            locality = search_result_city_label(row["city_label"], postcode, entry.name)
+            key = (entry.name, normalize_geocoder_text(street_label), postcode, normalize_place_search_text(locality))
+            if not street_label or key in seen:
+                continue
+            seen.add(key)
+            item = search_street_result_from_row(row, entry.name, street_label, locality)
+            results.append(_format_unified_street_result(item, street_label, locality, postcode))
+    return results
+
+
+def _format_unified_place_result(item: dict) -> dict:
+    state_label = str(item.get("state_label") or state_display_name(str(item.get("state") or ""))).strip()
+    subtitle = str(item.get("subtitle") or "").strip()
+    if state_label and state_label.casefold() not in subtitle.casefold():
+        subtitle = " · ".join(part for part in (subtitle, state_label) if part)
+    item["primary_label"] = str(item.get("label") or item.get("value") or "Ort")
+    item["secondary_label"] = subtitle
+    item["subtitle"] = subtitle
+    item["query"] = str(item.get("value") or item.get("label") or "")
+    return item
+
+
+@lru_cache(maxsize=2048)
+def _openplz_postcode_places_cached(
+    postcode: str,
+    states_key: tuple[str, ...],
+    limit: int,
+    openplz_db_signature: tuple[int, int],
+    place_signature: tuple[int, int],
+) -> tuple[dict, ...]:
+    """Resolve a complete postcode to one or more official place results."""
+    del place_signature
+    post_code = str(postcode or "").strip()
+    allowed_states = set(states_key)
+    if (
+        not re.fullmatch(r"\d{5}", post_code)
+        or not allowed_states
+        or openplz_db_signature == (0, 0)
+    ):
+        return tuple()
+    try:
+        con = sqlite3.connect(f"file:{OPENPLZ_DB}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            # OpenPLZ is authoritative for postcode/locality membership.  The
+            # bounded DISTINCT result also preserves shared postcodes instead
+            # of silently selecting the first locality.
+            rows = con.execute(
+                """
+                SELECT DISTINCT locality, state_key
+                FROM streets
+                WHERE postal_code = ?
+                ORDER BY locality, state_key
+                LIMIT ?
+                """,
+                (post_code, max(32, min(int(limit) * 8, 256))),
+            ).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return tuple()
+
+    results: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        state = normalize_state_key(str(row["state_key"] or ""))
+        if state not in allowed_states:
+            continue
+        source_locality = str(row["locality"] or "").strip()
+        locality = city_display_name_for_state(source_locality, state)
+        if not locality:
+            continue
+        key = (state, normalize_place_search_text(locality))
+        if key in seen:
+            continue
+        seen.add(key)
+        center, bbox = _openplz_street_geometry(locality, state)
+        state_label = state_display_name(state)
+        secondary = " · ".join(part for part in (post_code, state_label) if part)
+        results.append({
+            "kind": "place",
+            "result_type": "place",
+            "label": locality,
+            "value": locality,
+            "query": locality,
+            "primary_label": locality,
+            "secondary_label": secondary,
+            "subtitle": secondary,
+            "municipality": locality,
+            "post_code": post_code,
+            "state": state,
+            "state_label": state_label,
+            "center": center,
+            "bbox": bbox,
+            "zoom": 12.0,
+        })
+        if len(results) >= int(limit):
+            break
+    return tuple(results)
+
+
+def openplz_postcode_place_suggestions(
+    postcode: str,
+    allowed_states: set[str],
+    limit: int,
+) -> list[dict]:
+    return [
+        dict(item)
+        for item in _openplz_postcode_places_cached(
+            str(postcode or "").strip(),
+            tuple(sorted(state for state in allowed_states if state)),
+            int(limit),
+            openplz_signature(),
+            gn250_places_signature(),
+        )
+    ]
+
+
+def search_unified_address_suggestions_for_dataset(
+    dataset: str,
+    q: str,
+    limit: int,
+    state: str = "",
+    near_lon: float | None = None,
+    near_lat: float | None = None,
+    exact_house_number: bool = False,
+    include_parse_metadata: bool = False,
+) -> dict:
+    query = re.sub(r"\s+", " ", str(q or "")).strip()
+    if len(query) < 2:
+        return {"query": query, "count": 0, "results": []}
+    if not is_virtual_germany_dataset(dataset):
+        get_dataset(dataset)
+    allowed_states = search_suggestion_states_for_dataset(dataset, state)
+    if re.fullmatch(r"\d{5}", query):
+        postcode_results = openplz_postcode_place_suggestions(
+            query,
+            allowed_states,
+            int(limit),
+        )
+        return {
+            "query": query,
+            "count": len(postcode_results),
+            "results": postcode_results,
+        }
+    parsed = parse_unified_address_query(query, allowed_states)
+    results: list[dict] = []
+
+    if parsed.get("has_house_number") and parsed.get("street"):
+        results.extend(
+            _unified_address_results(
+                parsed,
+                allowed_states,
+                int(limit),
+                near_lon,
+                near_lat,
+                exact_house_number=exact_house_number,
+            )
+        )
+
+    has_address_results = any(item.get("result_type") == "address" for item in results)
+    if not has_address_results and parsed.get("street") and len(str(parsed.get("street") or "")) >= 2:
+        place = str(parsed.get("place") or "").strip()
+        postcode = str(parsed.get("postcode") or "").strip()
+        street_results: list[dict] = []
+        if place:
+            scoped = search_street_suggestions_for_dataset(
+                dataset,
+                place,
+                str(parsed.get("street") or ""),
+                max(int(limit) * 2, 12),
+                state=state,
+            ).get("results") or []
+            for source in scoped:
+                item = dict(source)
+                street_label = str(item.get("value") or item.get("label") or "").strip()
+                item_state = normalize_state_key(str(item.get("state") or state or ""))
+                locality_source = str(
+                    item.get("municipality")
+                    or item.get("subtitle")
+                    or (parsed.get("place_context") or {}).get("name")
+                    or place
+                ).strip()
+                locality = city_display_name_for_state(locality_source, item_state)
+                postcode_value = str(item.get("post_code") or "").strip()
+                street_results.append(_format_unified_street_result(item, street_label, locality, postcode_value))
+        if not street_results:
+            street_results.extend(_openplz_global_street_suggestions(parsed, allowed_states, max(int(limit) * 3, 18)))
+        if not street_results and openplz_signature() == (0, 0):
+            street_results.extend(_state_index_street_suggestions(parsed, allowed_states, max(int(limit) * 2, 12)))
+        results.extend(street_results)
+
+    place_query = str(parsed.get("place") or "").strip()
+    if not parsed.get("street"):
+        place_query = place_query or re.sub(r"(?<!\d)\d{5}(?!\d)", " ", query).strip()
+    if not has_address_results and place_query and len(place_query) >= 2:
+        place_results = search_place_suggestions_for_dataset(dataset, place_query, max(int(limit), 8), state=state).get("results") or []
+        results.extend(_format_unified_place_result(dict(item)) for item in place_results)
+
+    ranked = rank_unified_search_results(results, parsed, near_lon, near_lat)[:int(limit)]
+    payload = {"query": query, "count": len(ranked), "results": ranked}
+    if include_parse_metadata:
+        payload["_parsed_address"] = parsed
+    return payload
+
+
+_FREE_TEXT_PARCEL_NUMBER_RE = re.compile(
+    r"(?<![\w/])(\d{1,9}(?:\s*/\s*\d{1,9})?)(?![\w/])"
+)
+_FREE_TEXT_PARCEL_MARKER_RE = re.compile(
+    r"\b(?:flur(?:stueck|stück)|flst\.?)(?:\s*nr\.?)?\s*"
+    r"(\d{1,9}(?:\s*/\s*\d{1,9})?)\b",
+    re.IGNORECASE,
+)
+_FREE_TEXT_FLUR_MARKER_RE = re.compile(
+    r"\bflur\b(?!\s*(?:stueck|stück))(?:\s*nr\.?)?\s*(\d{1,9})\b",
+    re.IGNORECASE,
+)
+
+
+def _free_text_parcel_number(value: str) -> str:
+    return re.sub(r"\s*/\s*", "/", str(value or "").strip())
+
+
+def _free_text_parcel_clean_words(value: str) -> str:
+    cleaned = re.sub(
+        r"\b(?:gemarkung|flur(?:stueck|stück)|flst\.?)\b",
+        " ",
+        str(value or ""),
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\b(?:in|der)\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[,;:]", " ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _overlaps_span(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start < span_end and end > span_start for span_start, span_end in spans)
+
+
+def _exact_gemarkung_identities(
+    phrase: str,
+    allowed_states: set[str],
+    limit: int = 120,
+) -> list[dict]:
+    """Resolve a complete Gemarkung name/code through parcel_lookup only."""
+    candidate = re.sub(r"\s+", " ", str(phrase or "")).strip(" ,;:")
+    if len(candidate) < 2 or not any(character.isalpha() for character in candidate):
+        return []
+    code_match = re.search(
+        r"\(\s*((?=[0-9A-Za-z]*[0-9])[0-9A-Za-z]+)\s*\)\s*$",
+        candidate,
+    )
+    requested_code = code_match.group(1).strip() if code_match else ""
+    candidate_name = candidate[:code_match.start()].strip() if code_match else candidate
+    candidate_norms = set(normalize_geocoder_text_variants(candidate_name))
+    if not candidate_norms:
+        return []
+    states_key = tuple(sorted(state for state in allowed_states if state))
+    suggestions = search_gemarkung_suggestions_cached(
+        candidate,
+        max(50, int(limit)),
+        states_key,
+        search_db_signature_for_states(allowed_states),
+    )
+    exact: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for source in suggestions:
+        item = dict(source)
+        label = str(item.get("gemarkung") or item.get("label") or "").strip()
+        code = str(item.get("gemarkungsnummer") or "").strip()
+        label_name = label
+        if code:
+            label_name = re.sub(
+                rf"\s*\(\s*{re.escape(code)}\s*\)\s*$",
+                "",
+                label_name,
+            ).strip()
+        label_norms = {
+            normalized
+            for alias in gn250_place_name_aliases(label_name, str(item.get("state") or ""))
+            for normalized in normalize_geocoder_text_variants(alias)
+            if normalized
+        }
+        if not candidate_norms.intersection(label_norms):
+            continue
+        if requested_code and code.casefold() != requested_code.casefold():
+            continue
+        state = normalize_state_key(str(item.get("state") or ""))
+        if state not in allowed_states:
+            continue
+        key = (state, code, normalize_geocoder_text(label_name))
+        if key in seen:
+            continue
+        seen.add(key)
+        item["state"] = state
+        item["gemarkung"] = label
+        exact.append(item)
+
+    # Do not let a state with many homonyms consume the entire identity budget.
+    by_state: dict[str, list[dict]] = {}
+    for item in exact:
+        by_state.setdefault(str(item["state"]), []).append(item)
+    fair: list[dict] = []
+    while by_state and len(fair) < int(limit):
+        for state in sorted(tuple(by_state)):
+            bucket = by_state[state]
+            fair.append(bucket.pop(0))
+            if not bucket:
+                by_state.pop(state, None)
+            if len(fair) >= int(limit):
+                break
+    return fair
+
+
+def _free_text_parcel_number_options(query: str) -> tuple[list[dict], list[tuple[int, int]], bool]:
+    """Return bounded candidate interpretations without consulting feature data."""
+    raw = str(query or "")
+    parcel_matches = list(_FREE_TEXT_PARCEL_MARKER_RE.finditer(raw))
+    flur_matches = list(_FREE_TEXT_FLUR_MARKER_RE.finditer(raw))
+    if len(parcel_matches) > 1 or len(flur_matches) > 1:
+        return [], [], False
+    explicit_parcel = parcel_matches[0] if parcel_matches else None
+    explicit_flur = flur_matches[0] if flur_matches else None
+    protected_spans = [match.span() for match in parcel_matches + flur_matches]
+    code_spans = [
+        match.span()
+        for match in re.finditer(
+            r"\(\s*(?=[0-9A-Za-z]*[0-9])[0-9A-Za-z]+\s*\)",
+            raw,
+        )
+    ]
+    numeric_matches = [
+        match
+        for match in _FREE_TEXT_PARCEL_NUMBER_RE.finditer(raw)
+        if not _overlaps_span(*match.span(), protected_spans + code_spans)
+    ]
+    parcel_value = _free_text_parcel_number(explicit_parcel.group(1)) if explicit_parcel else ""
+    flur_value = str(explicit_flur.group(1)).strip() if explicit_flur else ""
+    explicit_signal = bool(
+        explicit_parcel
+        or explicit_flur
+        or re.search(r"\bgemarkung\b", raw, re.IGNORECASE)
+        or code_spans
+    )
+    options: list[dict] = []
+
+    def add(
+        flur: str,
+        flurstueck: str,
+        matches: list[re.Match],
+        signal_rank: int,
+        gemarkung_code: str = "",
+    ) -> None:
+        parcel = _free_text_parcel_number(flurstueck)
+        if not parcel or not re.fullmatch(r"\d{1,9}(?:/\d{1,9})?", parcel):
+            return
+        option = {
+            "flur": str(flur or "").strip(),
+            "flurstueck": parcel,
+            "signal_rank": int(signal_rank),
+            "gemarkung_code": str(gemarkung_code or "").strip(),
+            "number_spans": [match.span() for match in matches],
+        }
+        key = (option["flur"], option["flurstueck"], option["gemarkung_code"])
+        if key not in {
+            (item["flur"], item["flurstueck"], item["gemarkung_code"])
+            for item in options
+        }:
+            options.append(option)
+
+    if explicit_parcel:
+        if explicit_flur:
+            if not numeric_matches:
+                add(flur_value, parcel_value, [], 0)
+        elif not numeric_matches:
+            add("", parcel_value, [], 0)
+        elif len(numeric_matches) == 1 and "/" not in numeric_matches[0].group(1):
+            add(numeric_matches[0].group(1), parcel_value, numeric_matches, 0)
+            if len(numeric_matches[0].group(1)) == 4:
+                # Parentheses are commonly omitted when a known four-digit
+                # Gemarkungsnummer is pasted after the name.  Keep the Flur
+                # interpretation too and let exact parcel_lookup rows decide.
+                add("", parcel_value, numeric_matches, 0, numeric_matches[0].group(1))
+    elif explicit_flur:
+        if len(numeric_matches) == 1:
+            add(flur_value, numeric_matches[0].group(1), numeric_matches, 0)
+    else:
+        slash_matches = [match for match in numeric_matches if "/" in match.group(1)]
+        plain_matches = [match for match in numeric_matches if "/" not in match.group(1)]
+        if len(slash_matches) == 1 and len(plain_matches) <= 1:
+            add(
+                plain_matches[0].group(1) if plain_matches else "",
+                slash_matches[0].group(1),
+                numeric_matches,
+                1,
+            )
+            explicit_signal = True
+        elif not slash_matches and len(plain_matches) == 1:
+            implicit_value = plain_matches[0].group(1)
+            # A bare five-digit token is much more likely to be a postcode.
+            if explicit_signal or len(implicit_value) <= 4:
+                add("", implicit_value, plain_matches, 2 if not explicit_signal else 0)
+        elif not slash_matches and len(plain_matches) == 2 and all(len(match.group(1)) <= 4 for match in plain_matches):
+            # Both common compact orders are exact-validated below.  If both
+            # exist, returning both is safer than silently picking one.
+            add(plain_matches[0].group(1), plain_matches[1].group(1), plain_matches, 2)
+            add(plain_matches[1].group(1), plain_matches[0].group(1), plain_matches, 2)
+    removal_spans = protected_spans + [span for option in options for span in option["number_spans"]]
+    return options, removal_spans, explicit_signal
+
+
+def parse_free_text_parcel_query(
+    query: str,
+    allowed_states: set[str],
+) -> dict:
+    """Conservatively parse parcel text and exact-validate Gemarkung identities."""
+    raw_query = re.sub(r"\s+", " ", str(query or "")).strip()
+    strong_intent = bool(
+        _FREE_TEXT_PARCEL_MARKER_RE.search(raw_query)
+        or _FREE_TEXT_FLUR_MARKER_RE.search(raw_query)
+        or re.search(r"\bgemarkung\b", raw_query, re.IGNORECASE)
+    )
+    if len(raw_query) < 2 or not any(character.isalpha() for character in raw_query):
+        return {
+            "query": raw_query,
+            "explicit_signal": False,
+            "strong_intent": strong_intent,
+            "candidates": [],
+        }
+    options, removal_spans, explicit_signal = _free_text_parcel_number_options(raw_query)
+    if not options:
+        return {
+            "query": raw_query,
+            "explicit_signal": explicit_signal,
+            "strong_intent": strong_intent,
+            "candidates": [],
+        }
+    strong_explicit_signal = bool(
+        _FREE_TEXT_PARCEL_MARKER_RE.search(raw_query)
+        or _FREE_TEXT_FLUR_MARKER_RE.search(raw_query)
+        or re.search(r"\bgemarkung\b", raw_query, re.IGNORECASE)
+        or re.search(
+            r"\(\s*(?=[0-9A-Za-z]*[0-9])[0-9A-Za-z]+\s*\)",
+            raw_query,
+        )
+    )
+    if not strong_explicit_signal and is_likely_street_name_query(raw_query):
+        return {
+            "query": raw_query,
+            "explicit_signal": False,
+            "strong_intent": strong_intent,
+            "candidates": [],
+        }
+
+    characters = list(raw_query)
+    for start, end in removal_spans:
+        characters[start:end] = " " * (end - start)
+    words_text = _free_text_parcel_clean_words("".join(characters))
+    tokens = [token for token in words_text.split() if token]
+    if not tokens or len(tokens) > 10:
+        return {
+            "query": raw_query,
+            "explicit_signal": explicit_signal,
+            "strong_intent": strong_intent,
+            "candidates": [],
+        }
+    has_parenthesized_code = bool(re.search(
+        r"\(\s*(?=[0-9A-Za-z]*[0-9])[0-9A-Za-z]+\s*\)",
+        words_text,
+    ))
+
+    phrase_candidates: list[tuple[tuple[int, int, int], str, str]] = []
+    seen_phrases: set[tuple[str, str]] = set()
+
+    def add_phrase(start: int, end: int, source_rank: int) -> None:
+        phrase = " ".join(tokens[start:end]).strip()
+        context = " ".join(tokens[:start] + tokens[end:]).strip()
+        key = (normalize_geocoder_text(phrase), re.sub(r"\D", "", phrase))
+        if (
+            len(phrase) < 2
+            or not any(character.isalpha() for character in phrase)
+            or (has_parenthesized_code and "(" not in phrase)
+            or key in seen_phrases
+        ):
+            return
+        seen_phrases.add(key)
+        phrase_candidates.append(((source_rank, start, -(end - start)), phrase, context))
+
+    # Natural language names the Gemarkung first after "in" and commonly
+    # follows it with a parent municipality: "... in Bemerode Hannover".
+    in_match = re.search(r"\bin\b", raw_query, re.IGNORECASE)
+    if in_match:
+        for length in range(min(6, len(tokens)), 0, -1):
+            add_phrase(0, length, 0)
+    if re.search(r"\bgemarkung\b", raw_query, re.IGNORECASE):
+        for length in range(min(6, len(tokens)), 0, -1):
+            add_phrase(0, length, 0)
+    if has_parenthesized_code:
+        for start in range(len(tokens)):
+            for end in range(min(len(tokens), start + 6), start, -1):
+                if "(" in " ".join(tokens[start:end]):
+                    add_phrase(start, end, 0)
+    compact_slash_tail = bool(
+        not strong_explicit_signal
+        and len(tokens) >= 2
+        and any("/" in str(option.get("flurstueck") or "") for option in options)
+        and re.search(r"\d{1,9}\s*/\s*\d{1,9}\s*[.,;:]?\s*$", raw_query)
+    )
+    if compact_slash_tail:
+        # Compact one-box searches often use ``Gemarkung Gemeinde 100/1``
+        # without cadastral marker words.  Try bounded contiguous Gemarkung
+        # phrases, but only when a separate municipality tail/head remains.
+        # Candidates from this branch are accepted below only if that context
+        # is an actual municipality and the resolved parcel lies inside it.
+        for length in range(min(6, len(tokens) - 1), 0, -1):
+            for start in range(0, len(tokens) - length + 1):
+                if start == 0 and length == len(tokens):
+                    continue
+                add_phrase(start, start + length, 1)
+                if len(phrase_candidates) >= 32:
+                    break
+            if len(phrase_candidates) >= 32:
+                break
+    if not has_parenthesized_code and not strong_explicit_signal:
+        add_phrase(0, len(tokens), 2)
+    elif not has_parenthesized_code:
+        for length in range(min(6, len(tokens)), 0, -1):
+            for start in range(0, len(tokens) - length + 1):
+                add_phrase(start, start + length, 2)
+                if len(phrase_candidates) >= 32:
+                    break
+            if len(phrase_candidates) >= 32:
+                break
+    phrase_candidates.sort(key=lambda item: item[0])
+
+    candidates: list[dict] = []
+    seen_candidates: set[tuple[str, str, str, str, str]] = set()
+    identity_cache: dict[str, list[dict]] = {}
+    resolved_phrases: list[tuple[tuple[int, int, int], str, list[dict]]] = []
+    for phrase_rank, phrase, context_text in phrase_candidates:
+        if phrase not in identity_cache:
+            identity_cache[phrase] = _exact_gemarkung_identities(phrase, allowed_states)
+        if identity_cache[phrase]:
+            resolved_phrases.append((phrase_rank, context_text, identity_cache[phrase]))
+    best_source_rank = min((rank[0] for rank, _context, _identities in resolved_phrases), default=None)
+    resolved_identity_codes = {
+        str(identity.get("gemarkungsnummer") or "").strip().casefold()
+        for _rank, _context, identities in resolved_phrases
+        for identity in identities
+        if str(identity.get("gemarkungsnummer") or "").strip()
+    }
+    validated_bare_codes = {
+        str(option.get("gemarkung_code") or "").strip().casefold()
+        for option in options
+        if str(option.get("gemarkung_code") or "").strip().casefold() in resolved_identity_codes
+    }
+    for phrase_rank, context_text, identities in resolved_phrases:
+        # An explicit/natural Gemarkung parse is authoritative; do not also
+        # reinterpret its municipality tail as another Gemarkung.
+        if best_source_rank is not None and phrase_rank[0] != best_source_rank:
+            continue
+        if phrase_rank[0] >= 2 and context_text and not strong_explicit_signal:
+            # A compact parcel query must consist of an exact Gemarkung plus
+            # its number.  Otherwise a normal address with a slash-house-number
+            # and a trailing city could be misread as a parcel.
+            continue
+        for identity in identities:
+            state = str(identity["state"])
+            municipality = requested_municipality(context_text, {state}) if context_text else None
+            requires_municipality_match = bool(
+                phrase_rank[0] == 1 and compact_slash_tail and not strong_explicit_signal
+            )
+            if requires_municipality_match:
+                if not municipality:
+                    continue
+                # A district/locality may resolve to its parent municipality.
+                # For the compact syntax the remaining words must name the
+                # municipality itself, otherwise ``Street 1/2 District`` can
+                # be reinterpreted as a parcel in a homonymous Gemarkung.  Do
+                # not use ``source_name`` here: GN250 may choose an arbitrary
+                # child district even when the input exactly says Hannover.
+                municipality_name = str(municipality.get("name") or "").strip()
+                if (
+                    not municipality_name
+                    or normalize_place_search_text(context_text)
+                    != normalize_place_search_text(municipality_name)
+                ):
+                    continue
+            label = str(identity.get("gemarkung") or identity.get("label") or "").strip()
+            code = str(identity.get("gemarkungsnummer") or "").strip()
+            gemarkung_query = label
+            if code and not re.search(rf"\(\s*{re.escape(code)}\s*\)\s*$", gemarkung_query):
+                # Parentheticals may be part of the official name (for
+                # example ``Freden (Leine)``).  Append only the cadastral code
+                # and let the exact lookup strip that final code again.
+                gemarkung_query = f"{label} ({code})"
+            for option in options:
+                requested_option_code = str(option.get("gemarkung_code") or "").strip()
+                if (
+                    validated_bare_codes
+                    and not requested_option_code
+                    and str(option.get("flur") or "").strip().casefold() in validated_bare_codes
+                ):
+                    continue
+                if requested_option_code and requested_option_code.casefold() != code.casefold():
+                    continue
+                key = (
+                    state,
+                    code or normalize_geocoder_text(label),
+                    option["flur"],
+                    option["flurstueck"],
+                    normalize_place_search_text(str((municipality or {}).get("name") or "")),
+                )
+                if key in seen_candidates:
+                    continue
+                seen_candidates.add(key)
+                candidates.append({
+                    "gemarkung": gemarkung_query,
+                    "gemarkungsnummer": code,
+                    "flur": option["flur"],
+                    "flurstueck": option["flurstueck"],
+                    "state": state,
+                    "state_label": str(identity.get("state_label") or state_display_name(state)),
+                    "municipality_context": dict(municipality) if municipality else None,
+                    "requires_municipality_match": requires_municipality_match,
+                    "signal_rank": option["signal_rank"],
+                    "phrase_rank": phrase_rank,
+                })
+    candidates.sort(key=lambda item: (
+        int(item["signal_rank"]),
+        item["phrase_rank"],
+    ))
+    return {
+        "query": raw_query,
+        "explicit_signal": explicit_signal or any(int(item["signal_rank"]) <= 1 for item in candidates),
+        "strong_intent": strong_intent,
+        "candidates": candidates[:120],
+    }
+
+
+def _contextual_parcel_query_parts(query: str) -> dict | None:
+    """Extract one exact parcel number plus bounded address context."""
+    raw_query = re.sub(r"\s+", " ", str(query or "")).strip()
+    slash_matches = list(re.finditer(
+        r"(?<![\w/])(\d{1,9}\s*/\s*\d{1,9})(?![\w/])",
+        raw_query,
+    ))
+    if len(slash_matches) > 1:
+        return None
+    flur_match = _FREE_TEXT_FLUR_MARKER_RE.search(raw_query)
+    parcel_marker = _FREE_TEXT_PARCEL_MARKER_RE.search(raw_query)
+    explicit_parcel = bool(parcel_marker)
+    parcel_value_spans = [
+        match.span()
+        for match in slash_matches
+    ]
+    if parcel_marker:
+        parcel_value_spans.append(parcel_marker.span(1))
+    if flur_match:
+        parcel_value_spans.append(flur_match.span(1))
+    postcode_match = next(
+        (
+            match
+            for match in re.finditer(r"(?<!\d)(\d{5})(?!\d)", raw_query)
+            if not _overlaps_span(*match.span(), parcel_value_spans)
+        ),
+        None,
+    )
+    postcode = postcode_match.group(1) if postcode_match else ""
+
+    parcel_number_span: tuple[int, int]
+    if slash_matches:
+        parcel_number = _free_text_parcel_number(slash_matches[0].group(1))
+        parcel_number_span = slash_matches[0].span()
+    else:
+        marker_value = (
+            _free_text_parcel_number(parcel_marker.group(1))
+            if parcel_marker
+            else ""
+        )
+        if marker_value and re.fullmatch(r"\d{1,9}", marker_value):
+            parcel_number = marker_value
+            parcel_number_span = parcel_marker.span(1)
+        else:
+            protected_spans = [
+                match.span()
+                for match in (flur_match, postcode_match)
+                if match is not None
+            ]
+            plain_matches = [
+                match
+                for match in re.finditer(
+                    r"(?<![\w/])(\d{1,4})(?![\w/])",
+                    raw_query,
+                )
+                if not _overlaps_span(*match.span(), protected_spans)
+            ]
+            if len(plain_matches) != 1:
+                return None
+            parcel_number = plain_matches[0].group(1)
+            parcel_number_span = plain_matches[0].span()
+
+    numerator, separator, denominator = parcel_number.partition("/")
+    if not numerator or (separator and not denominator):
+        return None
+    flur = str(flur_match.group(1) or "").strip() if flur_match else ""
+
+    characters = list(raw_query)
+    removal_spans = [parcel_number_span]
+    if flur_match:
+        removal_spans.append(flur_match.span())
+    if parcel_marker:
+        removal_spans.append(parcel_marker.span())
+    if postcode_match:
+        removal_spans.append(postcode_match.span())
+    for start, end in removal_spans:
+        characters[start:end] = " " * (end - start)
+    context = "".join(characters)
+    context = re.sub(
+        r"\b(?:gemarkung|flur(?:stueck|stück)|flst\.?)\b",
+        " ",
+        context,
+        flags=re.IGNORECASE,
+    )
+    context = re.sub(r"[,;:]", " ", context)
+    context = re.sub(r"\s+", " ", context).strip()
+    if not context and not postcode:
+        return None
+    address_candidates = [
+        candidate
+        for candidate in geocoder_direct_candidates(context)
+        if candidate[0] == "address" and not candidate[3].strip()
+    ]
+    chosen_address = max(
+        address_candidates,
+        key=lambda candidate: (
+            len(search_tokens(candidate[1])),
+            len(candidate[1]),
+            len(candidate[2]),
+        ),
+        default=None,
+    )
+    house_number = str(chosen_address[2] if chosen_address else "").strip(" ,;")
+    context_tokens = [token for token in context.split() if token]
+    if len(context_tokens) > 10:
+        return None
+    phrases: list[str] = []
+    for length in range(min(6, len(context_tokens)), 0, -1):
+        for start in range(0, len(context_tokens) - length + 1):
+            phrase = " ".join(context_tokens[start:start + length]).strip(" ,;:")
+            if len(phrase) >= 2 and any(character.isalpha() for character in phrase):
+                if phrase not in phrases:
+                    phrases.append(phrase)
+            if len(phrases) >= 48:
+                break
+        if len(phrases) >= 48:
+            break
+    return {
+        "query": raw_query,
+        "flurstueck": parcel_number,
+        "zaehler": numerator,
+        "nenner": denominator,
+        "flur": flur,
+        "postcode": postcode,
+        "house_number": house_number,
+        "context": context,
+        "phrases": tuple(phrases),
+        "explicit_parcel": explicit_parcel,
+        "plain_number": not bool(separator),
+    }
+
+
+def _contextual_parcel_words(value: str) -> set[str]:
+    words: set[str] = set()
+    for variant in normalize_geocoder_text_variants(value):
+        words.update(re.findall(r"[a-z0-9]+", variant))
+    return words
+
+
+def _contextual_parcel_display_city(row: sqlite3.Row, state: str) -> str:
+    postcode = str(row["linked_post_code"] or "").strip()
+    source_city = str(row["linked_city_label"] or "").strip()
+    city = search_result_city_label(source_city, postcode, state)
+    if city and not re.fullmatch(r"\d+", city):
+        return city
+
+    street = str(row["linked_street_label"] or "").strip()
+    if street and postcode:
+        openplz_city = _openplz_locality_for_address_cached(
+            state,
+            street,
+            postcode,
+            openplz_signature(),
+        )
+        city = search_result_city_label(openplz_city, postcode, state)
+        if city and not re.fullmatch(r"\d+", city):
+            return city
+
+    if row["lon"] is not None and row["lat"] is not None:
+        place = municipality_at(
+            state,
+            fast_float(row["lon"]),
+            fast_float(row["lat"]),
+        )
+        municipality = city_display_name_for_state(
+            str((place or {}).get("name") or ""),
+            state,
+        )
+        if municipality and not re.fullmatch(r"\d+", municipality):
+            return municipality
+
+    gemarkung = str(row["gemarkung_label"] or "").strip()
+    code = str(row["gemarkungsnummer"] or "").strip()
+    if code:
+        gemarkung = re.sub(
+            rf"\s*\(\s*{re.escape(code)}\s*\)\s*$",
+            "",
+            gemarkung,
+        ).strip()
+    fallback = city_display_name_for_state(gemarkung, state)
+    return fallback if fallback and not re.fullmatch(r"\d+", fallback) else ""
+
+
+def _contextual_parcel_row_matches(row: sqlite3.Row, parsed: dict, state: str) -> bool:
+    requested_house = normalize_house_number_semantic(
+        str(parsed.get("house_number") or "")
+    )
+    if (
+        requested_house
+        and normalize_house_number_semantic(
+            str(row["linked_house_number_label"] or "")
+        ) != requested_house
+    ):
+        return False
+    requested_variants = []
+    for variant in normalize_geocoder_text_variants(str(parsed.get("context") or "")):
+        words = set(re.findall(r"[a-z0-9]+", variant))
+        if parsed.get("explicit_parcel"):
+            words.difference_update({"in", "der", "die", "das", "von"})
+        requested_variants.append(words)
+    source_city = str(row["linked_city_label"] or "").strip()
+    canonical_city = city_display_name_for_state(source_city, state)
+    available_words: set[str] = set()
+    for value in (
+        str(row["linked_street_label"] or ""),
+        str(row["linked_house_number_label"] or ""),
+        source_city,
+        canonical_city,
+        str(row["gemarkung_label"] or ""),
+        str(row["linked_post_code"] or ""),
+    ):
+        available_words.update(_contextual_parcel_words(value))
+    return not requested_variants or any(
+        not requested_words or requested_words.issubset(available_words)
+        for requested_words in requested_variants
+    )
+
+
+_ADDRESSLESS_PARCEL_MAX_OPENPLZ_CONTEXTS = 6000
+_ADDRESSLESS_PARCEL_MAX_CANDIDATES = 128
+_ADDRESSLESS_PARCEL_MAX_VALIDATION_ROWS = 8192
+_ADDRESSLESS_PARCEL_MAX_BUILDING_DISTANCE_M = 10.0
+_CONTEXTUAL_PARCEL_STATE_SCAN_LIMIT = 256
+_CONTEXTUAL_PARCEL_STATE_RESULT_LIMIT = 32
+_CONTEXTUAL_PARCEL_DIRECT_POOL_LIMIT = 256
+_CONTEXTUAL_PARCEL_TOTAL_POOL_LIMIT = 384
+
+
+def _is_contextual_parcel_street_phrase(value: str) -> bool:
+    if is_likely_street_name_query(value):
+        return True
+    # ``search_tokens`` removes punctuation, so the common ``Bergstr.`` form
+    # becomes ``bergstr`` and is not covered by the long ``straße`` suffix.
+    # Require a real name prefix to avoid treating a bare ``Str.`` token as a
+    # street constraint.
+    return any(
+        len(token) >= 5 and token.casefold().endswith("str")
+        for token in search_tokens(value)
+    )
+
+
+def _addressless_parcel_street_phrases(context: str) -> list[dict]:
+    tokens = [token for token in str(context or "").split() if token]
+    candidates: list[dict] = []
+    seen: set[tuple[str, ...]] = set()
+    for length in range(min(6, len(tokens)), 0, -1):
+        for start in range(0, len(tokens) - length + 1):
+            phrase = " ".join(tokens[start:start + length]).strip()
+            if not _is_contextual_parcel_street_phrase(phrase):
+                continue
+            street_norms = openplz_street_norm_variants(phrase)
+            if not street_norms or street_norms in seen:
+                continue
+            seen.add(street_norms)
+            candidates.append({
+                "phrase": phrase,
+                "street_norms": street_norms,
+                "remaining_context": " ".join(
+                    tokens[:start] + tokens[start + length:]
+                ).strip(),
+                "token_count": length,
+            })
+    return candidates[:48]
+
+
+def _addressless_parcel_openplz_contexts(
+    parsed: dict,
+    allowed_states: set[str],
+    openplz_db_signature: tuple[int, int],
+) -> list[dict] | None:
+    if openplz_db_signature == (0, 0):
+        return []
+    phrase_candidates = _addressless_parcel_street_phrases(
+        str(parsed.get("context") or "")
+    )
+    if not phrase_candidates:
+        return []
+    by_street_norm: dict[str, list[dict]] = {}
+    for candidate in phrase_candidates:
+        for street_norm in candidate["street_norms"]:
+            by_street_norm.setdefault(street_norm, []).append(candidate)
+    street_norms = tuple(sorted(by_street_norm))
+    try:
+        con = sqlite3.connect(f"file:{OPENPLZ_DB}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            con.execute("PRAGMA query_only = ON")
+            # Resolve only state keys attached to this exact street.  Calling
+            # the generic resolver once per state would repeatedly scan the
+            # complete OpenPLZ table on a cold worker.
+            state_rows = con.execute(
+                f"""
+                SELECT DISTINCT state_key
+                FROM streets INDEXED BY idx_streets_norm_state
+                WHERE street_norm IN ({','.join('?' for _ in street_norms)})
+                """,
+                street_norms,
+            ).fetchall()
+            storage_to_state = {
+                str(row["state_key"] or "").strip(): canonical_state
+                for row in state_rows
+                if (
+                    canonical_state := normalize_state_key(
+                        str(row["state_key"] or "")
+                    )
+                ) in allowed_states
+            }
+            if not storage_to_state:
+                return []
+            storage_states = tuple(sorted(storage_to_state))
+            rows = con.execute(
+                f"""
+                SELECT
+                  street, street_norm, postal_code,
+                  locality, locality_norm,
+                  borough, borough_norm,
+                  suburb, suburb_norm,
+                  state_key
+                FROM streets INDEXED BY idx_streets_norm_state
+                WHERE street_norm IN ({','.join('?' for _ in street_norms)})
+                  AND state_key IN ({','.join('?' for _ in storage_states)})
+                ORDER BY street_norm, state_key, postal_code, locality_norm
+                LIMIT ?
+                """,
+                [
+                    *street_norms,
+                    *storage_states,
+                    _ADDRESSLESS_PARCEL_MAX_OPENPLZ_CONTEXTS + 1,
+                ],
+            ).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return []
+    if len(rows) > _ADDRESSLESS_PARCEL_MAX_OPENPLZ_CONTEXTS:
+        return None
+
+    matched_street_norms = {
+        str(row["street_norm"] or "")
+        for row in rows
+    }
+    matched_phrase_length = max((
+        int(candidate["token_count"])
+        for street_norm in matched_street_norms
+        for candidate in by_street_norm.get(street_norm, ())
+    ), default=0)
+    contexts: list[dict] = []
+    seen: set[tuple] = set()
+    for row in rows:
+        storage_state = str(row["state_key"] or "").strip()
+        state = storage_to_state.get(storage_state, "")
+        if not state:
+            continue
+        for phrase in by_street_norm.get(str(row["street_norm"] or ""), []):
+            if int(phrase["token_count"]) != matched_phrase_length:
+                continue
+            gemarkung_norms: list[str] = []
+            city_norms: list[str] = []
+            place_labels: list[str] = []
+            for label_key, norm_key in (
+                ("locality", "locality_norm"),
+                ("borough", "borough_norm"),
+                ("suburb", "suburb_norm"),
+            ):
+                label = str(row[label_key] or "").strip()
+                stored_norm = str(row[norm_key] or "").strip()
+                if label:
+                    place_labels.append(label)
+                # OpenPLZ already stores the normalized forms required by the
+                # exact parcel index.  Re-normalizing every label made common
+                # streets such as Bergstraße take seconds across ~4k rows.
+                normalized_values = (
+                    (stored_norm,)
+                    if stored_norm
+                    else (
+                        normalize_geocoder_text_variants(label)
+                        if label
+                        else tuple()
+                    )
+                )
+                for normalized in normalized_values:
+                    if normalized and normalized not in gemarkung_norms:
+                        gemarkung_norms.append(normalized)
+                    if normalized and normalized not in city_norms:
+                        city_norms.append(normalized)
+            postcode = str(row["postal_code"] or "").strip()
+            if postcode and postcode not in city_norms:
+                city_norms.append(postcode)
+            if not gemarkung_norms or not postcode:
+                continue
+            # Do this before allocating the result dictionary: OpenPLZ can
+            # contain multiple source rows for the same search context.
+            key = (
+                state,
+                phrase["phrase"],
+                phrase["remaining_context"],
+                postcode,
+                tuple(gemarkung_norms),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            contexts.append({
+                "state": state,
+                "street": str(phrase["phrase"]),
+                # OpenPLZ and ALKIS may store Straße/Str. differently.  Keep
+                # every exact alias of the recognized query phrase.
+                "street_norms": tuple(phrase["street_norms"]),
+                "postcode": postcode,
+                "locality": str(row["locality"] or "").strip(),
+                "place_labels": tuple(place_labels),
+                "gemarkung_norms": tuple(gemarkung_norms),
+                "city_norms": tuple(city_norms),
+                "remaining_context": str(phrase["remaining_context"]),
+            })
+    return contexts
+
+
+def _addressless_bbox_intersects(
+    first: tuple[float, float, float, float],
+    second: tuple[float, float, float, float],
+) -> bool:
+    return not (
+        first[2] < second[0]
+        or first[0] > second[2]
+        or first[3] < second[1]
+        or first[1] > second[3]
+    )
+
+
+def _addressless_point_bbox_distance_m(
+    lon: float,
+    lat: float,
+    bbox: tuple[float, float, float, float],
+) -> float:
+    nearest_lon = min(max(lon, bbox[0]), bbox[2])
+    nearest_lat = min(max(lat, bbox[1]), bbox[3])
+    latitude = (lat + nearest_lat) / 2.0
+    dx = (lon - nearest_lon) * 111_320.0 * max(
+        0.2,
+        math.cos(math.radians(latitude)),
+    )
+    dy = (lat - nearest_lat) * 110_540.0
+    return math.hypot(dx, dy)
+
+
+def _addressless_context_matches(
+    context: dict,
+    parcel_row: sqlite3.Row,
+    municipality: str,
+) -> bool:
+    requested_words = _contextual_parcel_words(
+        str(context.get("remaining_context") or "")
+    )
+    if not requested_words:
+        return True
+    available_words: set[str] = set()
+    for value in (
+        *context.get("place_labels", ()),
+        str(parcel_row["gemarkung_label"] or ""),
+        municipality,
+    ):
+        available_words.update(_contextual_parcel_words(str(value or "")))
+    return requested_words.issubset(available_words)
+
+
+def _addressless_explicit_street_parcel_suggestions(
+    parsed: dict,
+    entries: tuple[FeatureDbEntry, ...],
+    allowed_states: set[str],
+    openplz_db_signature: tuple[int, int],
+    limit: int,
+) -> list[dict]:
+    raw_query = str(parsed.get("query") or "")
+    if (
+        not _FREE_TEXT_FLUR_MARKER_RE.search(raw_query)
+        or not _FREE_TEXT_PARCEL_MARKER_RE.search(raw_query)
+        or parsed.get("house_number")
+        or not parsed.get("flur")
+    ):
+        return []
+    contexts = _addressless_parcel_openplz_contexts(
+        parsed,
+        allowed_states,
+        openplz_db_signature,
+    )
+    if contexts is None or not contexts:
+        return []
+    contexts_by_state_norm: dict[str, dict[str, list[dict]]] = {}
+    for context in contexts:
+        state_map = contexts_by_state_norm.setdefault(
+            str(context["state"]),
+            {},
+        )
+        for gemarkung_norm in context["gemarkung_norms"]:
+            state_map.setdefault(gemarkung_norm, []).append(context)
+
+    flur_norm = fast_compact_norm(parsed.get("flur"))
+    parcel_norms = tuple(dict.fromkeys(
+        value
+        for value in (
+            fast_parcel_number_norm(parsed.get("flurstueck")),
+            fast_compact_norm(parsed.get("flurstueck")),
+        )
+        if value
+    ))
+    parcel_rows: list[tuple[FeatureDbEntry, sqlite3.Row, list[dict]]] = []
+    for entry in entries:
+        context_map = contexts_by_state_norm.get(entry.name, {})
+        gemarkung_norms = tuple(sorted(context_map))
+        if not gemarkung_norms:
+            continue
+        for start in range(0, len(gemarkung_norms), 128):
+            chunk = gemarkung_norms[start:start + 128]
+            remaining = (
+                _ADDRESSLESS_PARCEL_MAX_CANDIDATES
+                + 1
+                - len(parcel_rows)
+            )
+            rows = search_db_fetchall(
+                entry.path,
+                f"""
+                SELECT *
+                FROM parcel_lookup INDEXED BY idx_parcel_exact
+                WHERE gemarkung_norm IN ({','.join('?' for _ in chunk)})
+                  AND flur_norm = ?
+                  AND flurstueck_norm IN ({','.join('?' for _ in parcel_norms)})
+                ORDER BY gemarkung_norm, flur_norm, flurstueck_norm
+                LIMIT ?
+                """,
+                [*chunk, flur_norm, *parcel_norms, remaining],
+            )
+            for row in rows:
+                if fast_compact_norm(row["flur_label"]) != flur_norm:
+                    continue
+                if str(row["zaehler"] or "") != str(parsed["zaehler"]):
+                    continue
+                if str(row["nenner"] or "") != str(parsed["nenner"]):
+                    continue
+                if fast_parcel_number_norm(
+                    row["flurstueck_label"]
+                ) != fast_parcel_number_norm(parsed["flurstueck"]):
+                    continue
+                matching_contexts = context_map.get(
+                    str(row["gemarkung_norm"] or ""),
+                    [],
+                )
+                if matching_contexts:
+                    parcel_rows.append((entry, row, matching_contexts))
+            if len(parcel_rows) > _ADDRESSLESS_PARCEL_MAX_CANDIDATES:
+                return []
+    results: list[dict] = []
+    for entry in entries:
+        state_parcels = [
+            item for item in parcel_rows if item[0].name == entry.name
+        ]
+        if not state_parcels:
+            continue
+        relevant_contexts = [
+            context
+            for _candidate_entry, _row, candidate_contexts in state_parcels
+            for context in candidate_contexts
+        ]
+        city_norms = tuple(sorted({
+            value
+            for context in relevant_contexts
+            for value in context["city_norms"]
+        }))
+        street_norms = tuple(sorted({
+            value
+            for context in relevant_contexts
+            for value in context["street_norms"]
+        }))
+        postcodes = tuple(sorted({
+            str(context["postcode"])
+            for context in relevant_contexts
+        }))
+        if not city_norms or not street_norms or not postcodes:
+            continue
+        street_rows: list[sqlite3.Row] = []
+        building_rows: list[sqlite3.Row] = []
+        for start in range(0, len(city_norms), 128):
+            city_chunk = city_norms[start:start + 128]
+            street_rows.extend(search_db_fetchall(
+                entry.path,
+                f"""
+                SELECT *
+                FROM street_lookup INDEXED BY idx_street_exact
+                WHERE city_norm IN ({','.join('?' for _ in city_chunk)})
+                  AND street_norm IN ({','.join('?' for _ in street_norms)})
+                  AND post_code IN ({','.join('?' for _ in postcodes)})
+                LIMIT ?
+                """,
+                [
+                    *city_chunk,
+                    *street_norms,
+                    *postcodes,
+                    _ADDRESSLESS_PARCEL_MAX_VALIDATION_ROWS + 1,
+                ],
+            ))
+            building_rows.extend(search_db_fetchall(
+                entry.path,
+                f"""
+                SELECT
+                  gml_id, street_norm, city_norm, post_code, lon, lat
+                FROM address_lookup INDEXED BY idx_address_street
+                WHERE city_norm IN ({','.join('?' for _ in city_chunk)})
+                  AND street_norm IN ({','.join('?' for _ in street_norms)})
+                  AND post_code IN ({','.join('?' for _ in postcodes)})
+                  AND feature_kind = ?
+                  AND lon IS NOT NULL
+                  AND lat IS NOT NULL
+                LIMIT ?
+                """,
+                [
+                    *city_chunk,
+                    *street_norms,
+                    *postcodes,
+                    "building",
+                    _ADDRESSLESS_PARCEL_MAX_VALIDATION_ROWS + 1,
+                ],
+            ))
+            if (
+                len(street_rows) > _ADDRESSLESS_PARCEL_MAX_VALIDATION_ROWS
+                or len(building_rows)
+                > _ADDRESSLESS_PARCEL_MAX_VALIDATION_ROWS
+            ):
+                return []
+        for _candidate_entry, row, candidate_contexts in state_parcels:
+            parcel_bbox = (
+                fast_float(row["min_lon"]),
+                fast_float(row["min_lat"]),
+                fast_float(row["max_lon"]),
+                fast_float(row["max_lat"]),
+            )
+            municipality = ""
+            municipality_loaded = False
+
+            def load_municipality() -> str:
+                nonlocal municipality, municipality_loaded
+                if not municipality_loaded:
+                    place = municipality_at(
+                        entry.name,
+                        fast_float(row["lon"]),
+                        fast_float(row["lat"]),
+                    )
+                    municipality = str(
+                        (place or {}).get("name") or ""
+                    ).strip()
+                    municipality_loaded = True
+                return municipality
+
+            accepted_context = None
+            for context in candidate_contexts:
+                if not _addressless_context_matches(
+                    context,
+                    row,
+                    "",
+                ):
+                    if not _addressless_context_matches(
+                        context,
+                        row,
+                        load_municipality(),
+                    ):
+                        continue
+                matching_streets = [
+                    street_row
+                    for street_row in street_rows
+                    if str(street_row["street_norm"] or "")
+                    in context["street_norms"]
+                    and str(street_row["city_norm"] or "")
+                    in context["city_norms"]
+                    and str(street_row["post_code"] or "")
+                    == context["postcode"]
+                ]
+                if not any(
+                    _addressless_bbox_intersects(
+                        parcel_bbox,
+                        (
+                            fast_float(street_row["min_lon"]),
+                            fast_float(street_row["min_lat"]),
+                            fast_float(street_row["max_lon"]),
+                            fast_float(street_row["max_lat"]),
+                        ),
+                    )
+                    for street_row in matching_streets
+                ):
+                    continue
+                nearby_buildings = {
+                    str(building_row["gml_id"] or "")
+                    for building_row in building_rows
+                    if str(building_row["gml_id"] or "")
+                    and str(building_row["street_norm"] or "")
+                    in context["street_norms"]
+                    and str(building_row["city_norm"] or "")
+                    in context["city_norms"]
+                    and str(building_row["post_code"] or "")
+                    == context["postcode"]
+                    and _addressless_point_bbox_distance_m(
+                        fast_float(building_row["lon"]),
+                        fast_float(building_row["lat"]),
+                        parcel_bbox,
+                    )
+                    <= _ADDRESSLESS_PARCEL_MAX_BUILDING_DISTANCE_M
+                }
+                if len(nearby_buildings) < 2:
+                    continue
+                accepted_context = context
+                break
+            if not accepted_context:
+                continue
+            display_city = (
+                str(accepted_context.get("locality") or "").strip()
+                or load_municipality()
+                or str(row["gemarkung_label"] or "").strip()
+            )
+            candidate = {
+                "gemarkung": str(row["gemarkung_label"] or "").strip(),
+                "gemarkungsnummer": str(
+                    row["gemarkungsnummer"] or ""
+                ).strip(),
+                "flur": str(row["flur_label"] or "").strip(),
+                "flurstueck": str(row["flurstueck_label"] or "").strip(),
+                "state": entry.name,
+                "state_label": state_display_name(entry.name),
+                "municipality_context": (
+                    {"name": display_city} if display_city else None
+                ),
+                "municipality_label": display_city,
+                "signal_rank": 0,
+                # Distance remains authoritative when the caller supplied a
+                # map position.  Without it, this makes the source relation
+                # the deterministic tie-breaker ahead of the derived result.
+                "relation_rank": 1,
+                "phrase_rank": (0, 0, 0),
+            }
+            item = _format_free_text_parcel_result(
+                search_parcel_result_from_row(row, entry.name),
+                candidate,
+            )
+            item["street_context"] = {
+                "street": str(accepted_context["street"]),
+                "relation": "nearby",
+                "post_code": str(accepted_context["postcode"]),
+                "max_distance_m": int(
+                    _ADDRESSLESS_PARCEL_MAX_BUILDING_DISTANCE_M
+                ),
+            }
+            results.append(item)
+            if len(results) >= min(
+                max(int(limit) * 4, 32),
+                _ADDRESSLESS_PARCEL_MAX_CANDIDATES,
+            ):
+                return results
+    return results
+
+
+@lru_cache(maxsize=512)
+def search_contextual_parcel_suggestions_cached(
+    query: str,
+    limit: int,
+    states_key: tuple[str, ...],
+    signature: tuple[tuple[str, str, int, int], ...],
+    openplz_db_signature: tuple[int, int],
+    place_signature: tuple[int, int],
+) -> tuple[dict, ...]:
+    """Find parcels by their exact, precomputed address relation.
+
+    The lookup always starts on the indexed address side (exact street or
+    city) and joins to ``parcel_lookup`` by ``source_db,gml_id``.  It never
+    reads ``features.sqlite`` and never scans all parcels by parcel number.
+    """
+    del signature, place_signature
+    parsed = _contextual_parcel_query_parts(query)
+    if not parsed:
+        return tuple()
+    allowed_states = set(states_key)
+    phrases = list(parsed["phrases"])
+
+    postcode = str(parsed.get("postcode") or "")
+    if postcode and not phrases and openplz_db_signature != (0, 0):
+        postcode_places = _openplz_postcode_places_cached(
+            postcode,
+            tuple(sorted(allowed_states)),
+            max(int(limit), 8),
+            openplz_db_signature,
+            gn250_places_signature(),
+        )
+        phrases.extend(
+            str(item.get("municipality") or item.get("label") or "").strip()
+            for item in postcode_places
+            if str(item.get("municipality") or item.get("label") or "").strip()
+        )
+    if not phrases:
+        return tuple()
+
+    # A street-only query must retain every state (``Feldstraße 37/8`` has
+    # valid linked parcels in several of them).  Do not classify arbitrary
+    # street text through the global place-name index before the indexed SQL
+    # lookup; that was both incomplete and expensive on a cold worker.
+    entries = search_db_entries_for_states(tuple(sorted(allowed_states)))
+    street_norms = tuple(dict.fromkeys(
+        normalized
+        for phrase in phrases
+        for normalized in normalize_geocoder_text_variants(phrase)
+        if normalized
+    ))[:128]
+    if not street_norms:
+        return tuple()
+
+    parcel_norms = tuple(dict.fromkeys(
+        value
+        for value in (
+            fast_parcel_number_norm(parsed["flurstueck"]),
+            fast_compact_norm(parsed["flurstueck"]),
+        )
+        if value
+    ))
+    flur_norm = fast_compact_norm(parsed.get("flur"))
+    house_number = str(parsed.get("house_number") or "")
+    house_norm = normalize_geocoder_house(house_number)
+    eligible_entries: list[FeatureDbEntry] = []
+    for entry in entries:
+        # Search-index v1/v2 shards have both tables.  The guard keeps older
+        # isolated fixtures/backups safely out of this optional path.
+        table_count = search_db_fetchone(
+            entry.path,
+            """
+            SELECT COUNT(*) AS table_count
+            FROM sqlite_master
+            WHERE type = ? AND name IN (?, ?)
+            """,
+            ("table", "address_lookup", "parcel_lookup"),
+        )
+        if table_count and int(table_count["table_count"] or 0) == 2:
+            eligible_entries.append(entry)
+
+    common_clauses = [
+        "a.feature_kind = ?",
+        f"p.flurstueck_norm IN ({','.join('?' for _ in parcel_norms)})",
+        "p.zaehler = ?",
+        "p.nenner = ?",
+    ]
+    common_params: list[object] = [
+        "parcel",
+        *parcel_norms,
+        parsed["zaehler"],
+        parsed["nenner"],
+    ]
+    if flur_norm:
+        common_clauses.append("p.flur_norm = ?")
+        common_params.append(flur_norm)
+    if postcode:
+        common_clauses.append("a.post_code = ?")
+        common_params.append(postcode)
+    if house_norm:
+        common_clauses.append("a.house_number_norm = ?")
+        common_params.append(house_norm)
+
+    def lookup_phase(
+        index_name: str,
+        lookup_column: str,
+        lookup_norms: tuple[str, ...],
+    ) -> list[list[dict]]:
+        def lookup_entry(entry: FeatureDbEntry) -> list[dict]:
+            clauses = [
+                f"{lookup_column} IN ({','.join('?' for _ in lookup_norms)})",
+                *common_clauses,
+            ]
+            rows = search_db_fetchall(
+                entry.path,
+                f"""
+                SELECT
+                  p.*,
+                  a.street_label AS linked_street_label,
+                  a.house_number_label AS linked_house_number_label,
+                  a.city_label AS linked_city_label,
+                  a.post_code AS linked_post_code
+                FROM address_lookup AS a INDEXED BY {index_name}
+                JOIN parcel_lookup AS p
+                  ON p.source_db = a.source_db
+                 AND p.gml_id = a.gml_id
+                WHERE {' AND '.join(clauses)}
+                ORDER BY a.city_label, a.street_label, p.gemarkung_label, p.flur_label
+                LIMIT ?
+                """,
+                [
+                    *lookup_norms,
+                    *common_params,
+                    _CONTEXTUAL_PARCEL_STATE_SCAN_LIMIT,
+                ],
+            )
+            bucket: list[dict] = []
+            bucket_seen: set[tuple[str, str, str]] = set()
+            for row in rows:
+                if fast_parcel_number_norm(row["flurstueck_label"]) != fast_parcel_number_norm(parsed["flurstueck"]):
+                    continue
+                if not _contextual_parcel_row_matches(row, parsed, entry.name):
+                    continue
+                key = (entry.name, str(row["source_db"] or ""), str(row["gml_id"] or ""))
+                if key in bucket_seen:
+                    continue
+                bucket_seen.add(key)
+                city = _contextual_parcel_display_city(row, entry.name)
+                candidate = {
+                    "gemarkung": str(row["gemarkung_label"] or "").strip(),
+                    "gemarkungsnummer": str(row["gemarkungsnummer"] or "").strip(),
+                    "flur": str(row["flur_label"] or "").strip(),
+                    "flurstueck": str(row["flurstueck_label"] or "").strip(),
+                    "state": entry.name,
+                    "state_label": state_display_name(entry.name),
+                    "municipality_context": {"name": city} if city else None,
+                    "municipality_label": city,
+                    "signal_rank": 0 if parsed.get("explicit_parcel") or flur_norm else 1,
+                    "phrase_rank": (-1, 0, 0),
+                }
+                item = _format_free_text_parcel_result(
+                    search_parcel_result_from_row(row, entry.name),
+                    candidate,
+                )
+                item["linked_address"] = {
+                    "street": str(row["linked_street_label"] or "").strip(),
+                    "house_number": str(
+                        row["linked_house_number_label"] or ""
+                    ).strip(),
+                    "city": city,
+                    "post_code": str(row["linked_post_code"] or "").strip(),
+                }
+                bucket.append(item)
+                if len(bucket) >= _CONTEXTUAL_PARCEL_STATE_RESULT_LIMIT:
+                    break
+            return bucket
+
+        if len(eligible_entries) <= 1:
+            buckets = [lookup_entry(entry) for entry in eligible_entries]
+        else:
+            # Every shard has its own SQLite connection and query lock.  A
+            # small bounded fan-out avoids adding 10–15 independent disk
+            # lookup latencies on nationwide searches while keeping pressure
+            # predictable under concurrent requests.
+            with ThreadPoolExecutor(
+                max_workers=min(4, len(eligible_entries)),
+            ) as executor:
+                buckets = list(executor.map(
+                    lookup_entry,
+                    eligible_entries,
+                ))
+        return [bucket for bucket in buckets if bucket]
+
+    # Street context is both cheaper and more specific.  Crucially, finish it
+    # for every state before deciding whether the city fallback is needed:
+    # otherwise an early state could trigger expensive city scans even though
+    # a later state has the accepted street relation.
+    direct_buckets = lookup_phase(
+        "idx_address_no_city",
+        "a.street_norm",
+        street_norms,
+    )
+    if not direct_buckets:
+        direct_buckets = lookup_phase(
+            "idx_address_exact",
+            "a.city_norm",
+            street_norms,
+        )
+
+    # Preserve candidates from every matching state before ranking.  Each
+    # state has a small quota and the global pool is filled round-robin, so a
+    # populous first shard cannot starve a later, nearby result.
+    active_buckets = [list(bucket) for bucket in direct_buckets if bucket]
+    collected: list[dict] = []
+    while (
+        active_buckets
+        and len(collected) < _CONTEXTUAL_PARCEL_DIRECT_POOL_LIMIT
+    ):
+        for bucket in list(active_buckets):
+            collected.append(bucket.pop(0))
+            if not bucket:
+                active_buckets.remove(bucket)
+            if len(collected) >= _CONTEXTUAL_PARCEL_DIRECT_POOL_LIMIT:
+                break
+    seen: set[tuple[str, str, str]] = set()
+    for item in collected:
+        feature = (
+            item.get("feature")
+            if isinstance(item.get("feature"), dict)
+            else {}
+        )
+        seen.add((
+            normalize_state_key(str(item.get("state") or "")),
+            str(feature.get("source_db") or ""),
+            str(feature.get("gml_id") or ""),
+        ))
+
+    derived_results = _addressless_explicit_street_parcel_suggestions(
+        parsed,
+        tuple(entries),
+        allowed_states,
+        openplz_db_signature,
+        int(limit),
+    )
+    for item in derived_results:
+        feature = item.get("feature") if isinstance(item.get("feature"), dict) else {}
+        key = (
+            normalize_state_key(str(item.get("state") or "")),
+            str(feature.get("source_db") or ""),
+            str(feature.get("gml_id") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        collected.append(item)
+        if len(collected) >= _CONTEXTUAL_PARCEL_TOTAL_POOL_LIMIT:
+            break
+    return tuple(collected)
+
+
+def search_contextual_parcel_suggestions(
+    query: str,
+    limit: int,
+    allowed_states: set[str],
+    near_lon: float | None = None,
+    near_lat: float | None = None,
+) -> list[dict]:
+    pool = [
+        dict(item)
+        for item in search_contextual_parcel_suggestions_cached(
+            re.sub(r"\s+", " ", str(query or "")).strip(),
+            int(limit),
+            tuple(sorted(state for state in allowed_states if state)),
+            search_db_signature_for_states(allowed_states),
+            openplz_signature(),
+            gn250_places_signature(),
+        )
+    ]
+    for fair_index, item in enumerate(pool):
+        item["_parcel_contextual_fair_index"] = fair_index
+    pool.sort(key=lambda item: (
+        int(item.get("_parcel_signal_rank") or 0),
+        _unified_result_distance(item, near_lon, near_lat),
+        int(item.get("_parcel_relation_rank") or 0),
+        item.get("_parcel_phrase_rank") or (9, 9, 9),
+        int(item.get("_parcel_contextual_fair_index") or 0),
+        str(item.get("label") or "").casefold(),
+    ))
+    return pool[:int(limit)]
+
+
+def _format_free_text_parcel_result(item: dict, candidate: dict) -> dict:
+    result = dict(item)
+    feature = dict(result.get("feature") or {})
+    state = normalize_state_key(str(result.get("state") or candidate.get("state") or ""))
+    gemarkung = str(feature.get("gemarkung") or candidate.get("gemarkung") or "").strip()
+    code = str(feature.get("gemarkungsnummer") or candidate.get("gemarkungsnummer") or "").strip()
+    gemarkung_payload = gemarkung
+    if code and not re.search(rf"\(\s*{re.escape(code)}\s*\)\s*$", gemarkung_payload):
+        gemarkung_payload = f"{gemarkung} ({code})"
+    flur = str(feature.get("flur") or "").strip()
+    flurstueck = str(feature.get("flurstueck") or candidate.get("flurstueck") or "").strip()
+    center = result.get("center") if isinstance(result.get("center"), (list, tuple)) else []
+    municipality = str(candidate.get("municipality_label") or "").strip()
+    if not municipality and len(center) >= 2:
+        place = municipality_at(state, fast_float(center[0]), fast_float(center[1]))
+        municipality = str((place or {}).get("name") or "").strip()
+    context = candidate.get("municipality_context") if isinstance(candidate.get("municipality_context"), dict) else {}
+    context_name = str(context.get("name") or "").strip()
+    primary = f"Flurstück {flurstueck}" if flurstueck else "Flurstück"
+    secondary = " · ".join(part for part in (
+        f"Gemarkung {gemarkung_payload}" if gemarkung_payload else "",
+        f"Flur {flur}" if flur else "",
+        municipality,
+        state_display_name(state),
+    ) if part)
+    result.update({
+        "kind": "parcel",
+        "result_type": "feature",
+        "search_scope": "parcel",
+        "primary_label": primary,
+        "secondary_label": secondary,
+        "label": ", ".join(part for part in (primary, gemarkung_payload) if part),
+        "subtitle": secondary or "Flurstück",
+        "query": " ".join(part for part in (
+            primary,
+            f"Gemarkung {gemarkung_payload}" if gemarkung_payload else "",
+            f"Flur {flur}" if flur else "",
+        ) if part),
+        "state": state,
+        "state_label": state_display_name(state),
+        "feature": feature,
+        "parcel_search": {
+            "gemarkung": gemarkung_payload,
+            "flur": flur,
+            "flurstueck": flurstueck,
+            "state": state,
+        },
+        "_parcel_signal_rank": int(candidate.get("signal_rank") or 0),
+        "_parcel_relation_rank": int(candidate.get("relation_rank") or 0),
+        "_parcel_phrase_rank": candidate.get("phrase_rank") or (9, 9, 9),
+        "_parcel_context_rank": (
+            0
+            if not context_name
+            or normalize_place_search_text(context_name) == normalize_place_search_text(municipality)
+            else 1
+        ),
+    })
+    return result
+
+
+def search_free_text_parcel_suggestions_for_dataset(
+    dataset: str,
+    q: str,
+    limit: int,
+    state: str = "",
+    near_lon: float | None = None,
+    near_lat: float | None = None,
+) -> dict:
+    if not is_virtual_germany_dataset(dataset):
+        get_dataset(dataset)
+    allowed_states = search_suggestion_states_for_dataset(dataset, state)
+    parsed = parse_free_text_parcel_query(q, allowed_states)
+    contextual_results = search_contextual_parcel_suggestions(
+        q,
+        max(int(limit) * 2, int(limit)),
+        allowed_states,
+        near_lon=near_lon,
+        near_lat=near_lat,
+    )
+    contextual_parts = _contextual_parcel_query_parts(q)
+    has_explicit_street_constraint = bool(
+        contextual_parts
+        and contextual_parts.get("flur")
+        and _FREE_TEXT_FLUR_MARKER_RE.search(str(q or ""))
+        and _FREE_TEXT_PARCEL_MARKER_RE.search(str(q or ""))
+        and _addressless_parcel_street_phrases(
+            str(contextual_parts.get("context") or "")
+        )
+    )
+    if not parsed["candidates"] and not contextual_results:
+        return {
+            "query": parsed["query"],
+            "count": 0,
+            "explicit_signal": parsed["explicit_signal"],
+            "strong_intent": parsed.get("strong_intent", False),
+            "results": [],
+        }
+
+    buckets: list[list[dict]] = []
+    if contextual_results:
+        buckets.append(contextual_results)
+    # Once the user explicitly supplied both cadastral fields and a street,
+    # only the independently verified address/spatial relation may satisfy
+    # that street constraint.  A plain Gemarkung lookup must not reintroduce
+    # the same parcel while silently ignoring a mismatching street.
+    ordinary_candidates = (
+        []
+        if has_explicit_street_constraint
+        else parsed["candidates"]
+    )
+    for candidate in ordinary_candidates:
+        rows = search_fast_cadastre_parcels_for_dataset(
+            candidate["gemarkung"],
+            candidate["flur"],
+            candidate["flurstueck"],
+            max(4, min(int(limit), 12)),
+            {candidate["state"]},
+        )
+        bucket = [_format_free_text_parcel_result(row, candidate) for row in rows]
+        if candidate.get("requires_municipality_match"):
+            bucket = [
+                item
+                for item in bucket
+                if int(item.get("_parcel_context_rank") or 0) == 0
+            ]
+        if bucket:
+            buckets.append(bucket)
+
+    # Round-robin first so ambiguous names/states cannot be starved before rank.
+    collected: list[dict] = []
+    while buckets and len(collected) < max(int(limit) * 12, 120):
+        for bucket in list(buckets):
+            collected.append(bucket.pop(0))
+            if not bucket:
+                buckets.remove(bucket)
+            if len(collected) >= max(int(limit) * 12, 120):
+                break
+    for fair_index, item in enumerate(collected):
+        item["_parcel_fair_index"] = fair_index
+    collected.sort(key=lambda item: (
+        int(item.get("_parcel_signal_rank") or 0),
+        _unified_result_distance(item, near_lon, near_lat),
+        int(item.get("_parcel_relation_rank") or 0),
+        item.get("_parcel_phrase_rank") or (9, 9, 9),
+        int(item.get("_parcel_context_rank") or 0),
+        int(item.get("_parcel_fair_index") or 0),
+        str(item.get("label") or "").casefold(),
+    ))
+    results: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in collected:
+        feature = item.get("feature") if isinstance(item.get("feature"), dict) else {}
+        key = (
+            str(item.get("state") or ""),
+            str(feature.get("source_db") or ""),
+            str(feature.get("gml_id") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        for private_key in tuple(key for key in item if key.startswith("_parcel_")):
+            item.pop(private_key, None)
+        results.append(item)
+        if len(results) >= int(limit):
+            break
+    return {
+        "query": parsed["query"],
+        "count": len(results),
+        # An exact Gemarkung+number match is itself a strong enough signal to
+        # rank parcels before generic place suggestions (for example
+        # ``Hofen 1066``).  It never invents intent because the candidate has
+        # already been validated against parcel_lookup.
+        "explicit_signal": parsed["explicit_signal"] or bool(results),
+        "strong_intent": parsed.get("strong_intent", False),
+        "results": results,
+    }
+
+
+def search_unified_suggestions_for_dataset(
+    dataset: str,
+    q: str,
+    limit: int,
+    state: str = "",
+    near_lon: float | None = None,
+    near_lat: float | None = None,
+) -> dict:
+    """Merge address and exact parcel suggestions without tracking autocomplete."""
+    parcel_payload = search_free_text_parcel_suggestions_for_dataset(
+        dataset,
+        q,
+        max(int(limit) * 2, int(limit)),
+        state=state,
+        near_lon=near_lon,
+        near_lat=near_lat,
+    )
+    # A clearly cadastral query must not degrade into an unrelated city result
+    # when the requested parcel does not exist.  Slash house numbers remain
+    # eligible for address search because they do not set ``strong_intent``.
+    strong_parcel_intent = bool(parcel_payload.get("strong_intent"))
+    if strong_parcel_intent:
+        address_payload = {"results": []}
+    else:
+        address_payload = search_unified_address_suggestions_for_dataset(
+            dataset,
+            q,
+            max(int(limit) * 2, int(limit)),
+            state=state,
+            near_lon=near_lon,
+            near_lat=near_lat,
+            include_parse_metadata=True,
+        )
+    poi_results: list[dict] = []
+    address_results = [
+        item
+        for item in (address_payload.get("results") or [])
+        if isinstance(item, dict)
+    ]
+    parsed_address_metadata = address_payload.get("_parsed_address")
+    parsed_address_for_gating = (
+        parsed_address_metadata
+        if isinstance(parsed_address_metadata, dict)
+        else {}
+    )
+    query_is_postcode_only = bool(re.fullmatch(r"\s*\d{5}\s*", str(q or "")))
+    parsed_place_only = (
+        bool(parsed_address_for_gating.get("place"))
+        and not str(parsed_address_for_gating.get("street") or "").strip()
+        and not str(
+            parsed_address_for_gating.get("house_number") or ""
+        ).strip()
+    )
+    place_prefix_query = normalize_place_search_text(
+        re.sub(r"(?<!\d)\d{5}(?!\d)", " ", str(q or ""))
+    )
+    only_place_suggestions = bool(address_results) and all(
+        str(item.get("result_type") or item.get("kind") or "") == "place"
+        for item in address_results
+    )
+    query_is_place_prefix_only = bool(
+        only_place_suggestions
+        and place_prefix_query
+        and any(
+            any(
+                normalize_place_search_text(
+                    str(item.get(key) or "").split(",", 1)[0]
+                ).startswith(place_prefix_query)
+                for key in ("value", "primary_label", "label")
+                if str(item.get(key) or "").strip()
+            )
+            for item in address_results
+        )
+    )
+    if (
+        not strong_parcel_intent
+        and not query_is_postcode_only
+        and not parsed_place_only
+        and not query_is_place_prefix_only
+    ):
+        try:
+            allowed_states = search_suggestion_states_for_dataset(dataset, state)
+            poi_results = search_poi_suggestions(
+                q,
+                allowed_states,
+                min(4, max(1, int(limit))),
+                near_lon=near_lon,
+                near_lat=near_lat,
+            )
+        except Exception:
+            # The independently versioned POI index is an optional enrichment.
+            # A missing or temporarily invalid candidate must never take the
+            # established ALKIS address/parcel search down with it.
+            poi_results = []
+    explicit_parcel = bool(parcel_payload.get("explicit_signal"))
+    parsed_address = {} if strong_parcel_intent else parsed_address_metadata
+    if not isinstance(parsed_address, dict):
+        # Isolated callers/tests may replace the address search.  Parsing
+        # without place contexts still recognizes a trailing house number and
+        # keeps this fallback independent from local search-shard discovery.
+        parsed_address = parse_unified_address_query(str(q or ""), set())
+    requested_address_house = normalize_house_number_semantic(
+        str(parsed_address.get("house_number") or "")
+    )
+    slash_match = re.search(
+        r"(?<![\w/])(\d{1,9}\s*/\s*\d{1,9})(?![\w/])",
+        str(q or ""),
+    )
+    if not requested_address_house and slash_match:
+        requested_address_house = normalize_house_number_semantic(
+            slash_match.group(1)
+        )
+    has_exact_building_address = bool(
+        requested_address_house
+        and any(
+            str(item.get("result_type") or "") == "address"
+            and normalize_house_number_semantic(
+                str((item.get("address") or {}).get("house_number") or "")
+            ) == requested_address_house
+            for item in address_payload.get("results") or []
+            if isinstance(item, dict)
+        )
+    )
+    contextual_parts = _contextual_parcel_query_parts(str(q or ""))
+    implicit_plain_number = bool(
+        contextual_parts
+        and contextual_parts.get("plain_number")
+        and not contextual_parts.get("explicit_parcel")
+    )
+    merged: list[tuple[tuple, dict]] = []
+    for index, source in enumerate(address_payload.get("results") or []):
+        item = dict(source)
+        item["search_scope"] = "address"
+        merged.append((((0 if has_exact_building_address else (1 if explicit_parcel else 0)), index), item))
+    for index, source in enumerate(parcel_payload.get("results") or []):
+        item = dict(source)
+        item["search_scope"] = "parcel"
+        merged.append((((1 if has_exact_building_address else (0 if explicit_parcel else 1)), index), item))
+    merged.sort(key=lambda entry: entry[0])
+    ordered = [item for _rank, item in merged]
+    if (
+        has_exact_building_address
+        and implicit_plain_number
+        and int(limit) > 1
+        and parcel_payload.get("results")
+    ):
+        address_items = [
+            item for item in ordered if item.get("search_scope") == "address"
+        ]
+        parcel_items = [
+            item for item in ordered if item.get("search_scope") == "parcel"
+        ]
+        results = address_items[:max(int(limit) - 1, 0)]
+        if parcel_items:
+            results.append(parcel_items[0])
+        selected = {id(item) for item in results}
+        for item in ordered:
+            if id(item) in selected:
+                continue
+            results.append(item)
+            selected.add(id(item))
+            if len(results) >= int(limit):
+                break
+        results = results[:int(limit)]
+    else:
+        results = ordered[:int(limit)]
+    if poi_results:
+        combined = [*results, *poi_results]
+
+        def mixed_kind_rank(item: dict) -> int:
+            scope = str(item.get("search_scope") or "")
+            result_type = str(item.get("result_type") or "")
+            kind = str(item.get("kind") or "")
+            if scope == "address" and (
+                result_type == "address" or kind in {"address", "building"}
+            ):
+                return 0
+            if scope == "parcel" or kind == "parcel":
+                return 1
+            if scope == "poi" or kind == "poi":
+                return 2
+            return 3
+
+        combined.sort(
+            key=lambda item: (
+                mixed_kind_rank(item),
+                0 if item.get("exact_name_match") else 1,
+            )
+        )
+        results = combined[:int(limit)]
+    query = re.sub(r"\s+", " ", str(q or "")).strip()
+    return {"query": query, "count": len(results), "results": results}
 
 
 def search_features_for_dataset(
@@ -8750,4875 +11981,6 @@ def cached_search_features_for_dataset(
                 _SEARCH_RESPONSE_CACHE.pop(old_key, None)
     _SEARCH_RESPONSE_CACHE[key] = (now + SEARCH_CACHE_SECONDS, json.loads(json.dumps(result)))
     return result
-
-
-def viewer_key(provided: str | None = None) -> str:
-    if provided:
-        return provided
-    keys = sorted(_configured_keys())
-    if not keys:
-        raise HTTPException(status_code=503, detail="tile service has no API keys configured")
-    return keys[0]
-
-
-def viewer_html(request: Request, dataset: str, key: str) -> str:
-    base = public_base_url(request)
-    asset_version = int(max(Path(__file__).stat().st_mtime, NATIONAL_STYLE_PATH.stat().st_mtime if NATIONAL_STYLE_PATH.exists() else 0))
-    style_url = f"{base}/styles/{dataset}.json?key={key}&v={asset_version}"
-    tilejson_url = f"{base}/tilejson/{dataset}.json?key={key}&v={asset_version}"
-    feature_url = f"{base}/api/features/{dataset}/point?key={key}"
-    search_url = f"{base}/api/search/{dataset}?key={key}"
-    datasets_url = f"{base}/datasets?key={key}"
-    metadata_url = f"{base}/api/state-metadata?key={key}"
-    template = """<!doctype html>
-<html lang=\"de\"> 
-<head>
-  <meta charset=\"utf-8\">
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-  <title>OpenKataster Karte - __DATASET__</title>
-  <link rel=\"stylesheet\" href=\"https://unpkg.com/maplibre-gl@5.14.0/dist/maplibre-gl.css\"> 
-  <style>
-    :root {
-      --ok-bg: #ffffff;
-      --ok-line: #f0e5d5;
-      --ok-text: #111827;
-      --ok-muted: #4b5563;
-      --ok-accent: #f86d14;
-      --ok-accent-soft: #fff4ec;
-      --ok-shadow: 0 16px 38px rgba(15, 23, 42, 0.16);
-    }
-    @font-face {
-      font-family: \"IBM Plex Sans\";
-      src: url(\"https://openkataster.de/fonts/ibm-plex-sans-400-latin.woff2\") format(\"woff2\");
-      font-weight: 400;
-      font-style: normal;
-      font-display: swap;
-    }
-    @font-face {
-      font-family: \"IBM Plex Sans\";
-      src: url(\"https://openkataster.de/fonts/ibm-plex-sans-700-latin.woff2\") format(\"woff2\");
-      font-weight: 700;
-      font-style: normal;
-      font-display: swap;
-    }
-    * {
-      box-sizing: border-box;
-    }
-    html, body, #map {
-      width: 100%;
-      height: 100%;
-      margin: 0;
-    }
-    body {
-      font-family: \"IBM Plex Sans\", Inter, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;
-      color: var(--ok-text);
-      background: var(--ok-bg);
-    }
-    #map {
-      position: absolute;
-      inset: 0;
-      z-index: 1;
-    }
-    .map-bootstrap-backdrop {
-      position: absolute;
-      inset: 0;
-      z-index: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      opacity: 0;
-      transition: opacity 220ms ease;
-      pointer-events: none;
-      background: #f8f5ef;
-    }
-    .map-bootstrap-backdrop.is-visible {
-      opacity: 1;
-    }
-    .map-frame-fallback {
-      position: fixed;
-      inset: 0;
-      z-index: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 120ms linear;
-      background: var(--ok-bg);
-    }
-    .map-frame-fallback.is-visible {
-      opacity: 1;
-    }
-    #map .maplibregl-canvas-container {
-      background: transparent;
-    }
-    .floating {
-      position: absolute;
-      z-index: 3;
-      border: 1px solid var(--ok-line);
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.98);
-      box-shadow: 0 12px 30px rgba(17, 23, 19, 0.10);
-      backdrop-filter: blur(2px);
-      font-size: 13px;
-    }
-    .panel-label {
-      text-transform: uppercase;
-      font-size: 11px;
-      color: var(--ok-muted);
-      letter-spacing: 0.05em;
-      padding: 8px 12px 0;
-      margin-bottom: 4px;
-      font-weight: 700;
-    }
-    #toolDock {
-      left: 12px;
-      top: 64px;
-      padding: 6px;
-      width: 52px;
-    }
-    #layerSwitch {
-      right: 12px;
-      top: 12px;
-      padding: 0;
-      border: 0;
-      border-radius: 999px;
-      overflow: visible;
-      background: transparent;
-      box-shadow: none;
-      backdrop-filter: none;
-      z-index: 7;
-    }
-    #layerToggle {
-      width: 40px;
-      height: 40px;
-      border: 0;
-      border-radius: 999px;
-      background: #fff;
-      color: #111713;
-      display: grid;
-      place-items: center;
-      cursor: pointer;
-      box-shadow: 0 10px 25px rgba(17, 23, 19, 0.14);
-    }
-    #layerToggle svg {
-      width: 20px;
-      height: 20px;
-      stroke-width: 1.9;
-    }
-    #layerMenu {
-      position: absolute;
-      right: 0;
-      top: calc(100% + 7px);
-      width: 270px;
-      max-height: min(74vh, 560px);
-      overflow: auto;
-      padding: 10px;
-      border: 1px solid #ece9e5;
-      border-radius: 12px;
-      background: #fff;
-      box-shadow: 0 18px 38px rgba(17, 23, 19, 0.14);
-      z-index: 8;
-    }
-    #layerMenu[hidden] {
-      display: none;
-    }
-    .layer-menu-title {
-      margin: 0 0 8px;
-      color: #111713;
-      font-size: 12px;
-      font-weight: 760;
-    }
-    .layer-group {
-      border-top: 1px solid #f0ede8;
-      padding: 7px 0 5px;
-    }
-    .layer-group:first-of-type {
-      border-top: 0;
-      padding-top: 0;
-    }
-    .layer-group summary {
-      color: #111713;
-      cursor: pointer;
-      font-size: 11px;
-      font-weight: 760;
-      list-style-position: outside;
-      padding: 1px 0 5px 2px;
-    }
-    .layer-group-check {
-      display: inline-grid;
-      grid-template-columns: 16px 1fr;
-      gap: 7px;
-      align-items: center;
-      cursor: pointer;
-    }
-    .layer-group-check input {
-      width: 14px;
-      height: 14px;
-      margin: 0;
-      accent-color: var(--ok-accent);
-      cursor: pointer;
-    }
-    .layer-check {
-      display: grid;
-      grid-template-columns: 16px 20px 1fr;
-      gap: 7px;
-      align-items: center;
-      min-height: 28px;
-      padding: 4px 3px;
-      color: #374151;
-      font-size: 12px;
-      font-weight: 620;
-      cursor: pointer;
-      user-select: none;
-    }
-    .layer-check input {
-      width: 14px;
-      height: 14px;
-      margin: 0;
-      accent-color: var(--ok-accent);
-      cursor: pointer;
-    }
-    .legend-swatch {
-      width: 18px;
-      height: 14px;
-      border-radius: 3px;
-      border: 1px solid rgba(17, 23, 19, 0.28);
-      display: inline-block;
-      position: relative;
-      box-sizing: border-box;
-    }
-    .legend-swatch.aerial {
-      background: linear-gradient(135deg, #486b3c 0 34%, #b7a985 34% 62%, #466f92 62%);
-      border-color: #7d8b72;
-    }
-    .legend-swatch.fill {
-      background: linear-gradient(90deg, #f8e8f1 0 34%, #e9ffd8 34% 68%, #e2ffff 68%);
-    }
-    .legend-swatch.building {
-      background: #9d9d9d;
-      border-color: #111;
-    }
-    .legend-swatch.boundary-point {
-      width: 14px;
-      height: 14px;
-      margin-left: 2px;
-      border-radius: 999px;
-      background: #fff;
-      border: 2px solid #111;
-    }
-    .legend-swatch.boundary-point::after {
-      content: "";
-      position: absolute;
-      width: 4px;
-      height: 4px;
-      border-radius: 999px;
-      background: #111;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-    }
-    .legend-swatch.parcel-line,
-    .legend-swatch.outline,
-    .legend-swatch.legal {
-      background: transparent;
-      border: 0;
-    }
-    .legend-swatch.parcel-line::after,
-    .legend-swatch.outline::after,
-    .legend-swatch.legal::after {
-      content: "";
-      position: absolute;
-      left: 1px;
-      right: 1px;
-      top: 6px;
-      border-top: 2px solid #111;
-    }
-    .legend-swatch.outline::after {
-      border-top-color: #999;
-    }
-    .legend-swatch.legal::after {
-      border-top-color: #f27fff;
-      border-top-style: dashed;
-    }
-    .legend-swatch.parcel-label,
-    .legend-swatch.text,
-    .legend-swatch.text-muted,
-    .legend-swatch.street-label,
-    .legend-swatch.area-label {
-      border: 0;
-      background: transparent;
-    }
-    .legend-swatch.parcel-label::after,
-    .legend-swatch.text::after,
-    .legend-swatch.text-muted::after,
-    .legend-swatch.street-label::after,
-    .legend-swatch.area-label::after {
-      content: "12";
-      position: absolute;
-      inset: -1px 0 0;
-      color: #111;
-      font-size: 11px;
-      font-weight: 700;
-      line-height: 14px;
-      text-align: center;
-    }
-    .legend-swatch.text-muted::after {
-      content: "II";
-      color: #555;
-    }
-    .legend-swatch.street-label::after {
-      content: "Aa";
-      color: #333;
-    }
-    .legend-swatch.area-label::after {
-      content: "VL";
-      color: #777;
-    }
-    .legend-swatch.symbol {
-      width: 14px;
-      height: 14px;
-      margin-left: 2px;
-      border-radius: 999px;
-      background: #fff;
-      border: 2px solid #111;
-    }
-    .legend-swatch.monument-symbol {
-      width: 15px;
-      height: 18px;
-      margin-left: 1px;
-      border: 0;
-      background: transparent url("/viewer-assets/deutschland-v2/alkis-symbol-denkmal.svg?v=20260704-denkmal-local1") center / contain no-repeat;
-    }
-    #toolDockToggle {
-      width: 100%;
-      min-height: 34px;
-      border: 0;
-      border-radius: 999px;
-      background: var(--ok-accent);
-      color: #fff;
-      font: inherit;
-      font-weight: 700;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    #toolDockToggle span {
-      display: none;
-    }
-    #toolDockToggle svg {
-      width: 16px;
-      height: 16px;
-    }
-    #toolDock[data-open="false"] .toolBar {
-      display: none;
-    }
-    .toolBar {
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-      width: 100%;
-      margin-top: 6px;
-    }
-    .toolbar-strip {
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-      flex-wrap: nowrap;
-      overflow: visible;
-      padding-bottom: 2px;
-      max-width: 100%;
-      align-items: stretch;
-    }
-    .toolbar-strip::-webkit-scrollbar {
-      display: none;
-    }
-    .tool {
-      border-radius: 999px;
-      border: 1px solid #e8e5df;
-      background: white;
-      width: 40px;
-      height: 40px;
-      min-height: 40px;
-      padding: 0;
-      white-space: nowrap;
-      font: inherit;
-      cursor: pointer;
-      font-weight: 500;
-      color: #111713;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      transition: border-color 120ms ease, background 120ms ease, color 120ms ease, box-shadow 120ms ease;
-    }
-    .tool span {
-      display: none;
-    }
-    .hidden-tools {
-      display: none;
-    }
-    .tool svg {
-      width: 16px;
-      height: 16px;
-      stroke-width: 2;
-      flex: 0 0 auto;
-    }
-    #toolMeasureArea svg,
-    #toolErase svg {
-      width: 20px;
-      height: 20px;
-    }
-    #toolMeasureArea svg {
-      width: 22px;
-      height: 22px;
-      stroke-width: 1.65;
-    }
-    #toolMapExport svg {
-      width: 18px;
-      height: 18px;
-    }
-    #exportPanel {
-      left: 78px;
-      top: 284px;
-      width: 238px;
-      padding: 12px;
-      display: grid;
-      gap: 10px;
-      z-index: 16;
-    }
-    #exportPanel[hidden] {
-      display: none;
-    }
-    .export-title {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      font-weight: 700;
-      font-size: 13px;
-      color: var(--ok-ink);
-    }
-    .export-mobile-row {
-      display: none;
-    }
-    .export-summary {
-      display: inline-flex;
-      align-items: center;
-      min-height: 34px;
-      padding: 0 12px;
-      border-radius: 8px;
-      background: rgba(245, 242, 237, 0.9);
-      color: #81786f;
-      font-size: 13px;
-      font-weight: 800;
-      letter-spacing: -0.01em;
-    }
-    .export-settings-toggle {
-      width: 52px;
-      height: 52px;
-      border: 0;
-      border-radius: 999px;
-      background: #f8f0e6;
-      color: var(--ok-accent);
-      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-    }
-    .export-settings-toggle svg {
-      width: 25px;
-      height: 25px;
-      stroke-width: 2.5;
-    }
-    .export-close {
-      width: 26px;
-      height: 26px;
-      border: 1px solid var(--ok-border);
-      background: #fff;
-      border-radius: 999px;
-      cursor: pointer;
-      font-size: 16px;
-      line-height: 1;
-      color: var(--ok-muted);
-    }
-    .export-help {
-      margin: 0;
-      font-size: 12px;
-      line-height: 1.35;
-      color: var(--ok-muted);
-    }
-    .export-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }
-    .export-field {
-      display: grid;
-      gap: 4px;
-      font-size: 11px;
-      font-weight: 700;
-      color: var(--ok-muted);
-    }
-    .export-field select {
-      width: 100%;
-      border: 1px solid var(--ok-border);
-      border-radius: 10px;
-      background: #fff;
-      color: var(--ok-ink);
-      padding: 8px 9px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .export-actions {
-      display: grid;
-      gap: 7px;
-    }
-    .onoffice-actions {
-      display: grid;
-      gap: 7px;
-      padding-top: 3px;
-      border-top: 1px solid rgba(43, 48, 54, 0.08);
-    }
-    .onoffice-actions[hidden] {
-      display: none;
-    }
-    .onoffice-actions button,
-    .export-actions button {
-      border: 1px solid var(--ok-border);
-      border-radius: 12px;
-      background: #fff;
-      color: var(--ok-ink);
-      padding: 9px 10px;
-      font-size: 12px;
-      font-weight: 700;
-      cursor: pointer;
-      text-align: left;
-    }
-    .onoffice-actions button[data-primary="true"],
-    .export-actions button[data-primary="true"] {
-      background: var(--ok-accent);
-      border-color: var(--ok-accent);
-      color: #fff;
-      text-align: center;
-    }
-    .onoffice-actions button:disabled,
-    .export-actions button:disabled {
-      cursor: wait;
-      opacity: 0.72;
-    }
-    .export-status {
-      min-height: 16px;
-      font-size: 11px;
-      color: var(--ok-muted);
-    }
-    .export-selection-box {
-      position: absolute;
-      pointer-events: none;
-      border: 2px solid var(--ok-accent);
-      background: rgba(248, 109, 20, 0.10);
-      box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.08);
-      z-index: 12;
-    }
-    .maplibregl-canvas-container[data-export-crop="true"] canvas {
-      cursor: crosshair !important;
-    }
-    .colorBar {
-      display: flex;
-      justify-content: center;
-      padding-top: 3px;
-    }
-    .color-picker {
-      width: 32px;
-      height: 32px;
-      border-radius: 999px;
-      border: 1px solid var(--ok-border);
-      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
-      cursor: pointer;
-      padding: 0;
-      overflow: hidden;
-      background: conic-gradient(#f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
-    }
-    .color-picker::-webkit-color-swatch-wrapper {
-      padding: 0;
-    }
-    .color-picker::-webkit-color-swatch {
-      border: 2px solid #fff;
-      border-radius: 999px;
-    }
-    .color-picker::-moz-color-swatch {
-      border: 2px solid #fff;
-      border-radius: 999px;
-    }
-    .tool:hover {
-      border-color: rgba(248, 109, 20, 0.45);
-      background: #fff8f3;
-    }
-    .tool[data-state=\"active\"] {
-      background: var(--ok-accent);
-      border-color: #f97316;
-      color: #fff;
-      box-shadow: 0 10px 24px rgba(248, 109, 20, 0.18);
-    }
-    .tool[data-compact=\"true\"] span {
-      display: inline;
-    }
-    #searchPanel {
-      left: 12px;
-      top: 12px;
-      width: min(320px, calc(100vw - 24px));
-      padding: 0;
-      transform: none;
-      border: 0;
-      border-radius: 0;
-      background: transparent;
-      box-shadow: none;
-      backdrop-filter: none;
-    }
-    #searchPanel .panel-label {
-      display: none;
-    }
-    #searchPanel .search-form {
-      position: relative;
-      padding: 0;
-    }
-    .search-icon {
-      position: absolute;
-      left: 12px;
-      top: 50%;
-      width: 16px;
-      height: 16px;
-      transform: translateY(-50%);
-      color: var(--ok-muted);
-      pointer-events: none;
-      transition: color 120ms ease;
-    }
-    #searchPanel .search-form:focus-within .search-icon {
-      color: var(--ok-accent);
-    }
-    #searchPanel input {
-      min-width: 0;
-      border-radius: 999px;
-      border: 1px solid var(--ok-line);
-      width: 100%;
-      height: 40px;
-      padding: 0 14px 0 40px;
-      font: inherit;
-      font-size: 16px;
-      color: #111827;
-      background: #fff;
-      outline: none;
-      box-shadow: 0 10px 25px rgba(17, 23, 19, 0.14);
-    }
-    #searchPanel input:focus {
-      border-color: var(--ok-line);
-    }
-    #searchResults {
-      position: absolute;
-      left: 0;
-      top: calc(100% + 8px);
-      width: 100%;
-      max-height: min(280px, calc(100vh - 210px));
-      overflow: auto;
-      border: 1px solid var(--ok-line);
-      border-radius: 16px;
-      background: #fff;
-      box-shadow: 0 18px 45px rgba(17, 23, 19, 0.16);
-      padding: 6px;
-    }
-    #searchResults[hidden] {
-      display: none;
-    }
-    .search-result {
-      border: 0;
-      border-radius: 12px;
-      display: block;
-      width: 100%;
-      text-align: left;
-      padding: 10px 12px;
-      font: inherit;
-      background: transparent;
-      cursor: pointer;
-    }
-    .search-result:first-child {
-      border-top: 0;
-    }
-    .search-result:hover {
-      background: var(--ok-accent-soft);
-    }
-    .search-title {
-      margin: 0;
-      font-weight: 700;
-    }
-    .search-meta {
-      color: var(--ok-muted);
-      font-size: 12px;
-      margin-top: 2px;
-    }
-    #statusPanel {
-      display: none;
-    }
-    #zoomReadout {
-      position: absolute;
-      left: 50%;
-      bottom: 14px;
-      transform: translateX(-50%);
-      z-index: 6;
-      min-width: 76px;
-      padding: 6px 10px;
-      border: 1px solid rgba(17, 23, 19, 0.12);
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.88);
-      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.12);
-      backdrop-filter: blur(8px);
-      color: #111713;
-      font: 700 12px/1.1 "IBM Plex Sans", Inter, system-ui, sans-serif;
-      text-align: center;
-      pointer-events: none;
-      font-variant-numeric: tabular-nums;
-    }
-    .maplibregl-ctrl-bottom-left {
-      bottom: 10px;
-      left: 10px;
-    }
-    .maplibregl-ctrl-bottom-left .maplibregl-ctrl {
-      border-radius: 8px;
-      overflow: hidden;
-      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
-      background: rgba(255, 255, 255, 0.9);
-    }
-    .maplibregl-ctrl-bottom-left .maplibregl-ctrl button {
-      width: 30px;
-      height: 30px;
-    }
-    #statusRight:empty {
-      display: none;
-    }
-    #sourcePanel {
-      right: 0;
-      bottom: 0;
-      width: auto;
-      padding: 0;
-      overflow: visible;
-      font-size: 12px;
-      line-height: 1.35;
-      border: 0;
-      border-radius: 0;
-      background: transparent;
-      box-shadow: none;
-      backdrop-filter: none;
-      display: flex;
-      flex-direction: row-reverse;
-      align-items: center;
-    }
-    #sourceToggle {
-      border: 0;
-      width: 24px;
-      height: 24px;
-      padding: 0;
-      border-radius: 4px 0 0 4px;
-      background: rgba(255, 255, 255, 0.75);
-      color: rgba(0, 0, 0, 0.75);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font: inherit;
-      font-weight: 700;
-      text-align: center;
-      backdrop-filter: blur(2px);
-      pointer-events: auto;
-    }
-    #sourceToggle svg {
-      width: 14px;
-      height: 14px;
-      stroke-width: 2;
-    }
-    #sourceDetails[hidden] {
-      display: none;
-    }
-    #sourcePanel[data-open="true"] #sourceToggle {
-      border-radius: 4px 0 0 4px;
-      padding: 0;
-    }
-    #sourceDetails {
-      height: 24px;
-      padding: 0 8px;
-      max-height: none;
-      overflow: hidden;
-      background: rgba(255, 255, 255, 0.75);
-      width: max-content;
-      max-width: calc(100vw - 34px);
-      backdrop-filter: blur(2px);
-      display: flex;
-      align-items: center;
-      font-family: \"IBM Plex Sans\", sans-serif;
-      font-size: 10px;
-      line-height: 1;
-      color: rgba(0, 0, 0, 0.75);
-      white-space: nowrap;
-    }
-    #sourceTitle {
-      display: none;
-    }
-    #sourceList {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      gap: 4px;
-      align-items: center;
-      overflow-x: auto;
-      white-space: nowrap;
-      color: rgba(0, 0, 0, 0.75);
-      scrollbar-width: none;
-    }
-    #sourceList::-webkit-scrollbar {
-      display: none;
-    }
-    .source-item {
-      padding: 0;
-      border-radius: 0;
-      border: 0;
-      background: transparent;
-      color: inherit;
-    }
-    .source-name {
-      display: none;
-    }
-    .source-line {
-      font-size: 10px;
-      color: inherit;
-    }
-    .source-line a {
-      color: inherit;
-      text-decoration: underline;
-    }
-    .source-line + .source-line {
-      margin-top: 2px;
-    }
-    #selectionPanel {
-      right: 12px;
-      top: 118px;
-      width: min(340px, calc(100vw - 24px));
-      max-height: calc(100vh - 192px);
-      overflow: hidden;
-      color: #111713;
-      border-radius: 16px;
-      display: flex;
-      flex-direction: column;
-    }
-    #selectionPanel[hidden] {
-      display: none;
-    }
-    .selection-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 12px 8px;
-      border-bottom: 1px solid #f1eee8;
-      font-size: 13px;
-      font-weight: 600;
-      gap: 10px;
-      flex: 0 0 auto;
-    }
-    .selection-close {
-      border: 0;
-      background: transparent;
-      font-size: 20px;
-      line-height: 1;
-      cursor: pointer;
-      color: #334155;
-    }
-    .selection-body {
-      padding: 8px;
-      overflow-y: scroll;
-      overflow-x: auto;
-      flex: 1 1 auto;
-      scrollbar-gutter: stable;
-      scrollbar-width: thin;
-      scrollbar-color: #c9c1b8 transparent;
-      min-height: 0;
-    }
-    .selection-body::-webkit-scrollbar {
-      width: 9px;
-      height: 9px;
-    }
-    .selection-body::-webkit-scrollbar-track {
-      background: transparent;
-    }
-    .selection-body::-webkit-scrollbar-thumb {
-      background: #c9c1b8;
-      border-radius: 999px;
-      border: 2px solid rgba(255, 255, 255, 0.9);
-    }
-    .selection-table {
-      margin-right: 2px;
-    }
-    .selection-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12.5px;
-      line-height: 1.25;
-      background: #fff;
-      border: 1px solid #eee8df;
-      border-radius: 10px;
-      overflow: hidden;
-    }
-    .selection-table th,
-    .selection-table td {
-      border-bottom: 1px solid #eee8df;
-      padding: 7px 8px;
-      text-align: left;
-      vertical-align: top;
-    }
-    .selection-table th {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      background: #f7f4ef;
-      color: #667085;
-      font-weight: 700;
-      white-space: nowrap;
-    }
-    .selection-table tr:last-child td {
-      border-bottom: 0;
-    }
-    .selection-table tfoot td {
-      background: #fbfaf7;
-      font-weight: 700;
-    }
-    .selection-summary {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-bottom: 8px;
-    }
-    .selection-chip {
-      display: inline-flex;
-      align-items: center;
-      min-height: 22px;
-      border-radius: 999px;
-      padding: 0 8px;
-      background: #f7f4ef;
-      color: #4b5563;
-      font-size: 11px;
-      font-weight: 600;
-      white-space: nowrap;
-    }
-    .selection-muted {
-      color: #667085;
-    }
-    #status {
-      left: 12px;
-      top: 12px;
-      z-index: 5;
-      padding: 8px 10px;
-      border-radius: 10px;
-      border: 1px solid rgba(15, 23, 42, 0.18);
-      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.2);
-      max-width: min(430px, calc(100vw - 24px));
-      background: rgba(255, 255, 255, 0.95);
-      pointer-events: none;
-    }
-    #status[data-ready=\"true\"] {
-      display: none;
-    }
-    @media (max-width: 860px) {
-      #toolDock {
-        left: 8px;
-        top: 64px;
-        width: 52px;
-      }
-      .toolbar-strip {
-        width: 100%;
-      }
-      .toolBar {
-        gap: 6px;
-      }
-      .tool {
-        font-size: 12px;
-        width: 40px;
-        height: 40px;
-        min-height: 40px;
-      }
-      #searchPanel {
-        left: 8px;
-        right: 8px;
-        top: 12px;
-        width: min(320px, calc(100vw - 64px));
-        transform: none;
-      }
-      #layerSwitch {
-        right: 8px;
-        top: 12px;
-      }
-      #sourcePanel,
-      #selectionPanel {
-        left: 8px;
-        right: 8px;
-      }
-      #selectionPanel {
-        left: 8px;
-        right: 8px;
-        top: auto;
-        bottom: 8px;
-        width: auto;
-        max-height: min(44vh, 340px);
-        border-radius: 18px;
-        z-index: 5;
-      }
-      #sourcePanel {
-        left: auto;
-        right: 0;
-        bottom: 0;
-        width: auto;
-      }
-      #exportPanel {
-        position: fixed;
-        left: 0;
-        right: 0;
-        top: auto;
-        bottom: 0;
-        width: auto;
-        padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px));
-        border-radius: 22px 22px 0 0;
-        border-left: 0;
-        border-right: 0;
-        border-bottom: 0;
-        background: rgba(255, 255, 255, 0.96);
-        box-shadow: 0 -18px 42px rgba(15, 23, 42, 0.12);
-        z-index: 20;
-      }
-      #exportPanel .export-title {
-        display: none;
-      }
-      #exportPanel .export-mobile-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 14px;
-      }
-      #exportPanel .export-grid {
-        display: none;
-        grid-template-columns: 1fr 1fr;
-        padding-top: 8px;
-      }
-      #exportPanel[data-settings-open="true"] .export-grid {
-        display: grid;
-      }
-      #exportPanel .export-actions button[data-primary="true"] {
-        min-height: 58px;
-        border-radius: 8px;
-        font-size: 20px;
-        text-align: center;
-      }
-      #exportPanel .export-status {
-        display: none;
-      }
-      #sourceDetails {
-        max-height: none;
-        max-width: calc(100vw - 34px);
-      }
-      .source-item {
-        padding: 0;
-      }
-      .maplibregl-ctrl-bottom-left {
-        display: none;
-      }
-    }
-  </style>
-</head>
-<body>
-  <img id=\"mapBootstrapBackdrop\" class=\"map-bootstrap-backdrop\" alt=\"\" loading=\"eager\" decoding=\"async\">
-  <img id=\"mapFrameFallback\" class=\"map-frame-fallback\" alt=\"\">
-  <div id=\"map\"></div>
-  <div id=\"zoomReadout\" aria-live=\"polite\">Zoom --</div>
-  <aside id=\"toolDock\" class=\"floating\" data-open=\"true\">
-    <button id=\"toolDockToggle\" type=\"button\" aria-expanded=\"true\">
-      <svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\"><path d=\"M4 7h16\"/><path d=\"M4 12h16\"/><path d=\"M4 17h16\"/></svg>
-      <span>Werkzeuge</span>
-    </button>
-      <div class=\"toolBar\">
-      <div class=\"toolbar-strip\">
-        <button id=\"toolMeasureArea\" class=\"tool\" data-kind=\"mode\" data-state=\"off\" type=\"button\" title=\"Messen: Seiten, Umfang und Fläche\">
-          <svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\"><rect x=\"5\" y=\"9\" width=\"14\" height=\"6\" rx=\"1.5\" transform=\"rotate(-35 12 12)\"/><path d=\"M8.2 12.8l1.2 1.7\"/><path d=\"M10.8 11l1.2 1.7\"/><path d=\"M13.4 9.2l1.2 1.7\"/><path d=\"M16 7.4l1.2 1.7\"/></svg><span>Messen</span>
-        </button>
-        <button id=\"toolPin\" class=\"tool\" data-kind=\"mode\" data-state=\"off\" type=\"button\" title=\"Punkt setzen\">
-          <svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\"><path d=\"M12 21s6-5.4 6-11a6 6 0 10-12 0c0 5.6 6 11 6 11z\"/><circle cx=\"12\" cy=\"10\" r=\"2\"/></svg><span>Punkt</span>
-        </button>
-        <button id=\"toolDrawLine\" class=\"tool\" data-kind=\"mode\" data-state=\"off\" type=\"button\" title=\"Linie markieren\">
-          <svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\"><path d=\"M5 19L10 8l5 5 4-8\"/><circle cx=\"5\" cy=\"19\" r=\"1.4\"/><circle cx=\"10\" cy=\"8\" r=\"1.4\"/><circle cx=\"15\" cy=\"13\" r=\"1.4\"/><circle cx=\"19\" cy=\"5\" r=\"1.4\"/></svg><span>Linie</span>
-        </button>
-        <button id=\"toolDrawPolygon\" class=\"tool\" data-kind=\"mode\" data-state=\"off\" type=\"button\" title=\"Polygon markieren\">
-          <svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\"><path d=\"M7 4l11 3 2 10-8 4-8-6z\"/><circle cx=\"7\" cy=\"4\" r=\"1.4\"/><circle cx=\"18\" cy=\"7\" r=\"1.4\"/><circle cx=\"20\" cy=\"17\" r=\"1.4\"/><circle cx=\"12\" cy=\"21\" r=\"1.4\"/><circle cx=\"4\" cy=\"15\" r=\"1.4\"/></svg><span>Polygon</span>
-        </button>
-        <button id=\"toolErase\" class=\"tool\" data-kind=\"mode\" data-state=\"off\" type=\"button\" title=\"Einzelne Markierung löschen\">
-          <svg viewBox=\"0 0 28 28\" fill=\"none\" stroke=\"currentColor\"><g transform=\"rotate(-45 14 14)\"><rect x=\"8\" y=\"9\" width=\"14\" height=\"8\" rx=\"1.5\"/><path d=\"M15 9v8\"/></g></svg><span>Radieren</span>
-        </button>
-        <button id="toolClear" class="tool" data-kind="action" type="button" title="Auswahl und Messung löschen">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 15H6L5 6"/></svg><span>Löschen</span>
-        </button>
-        <button id=\"toolMapExport\" class=\"tool\" data-kind=\"action\" type=\"button\" title=\"Kartenausschnitt exportieren\">
-          <svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\"><path d=\"M12 3v10\"/><path d=\"M8 9l4 4 4-4\"/><path d=\"M5 15v4h14v-4\"/></svg><span>Export</span>
-        </button>
-      </div>
-      <div class=\"colorBar\" aria-label=\"Markierungsfarbe\">
-        <input id=\"annotationColorPicker\" class=\"color-picker\" type=\"color\" value=\"#f86d14\" title=\"Markierungsfarbe wählen\" aria-label=\"Markierungsfarbe wählen\" />
-      </div>
-    </div>
-    <div class=\"hidden-tools\" aria-hidden=\"true\">
-      <button id=\"toolSelect\" data-state=\"active\" type=\"button\"></button>
-      <button id=\"toolMeasureLine\" data-state=\"off\" type=\"button\"></button>
-      <button id=\"toolMeasureRadius\" data-state=\"off\" type=\"button\"></button>
-      <button id=\"toolMeasureUndo\" type=\"button\"></button>
-      <button id=\"toolCopyCursor\" type=\"button\"></button>
-      <button id=\"toolCopyCoords\" type=\"button\"></button>
-      <button id=\"toolSelectionReport\" type=\"button\"></button>
-      <button id=\"toolZoomSelection\" type=\"button\"></button>
-      <button id=\"toolExportCsv\" type=\"button\"></button>
-      <button id=\"toolExport\" type=\"button\"></button>
-      <button id=\"toolHome\" type=\"button\"></button>
-      <button id=\"toolCopy\" type=\"button\"></button>
-      <button id=\"toolExportView\" type=\"button\"></button>
-      <button id=\"toolCopyViewport\" type=\"button\"></button>
-    </div>
-  </aside>
-  <section id=\"exportPanel\" class=\"floating\" hidden>
-    <div class=\"export-title\">
-      <span>Karte exportieren</span>
-      <button id=\"exportClose\" class=\"export-close\" type=\"button\" aria-label=\"Export schließen\">×</button>
-    </div>
-    <div class=\"export-mobile-row\">
-      <div id=\"exportSummary\" class=\"export-summary\">A4 · 1:1000 · PDF</div>
-      <button id=\"exportSettingsToggle\" class=\"export-settings-toggle\" type=\"button\" aria-label=\"Export-Einstellungen\" aria-expanded=\"false\">
-        <svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\"><path d=\"M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z\"/><path d=\"M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.1 2.1 0 0 1-2.97 2.97l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.1 1.66V21.4a2.1 2.1 0 0 1-4.2 0v-.15a1.8 1.8 0 0 0-1.1-1.66 1.8 1.8 0 0 0-1.98.36l-.04.04a2.1 2.1 0 0 1-2.97-2.97l.04-.04A1.8 1.8 0 0 0 3.6 15a1.8 1.8 0 0 0-1.66-1.1H1.8a2.1 2.1 0 0 1 0-4.2h.15A1.8 1.8 0 0 0 3.6 8a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.1 2.1 0 0 1 2.97-2.97l.04.04A1.8 1.8 0 0 0 8.2 3.4a1.8 1.8 0 0 0 1.1-1.66V1.6a2.1 2.1 0 0 1 4.2 0v.15a1.8 1.8 0 0 0 1.1 1.66 1.8 1.8 0 0 0 1.98-.36l.04-.04a2.1 2.1 0 0 1 2.97 2.97l-.04.04A1.8 1.8 0 0 0 19.4 8a1.8 1.8 0 0 0 1.66 1.1h.15a2.1 2.1 0 0 1 0 4.2h-.15A1.8 1.8 0 0 0 19.4 15z\"/></svg>
-      </button>
-    </div>
-    <div class=\"export-grid\">
-      <label class=\"export-field\">Format
-        <select id=\"exportPaper\">
-          <option value=\"a4\">A4</option>
-          <option value=\"a3\">A3</option>
-        </select>
-      </label>
-      <label class=\"export-field\">Maßstab
-        <select id=\"exportScale\">
-          <option value=\"500\">1:500</option>
-          <option value=\"1000\" selected>1:1000</option>
-          <option value=\"2000\">1:2000</option>
-        </select>
-      </label>
-      <label class=\"export-field\">Ausrichtung
-        <select id=\"exportOrientation\">
-          <option value=\"portrait\" selected>Hochformat</option>
-          <option value=\"landscape\">Querformat</option>
-        </select>
-      </label>
-      <label class=\"export-field\">Datei
-        <select id=\"exportOutput\">
-          <option value=\"png\">PNG</option>
-          <option value=\"pdf\">PDF</option>
-        </select>
-      </label>
-    </div>
-    <div class=\"export-actions\">
-      <button id=\"exportDownloadPng\" type=\"button\" data-primary=\"true\">Export herunterladen</button>
-    </div>
-    <div id=\"onofficeActions\" class=\"onoffice-actions\" hidden>
-      <button id=\"onofficeExportPdf\" type=\"button\" data-primary=\"true\">PDF für onOffice</button>
-      <button id=\"onofficeTransferSelection\" type=\"button\">Informationen übernehmen</button>
-    </div>
-    <div id=\"exportStatus\" class=\"export-status\"></div>
-  </section>
-  <section id=\"searchPanel\" class=\"floating\">
-    <div class=\"panel-label\">Suche</div>
-    <form id=\"searchForm\" class=\"search-form\">
-      <svg class=\"search-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\"><path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/></svg>
-      <input id=\"searchInput\" type=\"search\" placeholder=\"Straße, Ort oder Flurstück suchen...\" autocomplete=\"off\" autocapitalize=\"off\" autocorrect=\"off\" spellcheck=\"false\" inputmode=\"search\" data-1p-ignore=\"true\" data-lpignore=\"true\" data-form-type=\"other\">
-    </form>
-    <div id=\"searchResults\" hidden></div>
-  </section>
-  <section id=\"layerSwitch\" class=\"floating\" aria-label=\"Kartenlayer\">
-    <button id=\"layerToggle\" type=\"button\" aria-label=\"Kartenlayer\" aria-expanded=\"false\">
-      <svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\"><path d=\"M12 3l8 4-8 4-8-4z\"/><path d=\"M4 12l8 4 8-4\"/><path d=\"M4 17l8 4 8-4\"/></svg>
-    </button>
-    <div id=\"layerMenu\" hidden>
-      <div class=\"layer-menu-title\">Layer</div>
-      <details class=\"layer-group\" open>
-        <summary><label class=\"layer-group-check\"><input type=\"checkbox\" data-layer-group=\"base\"><span>Basiskarte</span></label></summary>
-      </details>
-      <details class=\"layer-group\" open>
-        <summary><label class=\"layer-group-check\"><input type=\"checkbox\" data-layer-group=\"aerial\"><span>Luftbild</span></label></summary>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"aerial\"><span class=\"legend-swatch aerial\"></span><span>Luftbild</span></label>
-      </details>
-      <details class=\"layer-group\" open>
-        <summary><label class=\"layer-group-check\"><input type=\"checkbox\" data-layer-group=\"surfaces\"><span>ALKIS Flächen</span></label></summary>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"surfaceFills\"><span class=\"legend-swatch fill\"></span><span>Flächenfüllungen</span></label>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"buildings\"><span class=\"legend-swatch building\"></span><span>Gebäude</span></label>
-      </details>
-      <details class=\"layer-group\" open>
-        <summary><label class=\"layer-group-check\"><input type=\"checkbox\" data-layer-group=\"lines\"><span>ALKIS Linien</span></label></summary>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"parcelLines\"><span class=\"legend-swatch parcel-line\"></span><span>Flurstücksgrenzen</span></label>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"surfaceOutlines\"><span class=\"legend-swatch outline\"></span><span>Flächenoutlines</span></label>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"legalLines\"><span class=\"legend-swatch legal\"></span><span>Rechtliche Festlegungen & Grenzen</span></label>
-      </details>
-      <details class=\"layer-group\" open>
-        <summary><label class=\"layer-group-check\"><input type=\"checkbox\" data-layer-group=\"labels\"><span>Beschriftungen & Punkte</span></label></summary>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"parcelLabels\"><span class=\"legend-swatch parcel-label\"></span><span>Flurstücksbeschriftungen</span></label>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"houseNumbers\"><span class=\"legend-swatch text\"></span><span>Hausnummern</span></label>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"buildingLabels\"><span class=\"legend-swatch text-muted\"></span><span>Gebäudebeschriftungen</span></label>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"streetNames\"><span class=\"legend-swatch street-label\"></span><span>Straßennamen</span></label>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"surfaceLabels\"><span class=\"legend-swatch area-label\"></span><span>Flächenlabels</span></label>
-        <label class=\"layer-check\"><input type=\"checkbox\" data-layer-setting=\"symbols\"><span class=\"legend-swatch monument-symbol\"></span><span>Weitere Signaturen</span></label>
-      </details>
-    </div>
-  </section>
-  <section id=\"sourcePanel\" class=\"floating\" data-open=\"false\">
-    <button id=\"sourceToggle\" type=\"button\" aria-label=\"Map Information\" title=\"Map Information\" aria-expanded=\"false\">
-      <svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 16v-4\"/><path d=\"M12 8h.01\"/></svg>
-    </button>
-    <div id=\"sourceDetails\" hidden>
-      <ul id=\"sourceList\"></ul>
-    </div>
-  </section>
-  <section id=\"statusPanel\" class=\"floating\">
-    <div id=\"statusLeft\"></div>
-    <div id=\"statusCenter\"></div>
-    <div id=\"statusRight\"></div>
-  </section>
-  <section id=\"selectionPanel\" class=\"floating\" hidden>
-    <div class=\"selection-head\"> <span>Auswahl</span> <button id=\"selectionClose\" class=\"selection-close\" aria-label=\"Auswahl schließen\">&times;</button></div>
-    <div id=\"selectionBody\" class=\"selection-body\"></div>
-  </section>
-  <div id=\"status\" class=\"floating\" data-ready=\"false\">Karte wird geladen …</div>
-  <script src=\"https://unpkg.com/maplibre-gl@5.14.0/dist/maplibre-gl.js\"></script>
-  <script>
-    const statusEl = document.getElementById(\"status\");
-    const zoomReadout = document.getElementById(\"zoomReadout\");
-    const statusLeft = document.getElementById(\"statusLeft\");
-    const statusCenter = document.getElementById(\"statusCenter\");
-    const statusRight = document.getElementById(\"statusRight\");
-    const sourcePanel = document.getElementById(\"sourcePanel\");
-    const sourceToggle = document.getElementById(\"sourceToggle\");
-    const sourceDetails = document.getElementById(\"sourceDetails\");
-    const sourceTitle = document.getElementById(\"sourceTitle\");
-    const sourceList = document.getElementById(\"sourceList\");
-    const selectionPanel = document.getElementById(\"selectionPanel\");
-    const selectionBody = document.getElementById(\"selectionBody\");
-    const selectionClose = document.getElementById(\"selectionClose\");
-    const searchForm = document.getElementById(\"searchForm\");
-    const searchInput = document.getElementById(\"searchInput\");
-    const searchResults = document.getElementById(\"searchResults\");
-    const bootstrapBackdrop = document.getElementById(\"mapBootstrapBackdrop\");
-    const bootstrapStates = {
-      saarland: { bounds: [6.355591, 49.111636, 7.404785, 49.639413], src: "/bootstrap/saarland.webp?v=saarland-bootstrap-overview-v1" },
-    };
-    function pickBootstrapState() {
-      if (!map) return null;
-      const center = map.getCenter();
-      for (const cfg of Object.values(bootstrapStates)) {
-        const b = cfg.bounds;
-        if (center.lng >= b[0] && center.lng <= b[2] && center.lat >= b[1] && center.lat <= b[3]) return cfg;
-      }
-      return null;
-    }
-    function updateBootstrapBackdrop() {
-      if (!bootstrapBackdrop || !map) return;
-      const cfg = pickBootstrapState();
-      if (!cfg || map.getZoom() > 14.5) {
-        bootstrapBackdrop.classList.remove("is-visible");
-        return;
-      }
-      if (bootstrapBackdrop.getAttribute("src") !== cfg.src) bootstrapBackdrop.src = cfg.src;
-      bootstrapBackdrop.classList.add("is-visible");
-    }
-
-    const mapFrameFallback = document.getElementById(\"mapFrameFallback\");
-    const isTouchLikeDevice = Boolean(
-      (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) ||
-      (window.matchMedia && window.matchMedia("(pointer: coarse)").matches)
-    );
-    const layerToggle = document.getElementById("layerToggle");
-    const layerMenu = document.getElementById("layerMenu");
-    const layerSettingInputs = Array.from(document.querySelectorAll("[data-layer-setting]"));
-    const layerGroupInputs = Array.from(document.querySelectorAll("[data-layer-group]"));
-    const toolDock = document.getElementById(\"toolDock\");
-    const toolDockToggle = document.getElementById(\"toolDockToggle\");
-    const toolSelect = document.getElementById(\"toolSelect\");
-    const toolMeasureLine = document.getElementById(\"toolMeasureLine\");
-    const toolMeasureArea = document.getElementById(\"toolMeasureArea\");
-    const toolDrawLine = document.getElementById("toolDrawLine");
-    const toolDrawPolygon = document.getElementById("toolDrawPolygon");
-    const toolErase = document.getElementById("toolErase");
-    const toolMeasureRadius = document.getElementById(\"toolMeasureRadius\");
-    const toolMeasureUndo = document.getElementById(\"toolMeasureUndo\");
-    const toolPin = document.getElementById(\"toolPin\");
-    const toolCopyCoords = document.getElementById(\"toolCopyCoords\");
-    const toolExport = document.getElementById(\"toolExport\");
-    const toolExportCsv = document.getElementById(\"toolExportCsv\");
-    const toolExportView = document.getElementById(\"toolExportView\");
-    const toolCopyViewport = document.getElementById(\"toolCopyViewport\");
-    const toolCopyCursor = document.getElementById(\"toolCopyCursor\");
-    const toolSelectionReport = document.getElementById(\"toolSelectionReport\");
-    const toolZoomSelection = document.getElementById(\"toolZoomSelection\");
-    const toolClear = document.getElementById(\"toolClear\");
-    const toolHome = document.getElementById(\"toolHome\");
-    const toolCopy = document.getElementById(\"toolCopy\");
-    const toolMapExport = document.getElementById("toolMapExport");
-    const exportPanel = document.getElementById("exportPanel");
-    const exportClose = document.getElementById("exportClose");
-    const exportSelectArea = document.getElementById("exportSelectArea");
-    const exportUseView = document.getElementById("exportUseView");
-    const exportDownloadPng = document.getElementById("exportDownloadPng");
-    const exportPaper = document.getElementById("exportPaper");
-    const exportScale = document.getElementById("exportScale");
-    const exportOrientation = document.getElementById("exportOrientation");
-    const exportOutput = document.getElementById("exportOutput");
-    const exportSummary = document.getElementById("exportSummary");
-    const exportSettingsToggle = document.getElementById("exportSettingsToggle");
-    const exportStatus = document.getElementById("exportStatus");
-    const onofficeActions = document.getElementById("onofficeActions");
-    const onofficeExportPdf = document.getElementById("onofficeExportPdf");
-    const onofficeTransferSelection = document.getElementById("onofficeTransferSelection");
-    const annotationColorPicker = document.getElementById("annotationColorPicker");
-
-    const featureUrl = __FEATURE_URL__;
-    const searchUrl = __SEARCH_URL__;
-    const datasetsUrl = __DATASETS_URL__;
-    const metadataUrl = __METADATA_URL__;
-    const viewerParams = new URLSearchParams(window.location.search);
-    const viewerMode = String(viewerParams.get("mode") || viewerParams.get("okMode") || "").toLowerCase();
-    const isOnOfficeMode = viewerMode === "onoffice" || window.location.pathname.includes("/embed/onoffice");
-    if (isOnOfficeMode && onofficeActions) onofficeActions.hidden = false;
-
-    const selectedParcels = new Map();
-    const selectedBuildings = new Map();
-    let map;
-    let lastCursorLngLat = null;
-    let searchTimer = 0;
-    let searchAbort = null;
-    let lastFrameUrl = "";
-    let captureFrameTimer = 0;
-    let fallbackHideTimer = 0;
-    let activeTool = \"none\";
-    let measurePoints = [];
-    let areaPoints = [];
-    let radiusPoints = [];
-    let pinnedPoints = [];
-    let annotations = [];
-    let annotationPoints = [];
-    let annotationColor = "#f86d14";
-    let dragAnnotationVertex = null;
-    let dragMeasureVertex = null;
-    let dragPin = false;
-    let pinMoved = false;
-    let eraseDragging = false;
-    let suppressNextMapClick = false;
-    let spacePanActive = false;
-    let longPressTimer = 0;
-    let longPressStart = null;
-    let baseLayerMode = "custom";
-    let exportCropMode = false;
-    let exportCropStart = null;
-    let exportCropRect = null;
-    let exportSelectionBox = null;
-    const baseLayerVisibilities = new Map();
-    const baseLayerFilters = new Map();
-    const layerSettings = {
-      basemap: true,
-      aerial: false,
-      surfaceFills: true,
-      buildings: true,
-      parcelLines: true,
-      surfaceOutlines: true,
-      legalLines: true,
-      parcelLabels: true,
-      houseNumbers: true,
-      buildingLabels: true,
-      streetNames: true,
-      surfaceLabels: true,
-      symbols: true,
-    };
-    const layerSettingGroups = {
-      base: ["basemap"],
-      aerial: ["aerial"],
-      surfaces: ["surfaceFills", "buildings"],
-      lines: ["parcelLines", "surfaceOutlines", "legalLines"],
-      labels: ["parcelLabels", "houseNumbers", "buildingLabels", "streetNames", "surfaceLabels", "symbols"],
-    };
-    window.__okLayerSettings = layerSettings;
-    let activeStateSlugs = new Set();
-    const stateMetadata = new Map();
-    const STATE_CENTERS = __STATE_CENTERS__;
-    const LUFTBILD_WMS = {
-      "baden-wurttemberg": { url: "https://owsproxy.lgl-bw.de/owsproxy/ows/WMS_LGL-BW_ATKIS_DOP_20_C", layer: "IMAGES_DOP_20_RGB", format: "image/png", version: "1.3.0" },
-      "berlin": { url: "https://isk.geobasis-bb.de/mapproxy/dop20c/service/wms", layer: "bebb_dop20c", format: "image/png" },
-      "brandenburg": { url: "https://isk.geobasis-bb.de/mapproxy/dop20c/service/wms", layer: "bebb_dop20c", format: "image/png" },
-      "bremen": { url: "https://geodienste.bremen.de/wms_dop20_2023", layer: "DOP20_2023_HB", format: "image/png" },
-      "hamburg": { url: "https://geodienste.hamburg.de/wms_dop_zeitreihe_belaubt", layer: "dop_zeitreihe_belaubt", format: "image/png" },
-      "hessen": { url: "https://www.gds-srv.hessen.de/cgi-bin/lika-services/ogc-free-images.ows", layer: "he_dop20_rgb", format: "image/png" },
-      "mecklenburg-vorpommern": { url: "https://www.geodaten-mv.de/dienste/adv_dop", layer: "mv_dop", format: "image/png" },
-      "niedersachsen": { url: "https://opendata.lgln.niedersachsen.de/doorman/noauth/dop_wms", layer: "ni_dop20", format: "image/png" },
-      "nordrhein-westfalen": { url: "https://www.wms.nrw.de/geobasis/wms_nw_dop", layer: "nw_dop_rgb", format: "image/png" },
-      "rheinland-pfalz": { url: "https://geo4.service24.rlp.de/wms/rp_dop20.fcgi", layer: "rp_dop20", format: "image/png" },
-      "saarland": { url: "https://geoportal.saarland.de/freewms/dop2020", layer: "sl_dop2020", format: "image/png" },
-      "sachsen": { url: "https://geodienste.sachsen.de/wms_geosn_dop-rgb/guest", layer: "sn_dop_020", format: "image/png" },
-      "schleswig-holstein": { url: "https://dienste.gdi-sh.de/WMS_SH_DOP20col_OpenGBD", layer: "sh_dop20_rgb", format: "image/png" },
-      "thueringen": { url: "https://www.geoproxy.geoportal-th.de/geoproxy/services/DOP20", layer: "th_dop", format: "image/png" },
-    };
-    const ERASER_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cg transform='rotate(-45 14 14)'%3E%3Crect x='8' y='9' width='14' height='8' rx='1.5' fill='%23ffffff' stroke='%231f2937' stroke-width='2'/%3E%3Cpath d='M15 9v8' stroke='%231f2937' stroke-width='2'/%3E%3C/g%3E%3C/svg%3E") 8 20, auto`;
-    sourcePanel.dataset.open = "false";
-    sourceDetails.hidden = true;
-    sourceToggle.setAttribute("aria-expanded", "false");
-
-    function setStatus(message) {
-      statusEl.textContent = message;
-      statusEl.dataset.ready = \"false\";
-    }
-
-    function showFrameFallback() {
-      if (isTouchLikeDevice || !lastFrameUrl || !mapFrameFallback) return;
-      window.clearTimeout(fallbackHideTimer);
-      mapFrameFallback.classList.add("is-visible");
-    }
-
-    function hideFrameFallbackSoon() {
-      if (isTouchLikeDevice || !mapFrameFallback) return;
-      window.clearTimeout(fallbackHideTimer);
-      fallbackHideTimer = window.setTimeout(() => {
-        mapFrameFallback.classList.remove("is-visible");
-      }, 180);
-    }
-
-    function captureStableFrame() {
-      if (isTouchLikeDevice || !map || !mapFrameFallback) return;
-      window.clearTimeout(captureFrameTimer);
-      captureFrameTimer = window.setTimeout(() => {
-        try {
-          const canvas = map.getCanvas();
-          if (!canvas || canvas.width < 32 || canvas.height < 32) return;
-          const url = canvas.toDataURL("image/jpeg", 0.54);
-          if (url && url.length > 256) {
-            lastFrameUrl = url;
-            mapFrameFallback.src = url;
-          }
-        } catch (_error) {
-          // Canvas capture can fail if a future source is not CORS-clean.
-        }
-      }, 80);
-    }
-
-    function setExportStatus(message) {
-      if (exportStatus) exportStatus.textContent = message || "";
-    }
-
-    function updateExportSummary() {
-      if (!exportSummary) return;
-      exportSummary.textContent = `${String(exportPaper?.value || "a4").toUpperCase()} · 1:${exportScale?.value || "1000"} · ${String(exportOutput?.value || "png").toUpperCase()}`;
-    }
-
-    function setExportSettingsOpen(open) {
-      exportPanel.dataset.settingsOpen = open ? "true" : "false";
-      exportSettingsToggle?.setAttribute("aria-expanded", open ? "true" : "false");
-    }
-
-    function ensureExportSelectionBox() {
-      if (exportSelectionBox || !map) return exportSelectionBox;
-      exportSelectionBox = document.createElement("div");
-      exportSelectionBox.className = "export-selection-box";
-      exportSelectionBox.hidden = true;
-      map.getContainer().appendChild(exportSelectionBox);
-      return exportSelectionBox;
-    }
-
-    function exportAspectRatio() {
-      const paper = exportPaper?.value || "a4";
-      const sizes = {
-        a4: [210, 297],
-        a3: [297, 420],
-      };
-      let [paperW, paperH] = sizes[paper] || sizes.a4;
-      if ((exportOrientation?.value || "portrait") === "landscape") {
-        [paperW, paperH] = [paperH, paperW];
-      }
-      return paperW / paperH;
-    }
-
-    function exportGroundSizeMeters() {
-      const scale = Number(exportScale?.value || 1000);
-      const mapArea = exportPaperSizeMillimeters();
-      return {
-        width: mapArea.width / 1000 * scale,
-        height: mapArea.height / 1000 * scale,
-      };
-    }
-
-    function exportPaperSizeMillimeters() {
-      const paper = exportPaper?.value || "a4";
-      const sizes = {
-        a4: [210, 297],
-        a3: [297, 420],
-      };
-      let [paperW, paperH] = sizes[paper] || sizes.a4;
-      if ((exportOrientation?.value || "portrait") === "landscape") {
-        [paperW, paperH] = [paperH, paperW];
-      }
-      return { width: paperW, height: paperH };
-    }
-
-    function officialLayoutInches() {
-      const paperSize = exportPaperSizeMillimeters();
-      const pageW = paperSize.width / 25.4;
-      const pageH = paperSize.height / 25.4;
-      const landscape = (exportOrientation?.value || "portrait") === "landscape";
-      const marginTop = 0.3;
-      const marginBottom = 0.3;
-      const marginLeft = 0.7;
-      const marginRight = 0.5;
-      const headerHeight = landscape ? 0.5 : 0.8;
-      const footerHeight = landscape ? 0.5 : 0.6;
-      const padding = 0.15;
-      const mapW = pageW - marginLeft - marginRight;
-      const mapH = pageH - marginTop - marginBottom - headerHeight - footerHeight - (2 * padding);
-      return { pageW, pageH, marginTop, marginBottom, marginLeft, marginRight, headerHeight, footerHeight, padding, mapW, mapH };
-    }
-
-    function exportMapAreaSizeMillimeters() {
-      const layout = officialLayoutInches();
-      return {
-        width: layout.mapW * 25.4,
-        height: layout.mapH * 25.4,
-      };
-    }
-
-    function exportPixelSize() {
-      const dpi = 200;
-      const paperSize = exportPaperSizeMillimeters();
-      return {
-        width: Math.round(paperSize.width / 25.4 * dpi),
-        height: Math.round(paperSize.height / 25.4 * dpi),
-      };
-    }
-
-    function mapMetersPerCssPixel() {
-      const center = map.getCenter();
-      const latitudeFactor = Math.max(0.08, Math.cos(center.lat * Math.PI / 180));
-      const worldMeters = 40075016.68557849;
-      const worldCssPixels = 512 * Math.pow(2, map.getZoom());
-      return worldMeters * latitudeFactor / worldCssPixels;
-    }
-
-    function exportRenderZoom() {
-      const center = map.getCenter();
-      const latitudeFactor = Math.max(0.08, Math.cos(center.lat * Math.PI / 180));
-      const worldMeters = 40075016.68557849;
-      const groundSize = exportGroundSizeMeters();
-      const pixelSize = exportPixelSize();
-      const metersPerPixel = groundSize.width / pixelSize.width;
-      const zoom = Math.log2((worldMeters * latitudeFactor) / (metersPerPixel * 512));
-      const minZoom = typeof map.getMinZoom === "function" ? map.getMinZoom() : 0;
-      const maxZoom = typeof map.getMaxZoom === "function" ? map.getMaxZoom() : 22;
-      return Math.max(minZoom, Math.min(maxZoom, zoom));
-    }
-
-    function centeredExportRect() {
-      const containerRect = map.getContainer().getBoundingClientRect();
-      const groundSize = exportGroundSizeMeters();
-      const metersPerPixel = mapMetersPerCssPixel();
-      const width = groundSize.width / metersPerPixel;
-      const height = groundSize.height / metersPerPixel;
-      return {
-        x: (containerRect.width - width) / 2,
-        y: (containerRect.height - height) / 2,
-        width,
-        height,
-      };
-    }
-
-    function constrainedExportRect(start, end) {
-      const containerRect = map.getContainer().getBoundingClientRect();
-      const ratio = exportAspectRatio();
-      const directionX = end.x < start.x ? -1 : 1;
-      const directionY = end.y < start.y ? -1 : 1;
-      const maxWidth = Math.max(1, directionX < 0 ? start.x : containerRect.width - start.x);
-      const maxHeight = Math.max(1, directionY < 0 ? start.y : containerRect.height - start.y);
-      let width = Math.abs(end.x - start.x);
-      let height = Math.abs(end.y - start.y);
-      if (width < 1 && height < 1) {
-        width = 1;
-        height = 1 / ratio;
-      } else if (height < 1 || width / Math.max(1, height) > ratio) {
-        height = width / ratio;
-      } else {
-        width = height * ratio;
-      }
-      if (width > maxWidth) {
-        width = maxWidth;
-        height = width / ratio;
-      }
-      if (height > maxHeight) {
-        height = maxHeight;
-        width = height * ratio;
-      }
-      return {
-        x: directionX < 0 ? start.x - width : start.x,
-        y: directionY < 0 ? start.y - height : start.y,
-        width,
-        height,
-      };
-    }
-
-    function refitExportCropRectToOrientation() {
-      if (!exportCropRect || !map) return;
-      setExportCropRect(centeredExportRect());
-      updateExportFrameStatus();
-    }
-
-    function exportRectFitsView() {
-      if (!exportCropRect || !map) return true;
-      const containerRect = map.getContainer().getBoundingClientRect();
-      return exportCropRect.x >= 0
-        && exportCropRect.y >= 0
-        && exportCropRect.x + exportCropRect.width <= containerRect.width
-        && exportCropRect.y + exportCropRect.height <= containerRect.height;
-    }
-
-    function exportFrameDescription() {
-      const groundSize = exportGroundSizeMeters();
-      return `${groundSize.width.toFixed(1)} m × ${groundSize.height.toFixed(1)} m`;
-    }
-
-    function updateExportFrameStatus() {
-      if (!exportCropRect) return;
-      setExportStatus("");
-    }
-
-    function setExportCropRect(rect) {
-      exportCropRect = rect;
-      const box = ensureExportSelectionBox();
-      if (!box || !rect || rect.width < 2 || rect.height < 2) {
-        if (box) box.hidden = true;
-        return;
-      }
-      box.hidden = false;
-      box.style.left = `${rect.x}px`;
-      box.style.top = `${rect.y}px`;
-      box.style.width = `${rect.width}px`;
-      box.style.height = `${rect.height}px`;
-    }
-
-    function clearExportCropRect() {
-      exportCropRect = null;
-      if (exportSelectionBox) exportSelectionBox.hidden = true;
-      setExportStatus("Aktuelle Kartenansicht wird exportiert.");
-    }
-
-    function setExportCropMode(enabled) {
-      exportCropStart = null;
-      if (!map) return;
-      const container = map.getCanvasContainer();
-      exportCropMode = false;
-      delete container.dataset.exportCrop;
-      if (map.dragPan?.enable) map.dragPan.enable();
-      if (map.touchZoomRotate?.enable) map.touchZoomRotate.enable();
-      if (enabled) {
-        setExportCropRect(centeredExportRect());
-        updateExportFrameStatus();
-      } else {
-        exportCropStart = null;
-      }
-    }
-
-    function startExportCrop(event) {
-      if (!exportCropMode || !event.point) return;
-      exportCropStart = event.point;
-      suppressNextMapClick = true;
-      if (event.preventDefault) event.preventDefault();
-      if (event.originalEvent?.preventDefault) event.originalEvent.preventDefault();
-      setExportCropRect({ x: event.point.x, y: event.point.y, width: 1, height: 1 });
-    }
-
-    function updateExportCrop(event) {
-      if (!exportCropMode || !exportCropStart || !event.point) return;
-      if (event.preventDefault) event.preventDefault();
-      if (event.originalEvent?.preventDefault) event.originalEvent.preventDefault();
-      setExportCropRect(constrainedExportRect(exportCropStart, event.point));
-    }
-
-    function stopExportCrop() {
-      if (!exportCropStart) return;
-      exportCropStart = null;
-      setExportCropMode(false);
-      if (exportCropRect && exportCropRect.width >= 20 && exportCropRect.height >= 20) {
-        setExportStatus("Ausschnitt gewählt. Export herunterladen.");
-      } else {
-        clearExportCropRect();
-      }
-    }
-
-    function exportFileName(extension) {
-      const paper = exportPaper?.value || "a4";
-      const orientation = exportOrientation?.value || "portrait";
-      const scale = exportScale?.value || "1000";
-      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-      return `openkataster-${paper}-${orientation}-1-${scale}-${stamp}.${extension}`;
-    }
-
-    function downloadBlob(blob, filename) {
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }
-
-    function apiKeyFromUrl(url) {
-      try {
-        return new URL(url, window.location.href).searchParams.get("key") || "";
-      } catch (error) {
-        return "";
-      }
-    }
-
-    async function exportVectorPdfBlob() {
-      if (!map) return null;
-      setExportStatus("Vektor-PDF wird erstellt ...");
-      const center = map.getCenter();
-      const url = new URL("/export/vector.pdf", window.location.href);
-      url.searchParams.set("key", apiKeyFromUrl(featureUrl));
-      url.searchParams.set("center_lon", center.lng.toFixed(8));
-      url.searchParams.set("center_lat", center.lat.toFixed(8));
-      url.searchParams.set("paper", exportPaper?.value || "a4");
-      url.searchParams.set("orientation", exportOrientation?.value || "portrait");
-      url.searchParams.set("scale", exportScale?.value || "1000");
-      const response = await fetch(url.toString(), { headers: { "Accept": "application/pdf" } });
-      if (!response.ok) {
-        setExportStatus("Vektor-PDF konnte nicht erstellt werden.");
-        return null;
-      }
-      return response.blob();
-    }
-
-    function waitForNextRender() {
-      return new Promise((resolve) => {
-        if (!map) return resolve();
-        map.once("render", resolve);
-        map.triggerRepaint();
-      });
-    }
-
-    function waitForMapIdle(targetMap, timeout = 9000) {
-      return new Promise((resolve) => {
-        let done = false;
-        const finish = () => {
-          if (done) return;
-          done = true;
-          window.clearTimeout(timer);
-          resolve();
-        };
-        const timer = window.setTimeout(finish, timeout);
-        targetMap.once("idle", finish);
-      });
-    }
-
-    function drawExportAttribution(canvas) {
-      const context = canvas.getContext("2d");
-      if (!context) return canvas;
-      const sourceText = pdfSourceLegalText();
-      const paperText = `${String(exportPaper?.value || "a4").toUpperCase()}, 1:${exportScale?.value || "1000"}`;
-      const scale = Math.max(1, Math.min(canvas.width, canvas.height) / 1650);
-      const fontSize = Math.max(32, Math.round(30 * scale));
-      const padX = Math.round(24 * scale);
-      const padY = Math.round(14 * scale);
-      context.save();
-      context.font = `${fontSize}px Helvetica, Arial, sans-serif`;
-      const maxSourceWidth = canvas.width * 0.70;
-      let sourceLabel = sourceText;
-      while (context.measureText(sourceLabel).width > maxSourceWidth && sourceLabel.length > 20) {
-        sourceLabel = `${sourceLabel.slice(0, -2)}…`;
-      }
-      const paperWidth = context.measureText(paperText).width;
-      const sourceWidth = Math.min(maxSourceWidth, context.measureText(sourceLabel).width);
-      const height = fontSize + padY * 2;
-      const paperBoxWidth = paperWidth + padX * 2;
-      const sourceBoxWidth = sourceWidth + padX * 2;
-      context.fillStyle = "rgba(255, 255, 255, 0.92)";
-      context.fillRect(0, canvas.height - height, paperBoxWidth, height);
-      context.fillRect(canvas.width - sourceBoxWidth, canvas.height - height, sourceBoxWidth, height);
-      context.fillStyle = "#333333";
-      context.textBaseline = "middle";
-      context.fillText(paperText, padX, canvas.height - height / 2);
-      context.fillText(sourceLabel, canvas.width - sourceBoxWidth + padX, canvas.height - height / 2);
-      context.restore();
-      return canvas;
-    }
-
-    async function exportMapCanvas() {
-      if (!map) return null;
-      setExportStatus("Export wird gerendert ...");
-      const pixelSize = exportPixelSize();
-      const container = document.createElement("div");
-      container.style.position = "fixed";
-      container.style.left = "-10000px";
-      container.style.top = "0";
-      container.style.width = `${pixelSize.width}px`;
-      container.style.height = `${pixelSize.height}px`;
-      container.style.pointerEvents = "none";
-      container.style.opacity = "0";
-      document.body.appendChild(container);
-      let printMap = null;
-      try {
-        const style = JSON.parse(JSON.stringify(map.getStyle()));
-        printMap = new maplibregl.Map({
-          container,
-          style,
-          center: map.getCenter(),
-          zoom: exportRenderZoom(),
-          bearing: 0,
-          pitch: 0,
-          interactive: false,
-          preserveDrawingBuffer: true,
-          attributionControl: false,
-          fadeDuration: 0,
-        });
-        await waitForMapIdle(printMap);
-        const sourceCanvas = printMap.getCanvas();
-        const output = document.createElement("canvas");
-        output.width = sourceCanvas.width;
-        output.height = sourceCanvas.height;
-        const context = output.getContext("2d");
-        context.drawImage(sourceCanvas, 0, 0);
-        drawExportAttribution(output);
-        return output;
-      } catch (error) {
-        console.error(error);
-        setExportStatus("Druck-Render konnte nicht erstellt werden.");
-        return null;
-      } finally {
-        if (printMap) printMap.remove();
-        container.remove();
-        if (exportSelectionBox && exportCropRect) exportSelectionBox.hidden = false;
-      }
-    }
-
-    function canvasToBlob(canvas, type, quality) {
-      return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
-    }
-
-    function pdfEscape(value) {
-      const slash = String.fromCharCode(92);
-      const special = new Map([
-        [0x20ac, 128], [0x201a, 130], [0x0192, 131], [0x201e, 132], [0x2026, 133],
-        [0x2020, 134], [0x2021, 135], [0x02c6, 136], [0x2030, 137], [0x0160, 138],
-        [0x2039, 139], [0x0152, 140], [0x017d, 142], [0x2018, 145], [0x2019, 146],
-        [0x201c, 147], [0x201d, 148], [0x2022, 149], [0x2013, 150], [0x2014, 151],
-        [0x02dc, 152], [0x2122, 153], [0x0161, 154], [0x203a, 155], [0x0153, 156],
-        [0x017e, 158], [0x0178, 159],
-      ]);
-      const bytes = [];
-      for (const char of String(value)) {
-        const code = char.codePointAt(0);
-        bytes.push(special.get(code) || (code <= 255 ? code : 63));
-      }
-      return bytes.map((byte) => {
-        if (byte === 40 || byte === 41 || byte === 92) return slash + String.fromCharCode(byte);
-        if (byte < 32 || byte > 126) return slash + byte.toString(8).padStart(3, "0");
-        return String.fromCharCode(byte);
-      }).join("");
-    }
-
-    function pdfSourceLegalText() {
-      const sources = pdfVisibleSourceParts();
-      return `${(sources.length ? sources.map((item) => item.source) : ["© Amtliches Liegenschaftskataster (ALKIS)"]).join(" | ")} | OpenKataster`;
-    }
-
-    function pdfVisibleSourceParts() {
-      const states = visibleStateEntries().length
-        ? visibleStateEntries()
-        : [...activeStateSlugs].map((slug) => {
-          const state = STATE_CENTERS[slug] || { name: slug };
-          return { slug, name: state.name || slug };
-        });
-      return states.map((state) => {
-        const meta = state.slug ? (stateMetadata.get(state.slug) || {}) : {};
-        const source = meta.quellenvermerk || state.name || "Amtliches Liegenschaftskataster";
-        const stand = meta.datenstand || meta.datestand || meta.datum || meta.letzte_aktualisierung || "";
-        const license = meta.lizenz && !String(source).includes(meta.lizenz) ? `, ${meta.lizenz}` : "";
-        return { source: `${source}${license}`, stand };
-      }).filter(Boolean);
-    }
-
-    function pdfDataStandText() {
-      const stands = [...new Set(pdfVisibleSourceParts().map((item) => item.stand).filter(Boolean))];
-      return stands.length ? `Datenstand: ${stands.join(" / ")}` : "";
-    }
-
-    function buildPdfBlobFromCanvas(canvas) {
-      const paperSize = exportPaperSizeMillimeters();
-      const pageW = paperSize.width / 25.4 * 72;
-      const pageH = paperSize.height / 25.4 * 72;
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.94);
-      const binary = atob(dataUrl.split(",")[1]);
-      const imageBytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) imageBytes[i] = binary.charCodeAt(i);
-      const encoder = new TextEncoder();
-      const NL = String.fromCharCode(10);
-      const content = [
-        "1 1 1 rg",
-        `0 0 ${pageW.toFixed(2)} ${pageH.toFixed(2)} re f`,
-        "q",
-        `${pageW.toFixed(2)} 0 0 ${pageH.toFixed(2)} 0 0 cm`,
-        "/Im0 Do",
-        "Q",
-        "",
-      ].join(NL);
-
-      const contentBytes = encoder.encode(content);
-      const objects = [
-        "<< /Type /Catalog /Pages 2 0 R >>",
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW.toFixed(2)} ${pageH.toFixed(2)}] /Resources << /XObject << /Im0 4 0 R >> /Font << /F1 5 0 R >> >> /Contents 6 0 R >>`,
-        { stream: imageBytes, dict: `<< /Type /XObject /Subtype /Image /Width ${canvas.width} /Height ${canvas.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBytes.length} >>` },
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
-        { stream: contentBytes, dict: `<< /Length ${contentBytes.length} >>` },
-      ];
-      const chunks = [];
-      const offsets = [0];
-      let offset = 0;
-      function add(part) {
-        const bytes = part instanceof Uint8Array ? part : encoder.encode(String(part));
-        chunks.push(bytes);
-        offset += bytes.length;
-      }
-      add("%PDF-1.4" + NL);
-      objects.forEach((object, index) => {
-        offsets.push(offset);
-        add(`${index + 1} 0 obj` + NL);
-        if (typeof object === "string") {
-          add(object + NL);
-        } else {
-          add(object.dict + NL + "stream" + NL);
-          add(object.stream);
-          add(NL + "endstream" + NL);
-        }
-        add("endobj" + NL);
-      });
-      const xrefOffset = offset;
-      add(["xref", `0 ${objects.length + 1}`, "0000000000 65535 f ", ""].join(NL));
-      for (let i = 1; i < offsets.length; i++) {
-        add(`${String(offsets[i]).padStart(10, "0")} 00000 n ` + NL);
-      }
-      add(["trailer", `<< /Size ${objects.length + 1} /Root 1 0 R >>`, "startxref", String(xrefOffset), "%%EOF"].join(NL));
-      return new Blob(chunks, { type: "application/pdf" });
-    }
-
-    async function exportMapFile() {
-      const output = exportOutput?.value || "png";
-      if (output === "pdf") {
-        const canvas = await exportMapCanvas();
-        if (!canvas) return;
-        downloadBlob(buildPdfBlobFromCanvas(canvas), exportFileName("pdf"));
-        setExportStatus("PDF wurde erstellt.");
-        return;
-      }
-      const canvas = await exportMapCanvas();
-      if (!canvas) return;
-      const blob = await canvasToBlob(canvas, "image/png");
-      if (!blob) {
-        setExportStatus("PNG konnte nicht erstellt werden.");
-        return;
-      }
-      downloadBlob(blob, exportFileName("png"));
-      setExportStatus("PNG wurde erstellt.");
-    }
-
-    function onofficeApiUrl(path) {
-      const url = new URL(path, window.location.href);
-      const token = viewerParams.get("token") || viewerParams.get("api_key") || viewerParams.get("key") || "";
-      const key = token || apiKeyFromUrl(featureUrl);
-      if (key) url.searchParams.set(token ? "token" : "api_key", key);
-      return url;
-    }
-
-    async function buildOnOfficeSelectionPayload() {
-      const features = currentSelectionReferences();
-      if (!features.length) {
-        setExportStatus("Bitte zuerst ein Gebäude oder Flurstück auswählen.");
-        return null;
-      }
-      setExportStatus("Informationen werden vorbereitet ...");
-      const response = await fetch(onofficeApiUrl("/api/v1/integrations/onoffice/selection-payload").toString(), {
-        method: "POST",
-        headers: {
-          "Accept": "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ features }),
-      });
-      if (!response.ok) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(detail || `${response.status} ${response.statusText}`);
-      }
-      return response.json();
-    }
-
-    async function transferOnOfficeSelection() {
-      try {
-        if (onofficeTransferSelection) onofficeTransferSelection.disabled = true;
-        const payload = await buildOnOfficeSelectionPayload();
-        if (!payload) return;
-        postOpenKatasterMessage("openkataster:onoffice-payload", {
-          payload,
-          selection: currentSelectionReferences(),
-        });
-        setExportStatus("Informationen wurden an den Host übergeben.");
-      } catch (error) {
-        console.error(error);
-        setExportStatus("Informationen konnten nicht übergeben werden.");
-      } finally {
-        if (onofficeTransferSelection) onofficeTransferSelection.disabled = false;
-      }
-    }
-
-    async function postPdfBlobToParent(blob, filename) {
-      if (!blob || !window.parent || window.parent === window) return false;
-      const buffer = await blob.arrayBuffer();
-      return postOpenKatasterMessage(
-        "openkataster:export-ready",
-        {
-          file: {
-            name: filename,
-            mime_type: "application/pdf",
-            size: blob.size,
-          },
-          export: {
-            format: "pdf",
-            paper: exportPaper?.value || "a4",
-            orientation: exportOrientation?.value || "portrait",
-            scale: exportScale?.value || "1000",
-          },
-          selection: currentSelectionReferences(),
-          buffer,
-        },
-        [buffer],
-      );
-    }
-
-    async function exportPdfForOnOffice() {
-      try {
-        if (onofficeExportPdf) onofficeExportPdf.disabled = true;
-        const blob = await exportVectorPdfBlob();
-        if (!blob) return;
-        const filename = exportFileName("pdf");
-        await postPdfBlobToParent(blob, filename);
-        downloadBlob(blob, filename);
-        setExportStatus("PDF wurde erstellt und an den Host übergeben.");
-      } catch (error) {
-        console.error(error);
-        setExportStatus("PDF konnte nicht für onOffice vorbereitet werden.");
-      } finally {
-        if (onofficeExportPdf) onofficeExportPdf.disabled = false;
-      }
-    }
-
-    async function loadJson(url) {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`${response.status} ${response.statusText}`);
-      }
-      return await response.json();
-    }
-
-    function escapeHtml(value) {
-      return String(value ?? \"\").replace(/[&<>\"']/g, (char) => ({
-        \"&\": \"&amp;\",
-        \"<\": \"&lt;\",
-        \">\": \"&gt;\",
-        \"\\\"\": \"&quot;\",
-        \"'\": \"&#39;\",
-      })[char]);
-    }
-
-    function formatCoordinate(value, axis) {
-      const rounded = Math.abs(Number(value)).toFixed(5);
-      const suffix = axis === "lat" ? (value >= 0 ? "N" : "S") : (value >= 0 ? "E" : "W");
-      return `${rounded}° ${suffix}`;
-    }
-
-    function formatCoordinateDms(value, axis) {
-      const absolute = Math.abs(Number(value));
-      if (!Number.isFinite(absolute)) return "–";
-      const deg = Math.floor(absolute);
-      const minFloat = (absolute - deg) * 60;
-      const min = Math.floor(minFloat);
-      const sec = ((minFloat - min) * 60).toFixed(2);
-      const suffix = axis === "lat" ? (value >= 0 ? "N" : "S") : (value >= 0 ? "E" : "W");
-      return `${deg}°${String(min).padStart(2, "0")}′${sec.padStart(5, "0")}" ${suffix}`;
-    }
-
-    function copyText(text) {
-      if (!navigator?.clipboard) {
-        throw new Error("Zwischenablage ist nicht verfügbar");
-      }
-      return navigator.clipboard.writeText(text);
-    }
-
-    function mapScaleData() {
-      if (!map) return null;
-      const zoom = map.getZoom();
-      const metersPerPixel = 156543.03392804097 * Math.cos(map.getCenter().lat * Math.PI / 180) / Math.pow(2, zoom);
-      const denominator = Math.max(1, Math.round(metersPerPixel * 96 / 0.0254));
-      return {
-        zoom,
-        metersPerPixel,
-        denominator,
-      };
-    }
-
-    function formatMetadataInfo(state) {
-      const meta = state.slug ? (stateMetadata.get(state.slug) || {}) : {};
-      const stand = [meta.datenstand, meta.datestand, meta.datum, meta.letzte_aktualisierung, meta.updated_at, meta.datenjahr]
-        .filter(Boolean)
-        .shift();
-      const source = meta.quellenvermerk || state.name || "Quelle";
-      const license = meta.lizenz && !source.includes(meta.lizenz) ? `, ${meta.lizenz}` : "";
-      const date = stand && !source.includes(String(stand)) ? ` ${stand}` : "";
-      const prefix = source.includes("©") ? source : `© ${source}`;
-      return [`${prefix}${date}${license}`];
-    }
-
-
-    function formatCsvValue(value) {
-      const safe = value === null || value === undefined ? \"\" : String(value).replace(/\"/g, '""');
-      return `\"${safe}\"`;
-    }
-
-    function stateSlug(value) {
-      const replacements = [
-        [\"ä\", \"ae\"],
-        [\"ö\", \"oe\"],
-        [\"ü\", \"ue\"],
-        [\"ß\", \"ss\"],
-      ];
-      let normalized = String(value || \"\").trim().toLowerCase();
-      for (const [source, target] of replacements) {
-        normalized = normalized.split(source).join(target);
-      }
-      return normalized.replace(/[^a-z0-9]+/g, \"-\").replace(/(^-|-$)/g, \"\");
-    }
-
-    function itemKey(item) {
-      return `${item.source_db || \"\"}:${item.gml_id || \"\"}`;
-    }
-
-    function featureCollection(items) {
-      return {
-        type: \"FeatureCollection\",
-        features: items
-          .filter((item) => item.geometry)
-          .map((item) => ({
-            type: \"Feature\",
-            properties: { id: itemKey(item) },
-            geometry: item.geometry,
-          })),
-      };
-    }
-
-    function formatArea(value) {
-      if (value === null || value === undefined || value === \"\") return \"\";
-      return `${Number(value).toLocaleString(\"de-DE\")} m²`;
-    }
-
-    function formatReadableArea(value) {
-      if (value === null || value === undefined || value === \"\") return \"–\";
-      if (value < 1000) {
-        return `${Math.round(value).toLocaleString(\"de-DE\")} m²`;
-      }
-      if (value < 1000000) {
-        return `${(value / 10000).toLocaleString(\"de-DE\", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ha`;
-      }
-      return `${(value / 1000000).toLocaleString(\"de-DE\", { minimumFractionDigits: 3, maximumFractionDigits: 3 })} km²`;
-    }
-
-    function formatMeasuredArea(value) {
-      if (value === null || value === undefined || value === \"\" || !Number.isFinite(Number(value))) return \"–\";
-      return `${Number(value).toLocaleString(\"de-DE\", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} m²`;
-    }
-
-    function geodesicArea(coords) {
-      if (!coords || coords.length < 3) {
-        return 0;
-      }
-      const R = 6371000;
-      const toRad = (degree) => degree * Math.PI / 180;
-      const ring = coords.map((item) => ({ lon: toRad(item[0]), lat: toRad(item[1]) }));
-      let area = 0;
-      for (let i = 0; i < ring.length; i++) {
-        const p1 = ring[i];
-        const p2 = ring[(i + 1) % ring.length];
-        area += (p2.lon - p1.lon) * (2 + Math.sin(p1.lat) + Math.sin(p2.lat));
-      }
-      return Math.abs(area * R * R / 2);
-    }
-
-    function addSelectionLayers() {
-      map.addSource(\"selected-parcels\", { type: \"geojson\", data: featureCollection([]) });
-      map.addSource(\"selected-buildings\", { type: \"geojson\", data: featureCollection([]) });
-      map.addSource(\"annotations\", { type: \"geojson\", data: { type: \"FeatureCollection\", features: [] } });
-      map.addSource(\"measure\", { type: \"geojson\", data: { type: \"FeatureCollection\", features: [] } });
-      map.addSource(\"measure-area\", { type: \"geojson\", data: { type: \"FeatureCollection\", features: [] } });
-      map.addSource(\"measure-radius\", { type: \"geojson\", data: { type: \"FeatureCollection\", features: [] } });
-      map.addSource(\"pins\", { type: \"geojson\", data: { type: \"FeatureCollection\", features: [] } });
-      map.addSource(\"snap\", { type: \"geojson\", data: { type: \"FeatureCollection\", features: [] } });
-      map.addLayer({
-        id: \"selected-parcel-fill\",
-        type: \"fill\",
-        source: \"selected-parcels\",
-        paint: { \"fill-color\": \"#facc15\", \"fill-opacity\": 0.3 }
-      });
-      map.addLayer({
-        id: \"selected-parcel-outline\",
-        type: \"line\",
-        source: \"selected-parcels\",
-        paint: { \"line-color\": \"#ca8a04\", \"line-width\": 2.2, \"line-opacity\": 0.95 }
-      });
-      map.addLayer({
-        id: \"selected-building-fill\",
-        type: \"fill\",
-        source: \"selected-buildings\",
-        paint: { \"fill-color\": \"#38bdf8\", \"fill-opacity\": 0.32 }
-      });
-      map.addLayer({
-        id: \"selected-building-outline\",
-        type: \"line\",
-        source: \"selected-buildings\",
-        paint: { \"line-color\": \"#0284c7\", \"line-width\": 2.2, \"line-opacity\": 0.95 }
-      });
-      map.addLayer({
-        id: \"annotations-fill\",
-        type: \"fill\",
-        source: \"annotations\",
-        filter: [\"==\", [\"get\", \"kind\"], \"polygon\"],
-        paint: {
-          \"fill-color\": [\"get\", \"color\"],
-          \"fill-opacity\": 0.16
-        }
-      });
-      map.addLayer({
-        id: \"annotations-line\",
-        type: \"line\",
-        source: \"annotations\",
-        filter: [\"any\", [\"==\", [\"get\", \"kind\"], \"line\"], [\"==\", [\"get\", \"kind\"], \"polygon-outline\"]],
-        paint: {
-          \"line-color\": [\"get\", \"color\"],
-          \"line-width\": 3,
-          \"line-opacity\": 0.92
-        }
-      });
-      map.addLayer({
-        id: \"annotations-point\",
-        type: \"circle\",
-        source: \"annotations\",
-        filter: [\"==\", [\"get\", \"kind\"], \"vertex\"],
-        paint: {
-          \"circle-radius\": 5,
-          \"circle-color\": \"#fff\",
-          \"circle-stroke-color\": [\"get\", \"color\"],
-          \"circle-stroke-width\": 2,
-        }
-      });
-      map.addLayer({
-        id: \"measure-line\",
-        type: \"line\",
-        source: \"measure\",
-        paint: { \"line-color\": \"#f97316\", \"line-width\": 3, \"line-opacity\": 0.95 }
-      });
-      map.addLayer({
-        id: \"measure-point\",
-        type: \"circle\",
-        source: \"measure\",
-        filter: [\"all\", [\"==\", [\"geometry-type\"], \"Point\"], [\"==\", [\"get\", \"kind\"], \"vertex\"]],
-        paint: {
-          \"circle-radius\": 8,
-          \"circle-color\": \"#fff\",
-          \"circle-stroke-color\": \"#f97316\",
-          \"circle-stroke-width\": 2.4,
-        }
-      });
-      map.addLayer({
-        id: \"measure-segment-label\",
-        type: \"symbol\",
-        source: \"measure\",
-        filter: [\"==\", [\"get\", \"kind\"], \"segment-label\"],
-        layout: {
-          \"text-field\": [\"get\", \"label\"],
-          \"text-font\": [\"Arial\"],
-          \"text-size\": 12,
-          \"text-allow-overlap\": true,
-          \"text-ignore-placement\": true,
-          \"text-anchor\": \"center\"
-        },
-        paint: {
-          \"text-color\": \"#9a3412\",
-          \"text-halo-color\": \"#fff\",
-          \"text-halo-width\": 2
-        }
-      });
-      map.addLayer({
-        id: \"measure-total-label\",
-        type: \"symbol\",
-        source: \"measure\",
-        filter: [\"==\", [\"get\", \"kind\"], \"total-label\"],
-        layout: {
-          \"text-field\": [\"get\", \"label\"],
-          \"text-font\": [\"Arial\"],
-          \"text-size\": 13,
-          \"text-offset\": [0, -1.4],
-          \"text-allow-overlap\": true,
-          \"text-ignore-placement\": true,
-          \"text-anchor\": \"bottom\"
-        },
-        paint: {
-          \"text-color\": \"#111713\",
-          \"text-halo-color\": \"#fff\",
-          \"text-halo-width\": 2.5
-        }
-      });
-      map.addLayer({
-        id: \"measure-area-fill\",
-        type: \"fill\",
-        source: \"measure-area\",
-        paint: { \"fill-color\": \"#22c55e\", \"fill-opacity\": 0.22 }
-      });
-      map.addLayer({
-        id: \"measure-area-outline\",
-        type: \"line\",
-        source: \"measure-area\",
-        paint: { \"line-color\": \"#16a34a\", \"line-width\": 2.4, \"line-opacity\": 0.95 }
-      });
-      map.addLayer({
-        id: \"measure-area-point\",
-        type: \"circle\",
-        source: \"measure-area\",
-        filter: [\"all\", [\"==\", [\"geometry-type\"], \"Point\"], [\"==\", [\"get\", \"kind\"], \"vertex\"]],
-        paint: {
-          \"circle-radius\": 8,
-          \"circle-color\": \"#fff\",
-          \"circle-stroke-color\": \"#16a34a\",
-          \"circle-stroke-width\": 2.4,
-        }
-      });
-      map.addLayer({
-        id: \"measure-area-label\",
-        type: \"symbol\",
-        source: \"measure-area\",
-        filter: [\"==\", [\"get\", \"kind\"], \"area-label\"],
-        layout: {
-          \"text-field\": [\"get\", \"label\"],
-          \"text-font\": [\"Arial\"],
-          \"text-size\": 13,
-          \"text-allow-overlap\": true,
-          \"text-ignore-placement\": true,
-          \"text-anchor\": \"center\"
-        },
-        paint: {
-          \"text-color\": \"#14532d\",
-          \"text-halo-color\": \"#fff\",
-          \"text-halo-width\": 2.5
-        }
-      });
-      map.addLayer({
-        id: \"measure-area-total-label\",
-        type: \"symbol\",
-        source: \"measure-area\",
-        filter: [\"==\", [\"get\", \"kind\"], \"area-total-label\"],
-        layout: {
-          \"text-field\": [\"get\", \"label\"],
-          \"text-font\": [\"Arial\"],
-          \"text-size\": 13,
-          \"text-offset\": [0, -1.4],
-          \"text-allow-overlap\": true,
-          \"text-ignore-placement\": true,
-          \"text-anchor\": \"bottom\"
-        },
-        paint: {
-          \"text-color\": \"#111713\",
-          \"text-halo-color\": \"#fff\",
-          \"text-halo-width\": 2.5
-        }
-      });
-      map.addLayer({
-        id: \"measure-area-segment-label\",
-        type: \"symbol\",
-        source: \"measure-area\",
-        filter: [\"==\", [\"get\", \"kind\"], \"area-segment-label\"],
-        layout: {
-          \"text-field\": [\"get\", \"label\"],
-          \"text-font\": [\"Arial\"],
-          \"text-size\": 12,
-          \"text-allow-overlap\": true,
-          \"text-ignore-placement\": true,
-          \"text-anchor\": \"center\"
-        },
-        paint: {
-          \"text-color\": \"#14532d\",
-          \"text-halo-color\": \"#fff\",
-          \"text-halo-width\": 2
-        }
-      });
-      map.addLayer({
-        id: \"measure-radius-fill\",
-        type: \"fill\",
-        source: \"measure-radius\",
-        paint: { \"fill-color\": \"#3b82f6\", \"fill-opacity\": 0.16 }
-      });
-      map.addLayer({
-        id: \"measure-radius-line\",
-        type: \"line\",
-        source: \"measure-radius\",
-        paint: { \"line-color\": \"#2563eb\", \"line-width\": 2.2, \"line-opacity\": 0.95 }
-      });
-      map.addLayer({
-        id: \"pins-fill\",
-        type: \"circle\",
-        source: \"pins\",
-        filter: [\"==\", [\"get\", \"kind\"], \"pin\"],
-        paint: {
-          \"circle-radius\": 7,
-          \"circle-color\": \"#dc2626\",
-          \"circle-stroke-color\": \"#fff\",
-          \"circle-stroke-width\": 2,
-        }
-      });
-      map.addLayer({
-        id: \"pins-label\",
-        type: \"symbol\",
-        source: \"pins\",
-        filter: [\"==\", [\"get\", \"kind\"], \"pin-label\"],
-        layout: {
-          \"text-field\": [\"get\", \"label\"],
-          \"text-font\": [\"Arial\"],
-          \"text-size\": 12,
-          \"text-offset\": [0.8, 0],
-          \"text-anchor\": \"left\",
-          \"text-allow-overlap\": true,
-          \"text-ignore-placement\": true
-        },
-        paint: {
-          \"text-color\": \"#374151\",
-          \"text-halo-color\": \"#fff\",
-          \"text-halo-width\": 2.5
-        }
-      });
-      map.addLayer({
-        id: \"snap-point\",
-        type: \"circle\",
-        source: \"snap\",
-        paint: {
-          \"circle-radius\": 7,
-          \"circle-color\": \"#f86d14\",
-          \"circle-opacity\": 0.95,
-          \"circle-stroke-color\": \"#fff\",
-          \"circle-stroke-width\": 2.5,
-        }
-      });
-      updateHandleVisibility();
-    }
-
-    function renderAddresses(item) {
-      const addresses = item.addresses || [];
-      if (!addresses.length) return \"\";
-      return addresses.map((address) => address.label).filter(Boolean).slice(0, 2).join(" · ");
-    }
-
-    function numericArea(value) {
-      const number = Number(value);
-      return Number.isFinite(number) && number > 0 ? number : 0;
-    }
-
-    function geometryAreaMeters(geometry) {
-      if (!geometry || !geometry.coordinates) return null;
-      if (geometry.type === "Polygon") {
-        const ring = geometry.coordinates[0] || [];
-        return ring.length >= 4 ? geodesicArea(ring) : null;
-      }
-      if (geometry.type === "MultiPolygon") {
-        let sum = 0;
-        for (const polygon of geometry.coordinates || []) {
-          const ring = polygon[0] || [];
-          if (ring.length >= 4) sum += geodesicArea(ring);
-        }
-        return sum || null;
-      }
-      return null;
-    }
-
-    function parcelRow(item) {
-      const title = [
-        item.flurstueck ? `Flurstück ${item.flurstueck}` : \"\",
-        item.gemarkung ? `Gemarkung ${item.gemarkung}` : \"\",
-      ].filter(Boolean).join(\" · \") || \"Flurstück\";
-      return `<tr><td>${escapeHtml(title)}</td><td>${item.flur ? escapeHtml(item.flur) : "–"}</td><td>${item.amtliche_flaeche_m2 ? escapeHtml(formatArea(item.amtliche_flaeche_m2)) : "–"}</td><td class="selection-muted">${escapeHtml(renderAddresses(item) || "–")}</td></tr>`;
-    }
-
-    function buildingFootprint(item) {
-      return geometryAreaMeters(item.geometry) || 0;
-    }
-
-    function buildingRow(item) {
-      const title = item.gebaeudefunktion_text || item.name || \"Gebäude\";
-      const footprint = buildingFootprint(item);
-      return `<tr><td>${escapeHtml(title)}</td><td>${footprint ? escapeHtml(formatMeasuredArea(footprint)) : "–"}</td><td>${item.geschosse_oberirdisch !== null && item.geschosse_oberirdisch !== undefined ? escapeHtml(`${item.geschosse_oberirdisch}`) : "–"}</td><td>${item.dachform_text ? escapeHtml(item.dachform_text) : "–"}</td><td class="selection-muted">${escapeHtml(renderAddresses(item) || "–")}</td></tr>`;
-    }
-
-    function renderParcelTable(parcels) {
-      const total = parcels.reduce((sum, item) => sum + numericArea(item.amtliche_flaeche_m2), 0);
-      const footer = parcels.length > 1 && total ? `<tfoot><tr><td colspan="2">Summe</td><td>${escapeHtml(formatArea(total))}</td><td></td></tr></tfoot>` : "";
-      return `<table class="selection-table"><thead><tr><th>Flurstück</th><th>Flur</th><th>Fläche</th><th>Adresse</th></tr></thead><tbody>${parcels.map(parcelRow).join("")}</tbody>${footer}</table>`;
-    }
-
-    function renderBuildingTable(buildings) {
-      const total = buildings.reduce((sum, item) => sum + buildingFootprint(item), 0);
-      const footer = buildings.length > 1 && total ? `<tfoot><tr><td>Summe</td><td>${escapeHtml(formatMeasuredArea(total))}</td><td colspan="3"></td></tr></tfoot>` : "";
-      return `<table class="selection-table"><thead><tr><th>Gebäude</th><th>Grundfläche</th><th>VG</th><th>Dach</th><th>Adresse</th></tr></thead><tbody>${buildings.map(buildingRow).join("")}</tbody>${footer}</table>`;
-    }
-
-    function formatCoordinatesForExport(item) {
-      const center = item.center || [];
-      const lon = Number(center[0]);
-      const lat = Number(center[1]);
-      return {
-        lon: Number.isFinite(lon) ? lon : \"\",
-        lat: Number.isFinite(lat) ? lat : \"\",
-      };
-    }
-
-    function exportSelectionAsCsv() {
-      const header = [
-        \"typ\",
-        \"source_db\",
-        \"gml_id\",
-        \"label\",
-        \"subtitle\",
-        \"adresse\",
-        \"bundesland\",
-        \"landkreis\",
-        \"flaeche_m2\",
-        \"lon\",
-        \"lat\",
-      ];
-      const rows = [];
-      const parcels = [...selectedParcels.values()];
-      const buildings = [...selectedBuildings.values()];
-      for (const parcel of parcels) {
-        const coords = formatCoordinatesForExport(parcel);
-        rows.push(
-          [
-            \"Flurstück\",
-            parcel.source_db || \"\",
-            parcel.gml_id || \"\",
-            parcel.gemarkung || parcel.label || \"\",
-            parcel.flurstueckskennzeichen || \"\",
-            parcel.address || parcel.adresse || \"\",
-            parcel.land || \"\",
-            parcel.landkreis || \"\",
-            parcel.amtliche_flaeche_m2 || \"\",
-            coords.lon,
-            coords.lat,
-          ].map(formatCsvValue).join(\",\"),
-        );
-      }
-      for (const building of buildings) {
-        const coords = formatCoordinatesForExport(building);
-        rows.push(
-          [
-            \"Gebäude\",
-            building.source_db || \"\",
-            building.gml_id || \"\",
-            building.gebaeudefunktion_text || building.name || \"Gebäude\",
-            building.address || \"\",
-            building.adresse || \"\",
-            building.land || \"\",
-            building.landkreis || \"\",
-            \"\",
-            coords.lon,
-            coords.lat,
-          ].map(formatCsvValue).join(\",\"),
-        );
-      }
-      return [header.map(formatCsvValue).join(\",\"), ...rows].join(\"\\n\");
-    }
-
-    function updateSelectionSources() {
-      const parcelSource = map.getSource(\"selected-parcels\");
-      const buildingSource = map.getSource(\"selected-buildings\");
-      if (parcelSource) parcelSource.setData(featureCollection([...selectedParcels.values()]));
-      if (buildingSource) buildingSource.setData(featureCollection([...selectedBuildings.values()]));
-    }
-
-    function parentTargetOrigin() {
-      return viewerParams.get("okParentOrigin") || "*";
-    }
-
-    function postOpenKatasterMessage(type, payload = {}, transfer = []) {
-      if (!window.parent || window.parent === window) return false;
-      window.parent.postMessage(
-        {
-          type,
-          version: 1,
-          dataset: "__DATASET__",
-          ...payload,
-        },
-        parentTargetOrigin(),
-        transfer
-      );
-      return true;
-    }
-
-    function compactSelectionFeature(kind, item) {
-      const center = Array.isArray(item.center) ? item.center : null;
-      const bbox = Array.isArray(item.bbox) ? item.bbox : null;
-      const base = {
-        kind,
-        state: item.state || item.bundesland || null,
-        gml_id: item.gml_id || null,
-        source_db: item.source_db || null,
-        label: item.label || item.name || null,
-        address: item.address || item.adresse || null,
-        center: center && center.length >= 2 ? [Number(center[0]), Number(center[1])] : null,
-        bbox: bbox && bbox.length >= 4 ? bbox.map(Number) : null,
-      };
-      if (kind === "parcel") {
-        return {
-          ...base,
-          flur: item.flur ?? null,
-          flurstueck: item.flurstueck || item.flurstuecksnummer || null,
-          gemarkung: item.gemarkung || null,
-          gemarkungsnummer: item.gemarkungsnummer || null,
-          amtliche_flaeche_m2: item.amtliche_flaeche_m2 ?? null,
-        };
-      }
-      return {
-        ...base,
-        gebaeudefunktion: item.gebaeudefunktion_text || item.gebaeudefunktion || null,
-        dachform: item.dachform || item.dachform_text || null,
-        vollgeschosse: item.vollgeschosse ?? item.anzahl_vollgeschosse ?? null,
-      };
-    }
-
-    function currentSelectionReferences() {
-      return [
-        ...[...selectedParcels.values()].map((item) => compactSelectionFeature("parcel", item)),
-        ...[...selectedBuildings.values()].map((item) => compactSelectionFeature("building", item)),
-      ];
-    }
-
-    function notifyParentSelection(parcels, buildings) {
-      postOpenKatasterMessage("openkataster:selection", {
-        counts: { parcels: parcels.length, buildings: buildings.length },
-        parcels: parcels.map((item) => compactSelectionFeature("parcel", item)),
-        buildings: buildings.map((item) => compactSelectionFeature("building", item)),
-      });
-    }
-
-    function firstOverlayLayerId() {
-      const candidates = ["selected-parcel-fill", "measure-line", "pins-fill"];
-      return candidates.find((id) => map.getLayer(id)) || undefined;
-    }
-
-    function firstAlkisLayerId() {
-      for (const layer of map.getStyle().layers || []) {
-        const id = String(layer.id || "");
-        if (!id || id === "background" || id.startsWith("luftbild-")) continue;
-        if (id === "state-outlines" || id === "state-labels") continue;
-        if (id.startsWith("selected-") || id.startsWith("annotations") || id.startsWith("measure") || id.startsWith("pins") || id.startsWith("snap")) continue;
-        return id;
-      }
-      return firstOverlayLayerId();
-    }
-
-    function wmsTileUrl(config) {
-      return `${window.location.origin}/luftbild/${config.slug}/{z}/{x}/{y}.png?v=1024-webmercator`;
-    }
-
-    function ensureLuftbildLayer(slug) {
-      const config = LUFTBILD_WMS[slug];
-      if (!config || !map) return null;
-      config.slug = slug;
-      const sourceId = `luftbild-${slug}`;
-      const layerId = `luftbild-${slug}`;
-      if (!map.getSource(sourceId)) {
-        map.addSource(sourceId, {
-          type: "raster",
-          tiles: [wmsTileUrl(config)],
-          tileSize: 512,
-          attribution: "",
-        });
-      }
-      if (!map.getLayer(layerId)) {
-        map.addLayer({
-          id: layerId,
-          type: "raster",
-          source: sourceId,
-          paint: { "raster-opacity": 1 },
-        }, firstAlkisLayerId());
-      }
-      return layerId;
-    }
-
-    function isLabelLikeLayer(layer) {
-      const id = String(layer.id || "").toLowerCase();
-      const sourceLayer = String(layer["source-layer"] || "").toLowerCase();
-      const filter = JSON.stringify(layer.filter || "").toLowerCase();
-      const textField = JSON.stringify(layer.layout?.["text-field"] || "").toLowerCase();
-      const combined = `${id} ${sourceLayer} ${filter} ${textField}`;
-      const filterHasEquals = (needle) => filter.includes(`"==","${needle[0]}","${needle[1]}"`) || filter.includes(`'==','${needle[0]}','${needle[1]}'`);
-      const isParcelNumberLine = layer.type === "line"
-        && (id.includes("parcel-number")
-          || (filterHasEquals(["thema", "flurstücke"]) && filterHasEquals(["sub_thema", "nummern (line)"])));
-      const isFractionLine = layer.type === "line"
-        && (isParcelNumberLine
-          || combined.includes("bruch")
-          || combined.includes("zaehler")
-          || combined.includes("zähler")
-          || combined.includes("nenner")
-          || combined.includes("nummernstrich")
-          || combined.includes("fraction"));
-      return layer.type === "symbol"
-        || id.includes("label")
-        || id.includes("text")
-        || id.includes("schrift")
-        || id.includes("nummer")
-        || id.includes("bruch")
-        || id.includes("flurstueck")
-        || id.includes("flurstück")
-        || isFractionLine;
-    }
-
-    function isStreetNameLayer(layer) {
-      const id = String(layer.id || "").toLowerCase();
-      const sourceLayer = String(layer["source-layer"] || "").toLowerCase();
-      const textField = JSON.stringify(layer.layout?.["text-field"] || "").toLowerCase();
-      const filter = JSON.stringify(layer.filter || "").toLowerCase();
-      const combined = `${id} ${sourceLayer} ${textField} ${filter}`;
-      return layer.type === "symbol"
-        && (combined.includes("strasse")
-          || combined.includes("straße")
-          || combined.includes("str_name")
-          || combined.includes("strname")
-          || combined.includes("verkehr")
-          || combined.includes("road")
-          || combined.includes("street"))
-        && !combined.includes("flurst")
-        && !combined.includes("flurstück")
-        && !combined.includes("flurstueck")
-        && !combined.includes("gemarkung")
-        && !combined.includes("zaehler")
-        && !combined.includes("nenner")
-        && !combined.includes("bruch");
-    }
-
-    function isManagedStyleLayer(layer) {
-      const id = String(layer.id || "");
-      if (!id || id === "background") return false;
-      if (id.startsWith("luftbild-")) return false;
-      if (id === "state-outlines" || id === "state-labels") return false;
-      if (id.startsWith("selected-") || id.startsWith("annotations") || id.startsWith("measure") || id.startsWith("pins") || id.startsWith("snap")) return false;
-      return true;
-    }
-
-    function layerBelongsToCustomRendererState(layer) {
-      const needle = "hamburg";
-      const haystack = [
-        layer.id,
-        layer.source,
-        layer["source-layer"],
-        JSON.stringify(layer.filter || ""),
-      ].map((value) => String(value || "").toLowerCase()).join(" ");
-      return haystack.includes(needle);
-    }
-
-    function viewIntersectsHamburg() {
-      if (!map) return false;
-      const bounds = map.getBounds();
-      const west = bounds.getWest();
-      const east = bounds.getEast();
-      const south = bounds.getSouth();
-      const north = bounds.getNorth();
-      return east >= 8.3 && west <= 10.4 && north >= 53.35 && south <= 53.95;
-    }
-
-    function layerThemeIndex(layer) {
-      const id = String(layer.id || "");
-      const match = id.match(/theme-(\\d+)/);
-      if (match) return Number(match[1]);
-      const filter = JSON.stringify(layer.filter || "");
-      const oldMatch = filter.match(/"theme_index",(\\d+)/);
-      return oldMatch ? Number(oldMatch[1]) : null;
-    }
-
-    function mergeFilters(baseFilter, extraFilters) {
-      const extras = extraFilters.filter(Boolean);
-      if (!baseFilter && !extras.length) return undefined;
-      if (!baseFilter && extras.length === 1) return extras[0];
-      return ["all", ...(baseFilter ? [baseFilter] : []), ...extras];
-    }
-
-    function layerBaseFilter(layer) {
-      if (!baseLayerFilters.has(layer.id)) {
-        baseLayerFilters.set(layer.id, layer.filter ? JSON.parse(JSON.stringify(layer.filter)) : undefined);
-      }
-      return baseLayerFilters.get(layer.id);
-    }
-
-    function filteredLayerFilter(layer) {
-      const baseFilter = layerBaseFilter(layer);
-      const id = String(layer.id || "");
-      const filters = [];
-      if (id.match(/^runtime-[a-z0-9_-]+-label-theme-1-/)) {
-        if (layerSettings.houseNumbers && !layerSettings.buildingLabels) {
-          filters.push(["==", "sub_thema", "Gebäude"]);
-        } else if (!layerSettings.houseNumbers && layerSettings.buildingLabels) {
-          filters.push(["!=", "sub_thema", "Gebäude"]);
-        }
-      }
-      return mergeFilters(baseFilter, filters);
-    }
-
-    function isBuildingLabelLayer(id) {
-      return /^runtime-[a-z0-9_-]+-label-theme-1-/.test(id);
-    }
-
-    function isStreetLabelLayer(id, theme) {
-      return /^runtime-[a-z0-9_-]+-label-theme-[26]-/.test(id) || theme === 2 || theme === 6;
-    }
-
-    function isSurfaceLabelLayer(id, theme) {
-      return /^runtime-[a-z0-9_-]+-label-theme-(8|10|11|12|13)-/.test(id)
-        || [8, 10, 11, 12, 13].includes(theme);
-    }
-
-    function isLegalLayer(id, theme) {
-      return /^runtime-[a-z0-9_-]+-label-theme-[34]-/.test(id)
-        || theme === 3
-        || theme === 4;
-    }
-
-    function isSurfaceOutlineLayer(id, theme) {
-      return /^runtime-[a-z0-9_-]+-general-line-/.test(id) && !isLegalLayer(id, theme);
-    }
-
-    function isLayerEnabledBySettings(layer) {
-      const id = String(layer.id || "");
-      const sourceLayer = String(layer["source-layer"] || "");
-      const theme = layerThemeIndex(layer);
-
-      if (!layerSettings.basemap) {
-        return false;
-      }
-      const isSymbolLayer = layer.type === "symbol";
-      if (sourceLayer.includes("overview") || sourceLayer === "major_surfaces" || sourceLayer === "surfaces" || sourceLayer === "green_surfaces") {
-        return layerSettings.surfaceFills;
-      }
-      if (/^runtime-[a-z0-9_-]+-building-(fills|lines)$/.test(id)) {
-        return layerSettings.buildings;
-      }
-      if (/^runtime-[a-z0-9_-]+-parcel-outline-lines$/.test(id)) {
-        return layerSettings.parcelLines;
-      }
-      if (/^runtime-[a-z0-9_-]+-parcel-number-lines$/.test(id) || id.includes("boundary-point") || /^runtime-[a-z0-9_-]+-label-theme-0-/.test(id)) {
-        return layerSettings.parcelLabels;
-      }
-      if (/^runtime-[a-z0-9_-]+-point-symbol-static-fill$/.test(id)) {
-        return layerSettings.symbols;
-      }
-      if (isSymbolLayer && isBuildingLabelLayer(id)) {
-        return layerSettings.houseNumbers || layerSettings.buildingLabels;
-      }
-      if (isSymbolLayer && isStreetLabelLayer(id, theme)) {
-        return layerSettings.streetNames;
-      }
-      if (isLegalLayer(id, theme)) {
-        return layerSettings.legalLines;
-      }
-      if (isSymbolLayer && isSurfaceLabelLayer(id, theme)) {
-        return layerSettings.surfaceLabels;
-      }
-      if (isSurfaceOutlineLayer(id, theme)) {
-        return layerSettings.surfaceOutlines;
-      }
-      if (id.startsWith("mosaic-force-building-fill")
-        || id === "mosaic-building-polygon-outline"
-        || (id.startsWith("mosaic-") && sourceLayer === "polygons" && theme === 1)
-        || (id.startsWith("mosaic-") && sourceLayer === "lines" && theme === 1)) {
-        return layerSettings.buildings;
-      }
-      if (id.startsWith("mosaic-force-parcel-fill")
-        || (id.startsWith("mosaic-") && sourceLayer === "polygons" && theme === 0)) {
-        return layerSettings.surfaceFills;
-      }
-      if (id.startsWith("mosaic-force-surface-fill")
-        || (id.startsWith("mosaic-") && sourceLayer === "polygons")) {
-        return layerSettings.surfaceFills;
-      }
-      if (id.startsWith("mosaic-") && sourceLayer === "boundary_point_geometries") {
-        return layerSettings.parcelLabels;
-      }
-      if (id.startsWith("mosaic-") && sourceLayer === "labels" && theme === 0) {
-        return layerSettings.parcelLabels;
-      }
-      if (id.startsWith("mosaic-") && sourceLayer === "labels" && theme === 1) {
-        return layerSettings.houseNumbers || layerSettings.buildingLabels;
-      }
-      if (id.startsWith("mosaic-") && sourceLayer === "labels" && isStreetLabelLayer(id, theme)) {
-        return layerSettings.streetNames;
-      }
-      if (id.startsWith("mosaic-") && sourceLayer === "labels" && isSurfaceLabelLayer(id, theme)) {
-        return layerSettings.surfaceLabels;
-      }
-      if (id.startsWith("mosaic-") && isLegalLayer(id, theme)) {
-        return layerSettings.legalLines;
-      }
-      if (id.startsWith("mosaic-") && sourceLayer === "lines" && theme === 0) {
-        return layerSettings.parcelLines;
-      }
-      if (id.startsWith("mosaic-") && sourceLayer === "lines") {
-        return layerSettings.surfaceOutlines;
-      }
-      if (id.startsWith("mosaic-")) {
-        return true;
-      }
-      return false;
-    }
-
-    function syncLayerSettingsUi() {
-      for (const input of layerSettingInputs) {
-        const key = input.dataset.layerSetting;
-        input.checked = !!layerSettings[key];
-      }
-      for (const input of layerGroupInputs) {
-        const keys = layerSettingGroups[input.dataset.layerGroup] || [];
-        const activeCount = keys.filter((key) => !!layerSettings[key]).length;
-        input.checked = keys.length > 0 && activeCount === keys.length;
-        input.indeterminate = activeCount > 0 && activeCount < keys.length;
-      }
-    }
-
-    function applyLayerSettings() {
-      if (!map?.getStyle) return;
-      for (const layer of map.getStyle().layers || []) {
-        if (!isManagedStyleLayer(layer)) continue;
-        if (!baseLayerVisibilities.has(layer.id)) {
-          baseLayerVisibilities.set(layer.id, layer.layout?.visibility || "visible");
-        }
-        if (!baseLayerFilters.has(layer.id)) {
-          baseLayerFilters.set(layer.id, layer.filter ? JSON.parse(JSON.stringify(layer.filter)) : undefined);
-        }
-        if (!map.getLayer(layer.id)) continue;
-        const visibility = isLayerEnabledBySettings(layer) ? baseLayerVisibilities.get(layer.id) : "none";
-        map.setLayoutProperty(layer.id, "visibility", visibility);
-        try {
-          map.setFilter(layer.id, filteredLayerFilter(layer));
-        } catch (error) {
-          console.warn("Could not update layer filter", layer.id, error);
-        }
-      }
-      if (map.getLayer("background")) {
-        try {
-          map.setPaintProperty("background", "background-opacity", 1);
-        } catch (error) {
-          console.warn("Could not update background opacity", error);
-        }
-      }
-      updateLuftbildLayers();
-    }
-
-    function setBaseStyleVisibility() {
-      applyLayerSettings();
-    }
-
-    function liftStreetLabelsAboveAerial() {
-      return;
-    }
-
-    function normalizeStreetLabelWrapping() {
-      if (!map?.getStyle) return;
-      for (const layer of map.getStyle().layers || []) {
-        const hasText = layer.type === "symbol" && layer.layout && layer.layout["text-field"];
-        if (!map.getLayer(layer.id) || !hasText) continue;
-        try {
-          map.setLayoutProperty(layer.id, "text-max-width", 999);
-        } catch (error) {
-          console.warn("Could not update street label wrapping", layer.id, error);
-        }
-      }
-    }
-
-    function updateLuftbildLayers() {
-      if (!map?.getStyle) return;
-      const visibleSlugs = new Set();
-      if (layerSettings.aerial) {
-        for (const state of visibleStateEntries()) {
-          if (LUFTBILD_WMS[state.slug]) visibleSlugs.add(state.slug);
-        }
-      }
-      for (const slug of visibleSlugs) {
-        ensureLuftbildLayer(slug);
-      }
-      for (const layer of map.getStyle().layers || []) {
-        if (!layer.id.startsWith("luftbild-") || !map.getLayer(layer.id)) continue;
-        const slug = layer.id.replace("luftbild-", "");
-        map.setLayoutProperty(layer.id, "visibility", visibleSlugs.has(slug) ? "visible" : "none");
-      }
-    }
-
-    function setBaseLayerMode() {
-      baseLayerMode = "custom";
-      applyLayerSettings();
-    }
-
-    function renderSelection() {
-      const parcels = [...selectedParcels.values()];
-      const buildings = [...selectedBuildings.values()];
-      if (!parcels.length && !buildings.length) {
-        selectionPanel.hidden = true;
-      } else {
-        selectionPanel.hidden = false;
-        const parts = [];
-        if (parcels.length) {
-          parts.push(renderParcelTable(parcels));
-        }
-        if (buildings.length) {
-          parts.push(renderBuildingTable(buildings));
-        }
-        selectionBody.innerHTML = parts.join(\"\");
-      }
-      updateSelectionSources();
-      notifyParentSelection(parcels, buildings);
-    }
-
-    function clearSelection() {
-      selectedParcels.clear();
-      selectedBuildings.clear();
-      renderSelection();
-    }
-
-    function isMapReady() {
-      return !!map && !!map.getSource("annotations") && !!map.getSource("measure") && !!map.getSource("measure-area") && !!map.getSource("measure-radius") && !!map.getSource("pins");
-    }
-
-    function setLayerVisibility(layerId, visible) {
-      if (!map?.getLayer || !map.getLayer(layerId)) return;
-      map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
-    }
-
-    function updateHandleVisibility() {
-      if (!map?.getLayer) return;
-      setLayerVisibility("annotations-point", activeTool === "drawLine" || activeTool === "drawPolygon");
-      setLayerVisibility("measure-point", activeTool === "measureLine");
-      setLayerVisibility("measure-area-point", activeTool === "measureArea");
-      setLayerVisibility("pins-fill", activeTool === "pin" || activeTool === "erase");
-    }
-
-    function setPinSource() {
-      if (!isMapReady()) return;
-      const features = [];
-      pinnedPoints.forEach((point, pinIndex) => {
-        const label = `${formatCoordinate(point[1], "lat")} · ${formatCoordinate(point[0], "lon")}`;
-        features.push({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: point },
-          properties: { kind: "pin", pinIndex },
-        });
-        features.push({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: point },
-          properties: { kind: "pin-label", label, pinIndex },
-        });
-      });
-      map.getSource("pins").setData({
-        type: "FeatureCollection",
-        features,
-      });
-    }
-
-    function annotationFeatures() {
-      const features = [];
-      annotations.forEach((annotation, annotationIndex) => {
-        if (annotation.type === "line" && annotation.points.length >= 2) {
-          features.push({
-            type: "Feature",
-            geometry: { type: "LineString", coordinates: annotation.points },
-            properties: { kind: "line", color: annotation.color, annotationIndex },
-          });
-        }
-        if (annotation.type === "polygon" && annotation.points.length >= 3) {
-          features.push({
-            type: "Feature",
-            geometry: { type: "Polygon", coordinates: [[...annotation.points, annotation.points[0]]] },
-            properties: { kind: "polygon", color: annotation.color, annotationIndex },
-          });
-          features.push({
-            type: "Feature",
-            geometry: { type: "LineString", coordinates: [...annotation.points, annotation.points[0]] },
-            properties: { kind: "polygon-outline", color: annotation.color, annotationIndex },
-          });
-        }
-        annotation.points.forEach((point, vertexIndex) => {
-          features.push({
-            type: "Feature",
-            geometry: { type: "Point", coordinates: point },
-            properties: { kind: "vertex", color: annotation.color, annotationIndex, vertexIndex },
-          });
-        });
-      });
-      if (activeTool === "drawLine" || activeTool === "drawPolygon") {
-        const isPolygon = activeTool === "drawPolygon";
-        if (annotationPoints.length >= 2) {
-          features.push({
-            type: "Feature",
-            geometry: { type: "LineString", coordinates: isPolygon && annotationPoints.length >= 3 ? [...annotationPoints, annotationPoints[0]] : annotationPoints },
-            properties: { kind: isPolygon ? "polygon-outline" : "line", color: annotationColor },
-          });
-        }
-        if (isPolygon && annotationPoints.length >= 3) {
-          features.push({
-            type: "Feature",
-            geometry: { type: "Polygon", coordinates: [[...annotationPoints, annotationPoints[0]]] },
-            properties: { kind: "polygon", color: annotationColor },
-          });
-        }
-        annotationPoints.forEach((point, vertexIndex) => {
-          features.push({
-            type: "Feature",
-            geometry: { type: "Point", coordinates: point },
-            properties: { kind: "vertex", color: annotationColor, draft: true, vertexIndex },
-          });
-        });
-      }
-      return features;
-    }
-
-    function applyAnnotationLayers() {
-      if (!isMapReady()) return;
-      map.getSource("annotations").setData({ type: "FeatureCollection", features: annotationFeatures() });
-    }
-
-    function eraseItemAt(event) {
-      if (!map || !event?.point) return false;
-      const eraseLayers = ["annotations-point", "annotations-line", "annotations-fill", "pins-fill"].filter((id) => map.getLayer(id));
-      if (!eraseLayers.length) return false;
-      const box = [
-        [event.point.x - 8, event.point.y - 8],
-        [event.point.x + 8, event.point.y + 8],
-      ];
-      const features = map.queryRenderedFeatures(box, { layers: eraseLayers });
-      const annotationFeature = features.find((feature) => feature.properties?.annotationIndex !== undefined);
-      if (annotationFeature) {
-        const index = Number(annotationFeature.properties.annotationIndex);
-        if (Number.isInteger(index) && annotations[index]) {
-          annotations.splice(index, 1);
-          applyAnnotationLayers();
-          return true;
-        }
-      }
-      const pinFeature = features.find((feature) => feature.layer?.id === "pins-fill" && feature.properties?.pinIndex !== undefined);
-      if (pinFeature) {
-        const index = Number(pinFeature.properties.pinIndex);
-        if (Number.isInteger(index) && pinnedPoints[index]) {
-          pinnedPoints.splice(index, 1);
-          setPinSource();
-          return true;
-        }
-      }
-      return false;
-    }
-
-    function setEraserInteractionState() {
-      if (!map) return;
-      if (activeTool === "erase" && !spacePanActive) {
-        if (map.dragPan?.disable) map.dragPan.disable();
-        if (map.touchZoomRotate?.disable) map.touchZoomRotate.disable();
-        map.getCanvas().style.cursor = ERASER_CURSOR;
-      } else if (activeTool !== "erase") {
-        if (map.dragPan?.enable) map.dragPan.enable();
-        if (map.touchZoomRotate?.enable) map.touchZoomRotate.enable();
-      }
-    }
-
-    function startEraseBrush(event) {
-      if (activeTool !== "erase" || spacePanActive) return;
-      eraseDragging = true;
-      suppressNextMapClick = true;
-      if (event.preventDefault) event.preventDefault();
-      if (event.originalEvent?.preventDefault) event.originalEvent.preventDefault();
-      setEraserInteractionState();
-      eraseItemAt(event);
-    }
-
-    function updateEraseBrush(event) {
-      if (!eraseDragging || activeTool !== "erase" || spacePanActive) return;
-      if (event.preventDefault) event.preventDefault();
-      if (event.originalEvent?.preventDefault) event.originalEvent.preventDefault();
-      eraseItemAt(event);
-    }
-
-    function stopEraseBrush() {
-      if (!eraseDragging) return;
-      eraseDragging = false;
-      suppressNextMapClick = true;
-      setEraserInteractionState();
-    }
-
-    function addAnnotationPoint(coord) {
-      annotationPoints.push(coord);
-      applyAnnotationLayers();
-    }
-
-    function commitAnnotation() {
-      if (activeTool === "drawLine" && annotationPoints.length >= 2) {
-        annotations.push({ type: "line", points: annotationPoints.slice(), color: annotationColor });
-      }
-      if (activeTool === "drawPolygon" && annotationPoints.length >= 3) {
-        annotations.push({ type: "polygon", points: annotationPoints.slice(), color: annotationColor });
-      }
-      annotationPoints = [];
-      applyAnnotationLayers();
-    }
-
-    function dropDuplicateAnnotationEndpoint() {
-      if (annotationPoints.length < 2) return;
-      const last = annotationPoints[annotationPoints.length - 1];
-      const previous = annotationPoints[annotationPoints.length - 2];
-      if (haversine(last, previous) < 0.1) {
-        annotationPoints.pop();
-      }
-    }
-
-    function setToolMode(mode) {
-      const next = mode || "none";
-      if (activeTool === "drawLine" || activeTool === "drawPolygon") {
-        commitAnnotation();
-      }
-      activeTool = activeTool === next ? "none" : next;
-      const toolButtons = [toolSelect, toolMeasureLine, toolMeasureArea, toolDrawLine, toolDrawPolygon, toolErase, toolMeasureRadius, toolPin];
-      for (const button of toolButtons) {
-        const isActive =
-          (button === toolSelect && activeTool === "none")
-          || (button === toolMeasureLine && activeTool === "measureLine")
-          || (button === toolMeasureArea && activeTool === "measureArea")
-          || (button === toolDrawLine && activeTool === "drawLine")
-          || (button === toolDrawPolygon && activeTool === "drawPolygon")
-          || (button === toolErase && activeTool === "erase")
-          || (button === toolMeasureRadius && activeTool === "measureRadius")
-          || (button === toolPin && activeTool === "pin");
-        if (button) button.dataset.state = isActive ? "active" : "off";
-      }
-      measurePoints = [];
-      areaPoints = [];
-      radiusPoints = [];
-      if (isMapReady()) {
-        map.getSource("measure").setData({ type: "FeatureCollection", features: [] });
-        map.getSource("measure-area").setData({ type: "FeatureCollection", features: [] });
-        map.getSource("measure-radius").setData({ type: "FeatureCollection", features: [] });
-      }
-      setSnapIndicator(null);
-
-      if (activeTool === "none") {
-        if (map) map.getCanvas().style.cursor = "";
-        statusRight.textContent = "";
-        if (radiusPoints.length) {
-          radiusPoints = [];
-        }
-        if (isMapReady()) {
-          map.getSource("measure-radius").setData({ type: "FeatureCollection", features: [] });
-        }
-        setMeasureStatus();
-      } else if (activeTool === "measureLine") {
-        if (map) map.getCanvas().style.cursor = "crosshair";
-        statusRight.textContent = "";
-      } else if (activeTool === "measureArea") {
-        if (map) map.getCanvas().style.cursor = "crosshair";
-        statusRight.textContent = "";
-      } else if (activeTool === "measureRadius") {
-        if (map) map.getCanvas().style.cursor = "crosshair";
-        statusRight.textContent = "";
-      } else if (activeTool === "pin") {
-        if (map) map.getCanvas().style.cursor = "crosshair";
-        statusRight.textContent = "";
-      } else if (activeTool === "erase") {
-        if (map) map.getCanvas().style.cursor = ERASER_CURSOR;
-        statusRight.textContent = "";
-      } else if (activeTool === "drawLine" || activeTool === "drawPolygon") {
-        if (map) map.getCanvas().style.cursor = "crosshair";
-        statusRight.textContent = "";
-      }
-      if (map?.doubleClickZoom) {
-        if (activeTool === "drawLine" || activeTool === "drawPolygon" || activeTool === "measureArea") map.doubleClickZoom.disable();
-        else map.doubleClickZoom.enable();
-      }
-      updateHandleVisibility();
-      setEraserInteractionState();
-      setMeasureStatus();
-    }
-
-    function setMeasureStatus() {
-      statusRight.textContent = "";
-    }
-
-    function removeLastMeasurePoint() {
-      if (activeTool === \"measureLine\" && measurePoints.length) {
-        measurePoints.pop();
-      } else if (activeTool === \"measureArea\" && areaPoints.length) {
-        areaPoints.pop();
-      } else if (activeTool === \"measureRadius\" && radiusPoints.length) {
-        radiusPoints.pop();
-      } else {
-        return;
-      }
-      applyMeasureLayers();
-      setMeasureStatus();
-    }
-
-    function estimatePerimeter(points) {
-      if (!points || points.length < 2) return 0;
-      let perimeter = 0;
-      for (let i = 1; i < points.length; i++) {
-        perimeter += haversine(points[i - 1], points[i]);
-      }
-      if (points.length > 2) perimeter += haversine(points[points.length - 1], points[0]);
-      return perimeter;
-    }
-
-    function formatReadableDistance(meters) {
-      if (!meters || !Number.isFinite(meters)) return \"–\";
-      return meters >= 1000
-        ? `${(meters / 1000).toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km`
-        : `${meters.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} m`;
-    }
-
-    function clearMeasure() {
-      measurePoints = [];
-      areaPoints = [];
-      radiusPoints = [];
-      annotationPoints = [];
-      annotations = [];
-      if (!isMapReady()) return;
-      map.getSource("annotations").setData({ type: "FeatureCollection", features: [] });
-      map.getSource("measure").setData({ type: "FeatureCollection", features: [] });
-      map.getSource("measure-area").setData({ type: "FeatureCollection", features: [] });
-      map.getSource("measure-radius").setData({ type: "FeatureCollection", features: [] });
-      setSnapIndicator(null);
-      setMeasureStatus();
-    }
-
-    function buildCirclePoints(center, edge, steps = 72) {
-      const radius = haversine(center, edge);
-      const earthRadius = 6371000;
-      const lat = center[1] * Math.PI / 180;
-      const lon = center[0] * Math.PI / 180;
-      const segments = Math.max(16, Math.floor(steps));
-      const angular = radius / earthRadius;
-      const points = [];
-      for (let i = 0; i <= segments; i++) {
-        const bearing = (Math.PI * 2 * i) / segments;
-        const sinLat = Math.sin(lat) * Math.cos(angular) + Math.cos(lat) * Math.sin(angular) * Math.cos(bearing);
-        const newLat = Math.asin(sinLat);
-        const y = Math.sin(bearing) * Math.sin(angular) * Math.cos(lat);
-        const x = Math.cos(angular) - Math.sin(lat) * sinLat;
-        const newLon = lon + Math.atan2(y, x);
-        points.push([((newLon * 180) / Math.PI + 540) % 360 - 180, (newLat * 180) / Math.PI]);
-      }
-      return points;
-    }
-
-    function copyViewportMetadata() {
-      if (!map) return null;
-      const center = map.getCenter();
-      const bounds = map.getBounds();
-      const viewStates = visibleStateEntries();
-      const states = (viewStates.length ? viewStates : [...activeStateSlugs]).map((slugOrItem) => {
-        if (typeof slugOrItem === "string") {
-          const data = stateMetadata.get(slugOrItem) || {};
-          return {
-            slug: slugOrItem,
-            name: (STATE_CENTERS[slugOrItem] && STATE_CENTERS[slugOrItem].name) || slugOrItem,
-            data,
-          };
-        }
-        return slugOrItem;
-      });
-      const payload = {
-        createdAt: new Date().toISOString(),
-        map: {
-          center: [center.lng, center.lat],
-          zoom: map.getZoom(),
-          bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
-        },
-        states: states,
-        pins: pinnedPoints,
-      };
-      return payload;
-    }
-
-    function midpoint(a, b) {
-      return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-    }
-
-    function polygonLabelPoint(points) {
-      if (!points || !points.length) return null;
-      const xs = points.map((point) => point[0]).filter(Number.isFinite);
-      const ys = points.map((point) => point[1]).filter(Number.isFinite);
-      if (!xs.length || !ys.length) return null;
-      return [
-        (Math.min(...xs) + Math.max(...xs)) / 2,
-        (Math.min(...ys) + Math.max(...ys)) / 2,
-      ];
-    }
-
-    function collectGeometryVertices(geometry, vertices = []) {
-      if (!geometry || !geometry.coordinates) return vertices;
-      if (geometry.type === "Point") {
-        vertices.push(geometry.coordinates);
-      } else if (geometry.type === "LineString" || geometry.type === "MultiPoint") {
-        for (const point of geometry.coordinates) vertices.push(point);
-      } else if (geometry.type === "Polygon" || geometry.type === "MultiLineString") {
-        for (const ring of geometry.coordinates) {
-          for (const point of ring) vertices.push(point);
-        }
-      } else if (geometry.type === "MultiPolygon") {
-        for (const polygon of geometry.coordinates) {
-          for (const ring of polygon) {
-            for (const point of ring) vertices.push(point);
-          }
-        }
-      } else if (geometry.type === "GeometryCollection") {
-        for (const part of geometry.geometries || []) collectGeometryVertices(part, vertices);
-      }
-      return vertices;
-    }
-
-    function setSnapIndicator(coord) {
-      if (!map?.getSource || !map.getSource("snap")) return;
-      map.getSource("snap").setData({
-        type: "FeatureCollection",
-        features: coord ? [{
-          type: "Feature",
-          geometry: { type: "Point", coordinates: coord },
-          properties: { kind: "snap" },
-        }] : [],
-      });
-    }
-
-    function addSnapFeatureVertices(feature, candidates) {
-      if (!feature) return;
-      collectGeometryVertices(feature.geometry, candidates);
-    }
-
-    function snapRadiusForZoom(event) {
-      const zoom = map?.getZoom ? map.getZoom() : 18;
-      const isTouch = Boolean(event?.originalEvent?.touches);
-      const farRadius = isTouch ? 36 : 28;
-      const nearRadius = isTouch ? 18 : 9;
-      if (zoom <= 17) return farRadius;
-      if (zoom >= 22) return nearRadius;
-      const t = (zoom - 17) / 5;
-      return farRadius + (nearRadius - farRadius) * t;
-    }
-
-    function nearestSnapCoordinate(event, fallbackCoord) {
-      if (!map) return fallbackCoord;
-      const eventPoint = event?.point || (fallbackCoord ? map.project(fallbackCoord) : null);
-      if (!eventPoint || !fallbackCoord) return fallbackCoord;
-      const snapRadius = snapRadiusForZoom(event);
-      const layers = ["parcel-fill", "parcel-outline", "building-fill", "building-outline", "selected-parcel-outline", "selected-building-outline"];
-      const box = [
-        [eventPoint.x - snapRadius, eventPoint.y - snapRadius],
-        [eventPoint.x + snapRadius, eventPoint.y + snapRadius],
-      ];
-      const candidates = [];
-      try {
-        const rendered = map.queryRenderedFeatures(box, { layers: layers.filter((id) => map.getLayer(id)) });
-        for (const feature of rendered) addSnapFeatureVertices(feature, candidates);
-      } catch (error) {
-        console.warn("Snapping konnte sichtbare Features nicht lesen", error);
-      }
-      if (map.getSource("alkis")) {
-        try {
-          const polygonFeatures = map.querySourceFeatures("alkis", { sourceLayer: "polygons" });
-          for (const feature of polygonFeatures) {
-            const thema = feature.properties?.thema;
-            if (thema === "Flurstücke" || thema === "Gebäude") addSnapFeatureVertices(feature, candidates);
-          }
-          const lineFeatures = map.querySourceFeatures("alkis", { sourceLayer: "lines" });
-          for (const feature of lineFeatures) {
-            const thema = feature.properties?.thema;
-            if (thema === "Flurstücke" || thema === "Gebäude") addSnapFeatureVertices(feature, candidates);
-          }
-        } catch (error) {
-          console.warn("Snapping konnte ALKIS-Quellfeatures nicht lesen", error);
-        }
-      }
-      for (const item of [...selectedParcels.values(), ...selectedBuildings.values()]) {
-        collectGeometryVertices(item.geometry, candidates);
-      }
-      let nearest = null;
-      let nearestDistance = Infinity;
-      for (const coord of candidates) {
-        if (!Array.isArray(coord) || coord.length < 2) continue;
-        const point = map.project(coord);
-        const distance = Math.hypot(point.x - eventPoint.x, point.y - eventPoint.y);
-        if (distance < nearestDistance && distance <= snapRadius) {
-          nearest = coord;
-          nearestDistance = distance;
-        }
-      }
-      const snapped = nearest ? [nearest[0], nearest[1]] : null;
-      setSnapIndicator(snapped);
-      return snapped || fallbackCoord;
-    }
-
-    function applyMeasureLayers() {
-      const linePointFeatures = measurePoints.map((coord, index) => ({
-        type: "Feature",
-        geometry: { type: "Point", coordinates: coord },
-        properties: { index, tool: "line", kind: "vertex" }
-      }));
-      const lineFeatures = [];
-      const lineLabelFeatures = [];
-      if (measurePoints.length >= 2) {
-        lineFeatures.push({
-          type: "Feature",
-          geometry: { type: "LineString", coordinates: measurePoints },
-          properties: { kind: "line" }
-        });
-        let distance = 0;
-        for (let i = 1; i < measurePoints.length; i++) {
-          const segmentDistance = haversine(measurePoints[i - 1], measurePoints[i]);
-          distance += segmentDistance;
-          lineLabelFeatures.push({
-            type: "Feature",
-            geometry: { type: "Point", coordinates: midpoint(measurePoints[i - 1], measurePoints[i]) },
-            properties: { kind: "segment-label", label: formatReadableDistance(segmentDistance) }
-          });
-        }
-        lineLabelFeatures.push({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: measurePoints[measurePoints.length - 1] },
-          properties: { kind: "total-label", label: `Summe ${formatReadableDistance(distance)}` }
-        });
-      }
-
-      map.getSource("measure").setData({
-        type: "FeatureCollection",
-        features: [...lineFeatures, ...linePointFeatures, ...lineLabelFeatures]
-      });
-
-      const areaPointFeatures = areaPoints.map((coord, index) => ({
-        type: "Feature",
-        geometry: { type: "Point", coordinates: coord },
-        properties: { index, tool: "area", kind: "vertex" }
-      }));
-      const areaFeatures = [];
-      const areaLabelFeatures = [];
-      const areaSegmentLabelFeatures = [];
-      const areaTotalLabelFeatures = [];
-      if (areaPoints.length >= 2) {
-        const openLine = areaPoints.length >= 3 ? [...areaPoints, areaPoints[0]] : areaPoints;
-        areaFeatures.push({
-          type: "Feature",
-          geometry: { type: "LineString", coordinates: openLine },
-          properties: { kind: "outline" },
-        });
-        let cumulativeDistance = 0;
-        const cumulativeSegmentCount = areaPoints.length - 1;
-        for (let i = 0; i < cumulativeSegmentCount; i++) {
-          const a = areaPoints[i];
-          const b = areaPoints[i + 1];
-          cumulativeDistance += haversine(a, b);
-        }
-        areaTotalLabelFeatures.push({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: areaPoints[areaPoints.length - 1] },
-          properties: { kind: "area-total-label", label: `Σ=${formatReadableDistance(cumulativeDistance)}` },
-        });
-      }
-      if (areaPoints.length >= 3) {
-        areaFeatures.push({
-          type: "Feature",
-          geometry: { type: "Polygon", coordinates: [[...areaPoints, areaPoints[0]]] },
-          properties: { kind: "area" },
-        });
-        areaLabelFeatures.push({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: polygonLabelPoint(areaPoints) },
-          properties: { kind: "area-label", label: `A=${formatMeasuredArea(geodesicArea(areaPoints))}` },
-        });
-      }
-      map.getSource("measure-area").setData({
-        type: "FeatureCollection",
-        features: [...areaPointFeatures, ...areaFeatures, ...areaLabelFeatures, ...areaSegmentLabelFeatures, ...areaTotalLabelFeatures]
-      });
-
-      const radiusFeatures = [];
-      if (radiusPoints.length >= 2) {
-        const [center, edge] = radiusPoints;
-        const ring = buildCirclePoints(center, edge, 64);
-        radiusFeatures.push({
-          type: "Feature",
-          geometry: { type: "Polygon", coordinates: [ring] },
-          properties: { kind: "radius" },
-        });
-        radiusFeatures.push({
-          type: "Feature",
-          geometry: { type: "LineString", coordinates: [center, edge] },
-          properties: { kind: "radius-line" },
-        });
-      }
-      if (isMapReady()) {
-        map.getSource("measure-radius").setData({
-          type: "FeatureCollection",
-          features: radiusFeatures
-        });
-      }
-    }
-
-    function addMeasurePoint(coord) {
-      if (activeTool === "measureLine") {
-        measurePoints.push(coord);
-      } else if (activeTool === "measureArea") {
-        areaPoints.push(coord);
-      } else if (activeTool === "measureRadius") {
-        radiusPoints.push(coord);
-        if (radiusPoints.length > 2) {
-          radiusPoints = [coord];
-        }
-      } else {
-        return;
-      }
-      applyMeasureLayers();
-      setMeasureStatus();
-    }
-
-    function haversine(a, b) {
-      const toRad = (degree) => degree * Math.PI / 180;
-      const R = 6371000;
-      const lat1 = toRad(a[1]);
-      const lat2 = toRad(b[1]);
-      const dLat = toRad(b[1] - a[1]);
-      const dLon = toRad(b[0] - a[0]);
-      const s = Math.sin(dLat / 2) * Math.sin(dLat / 2)
-        + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-      return 2 * R * Math.asin(Math.sqrt(Math.min(1, s)));
-    }
-
-    function updateScaleInfo() {
-      if (!map) return;
-      const scale = mapScaleData();
-      if (!scale) return;
-      statusLeft.textContent = `1:${scale.denominator.toLocaleString("de-DE")}`;
-      zoomReadout.textContent = `Zoom ${map.getZoom().toFixed(2)}`;
-    }
-
-
-    function updateCursorInfo(event) {
-      const lon = event.lngLat.lng;
-      const lat = event.lngLat.lat;
-      lastCursorLngLat = [lon, lat];
-      statusCenter.textContent = `${formatCoordinate(lat, "lat")} · ${formatCoordinate(lon, "lon")}`;
-      statusEl.dataset.ready = "false";
-      if (statusLeft.textContent) statusEl.style.display = "none";
-      clearTimeout(window.__okStatusTimer);
-      window.__okStatusTimer = setTimeout(() => { statusEl.dataset.ready = "true"; }, 900);
-    }
-
-
-    function selectedFeatureBounds(items) {
-      if (!map) return null;
-      let bounds = null;
-      for (const item of items) {
-        if (item?.bbox && item.bbox.length === 4) {
-          const next = new maplibregl.LngLatBounds([item.bbox[0], item.bbox[1]], [item.bbox[2], item.bbox[3]]);
-          if (!bounds) {
-            bounds = next;
-          } else {
-            bounds.extend(next.getSouthWest());
-            bounds.extend(next.getNorthEast());
-          }
-          continue;
-        }
-        const center = item?.center || [];
-        const lon = Number(center[0]);
-        const lat = Number(center[1]);
-        if (Number.isFinite(lon) && Number.isFinite(lat)) {
-          if (!bounds) {
-            bounds = new maplibregl.LngLatBounds([lon, lat], [lon, lat]);
-          } else {
-            bounds.extend([lon, lat]);
-          }
-        }
-      }
-      return bounds;
-    }
-
-    function copySelectionAsReport() {
-      const parcels = [...selectedParcels.values()];
-      const buildings = [...selectedBuildings.values()];
-      const center = map.getCenter();
-      const bounds = map.getBounds();
-      const scale = mapScaleData();
-      return {
-        createdAt: new Date().toISOString(),
-        map: {
-          center: [center.lng, center.lat],
-          zoom: map.getZoom(),
-          bounds: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
-          scaleDenominator: scale?.denominator || null,
-          metersPerPixel: scale ? scale.metersPerPixel : null,
-        },
-        states: visibleStateEntries().map((state) => ({
-          slug: state.slug,
-          name: state.name,
-          metadata: stateMetadata.get(state.slug) || null,
-        })),
-        selection: {
-          parcels,
-          buildings,
-          parcelCount: parcels.length,
-          buildingCount: buildings.length,
-        },
-        metadata: {
-          pins: pinnedPoints,
-          copiedAt: new Date().toISOString(),
-        },
-      };
-    }
-
-      function selectionReportText(payload) {
-      const date = new Date(payload.createdAt).toLocaleString("de-DE");
-      const rows = [];
-      rows.push("Exposé-Kurzbericht");
-      rows.push(`Erstellt: ${date}`);
-      rows.push(`Ausschnitt: Zoom ${payload.map.zoom.toFixed(2)} · ${payload.map.scaleDenominator ? `1:${payload.map.scaleDenominator.toLocaleString("de-DE")}` : "Maßstab unbekannt"}`);
-      if (payload.selection.parcelCount || payload.selection.buildingCount) {
-        rows.push(`Auswahl: ${payload.selection.parcelCount} Flurstück(e), ${payload.selection.buildingCount} Gebäude`);
-      }
-      rows.push("Nutzungslizenzen/Quellen:");
-      for (const state of payload.states) {
-        const meta = state.metadata || {};
-        rows.push(`- ${state.name}`);
-        if (meta.quellenvermerk) rows.push(`  • Quelle: ${meta.quellenvermerk}`);
-        if (meta.datenstand) rows.push(`  • Stand: ${meta.datenstand}`);
-        if (meta.datenjahr) rows.push(`  • Datenjahr: ${meta.datenjahr}`);
-        if (meta.lizenz) rows.push(`  • Lizenz: ${meta.lizenz}`);
-        if (meta.aktualisiert_am) rows.push(`  • Aktualisiert: ${meta.aktualisiert_am}`);
-      }
-      return rows.join("\\n");
-    }
-
-    function zoomToSelection() {
-      const bounds = selectedFeatureBounds([...selectedParcels.values(), ...selectedBuildings.values()]);
-      if (!bounds) {
-        setStatus("Keine Auswahl zum Fokussieren vorhanden.");
-        return false;
-      }
-      map.fitBounds(bounds, { padding: 80, maxZoom: 18.5, duration: 500 });
-      return true;
-    }
-
-    function visibleStateEntries() {
-      if (!map) return [];
-      const bounds = map.getBounds();
-      const center = map.getCenter();
-      const mapStateSlugs = activeStateSlugs.size
-        ? [...activeStateSlugs]
-        : Object.keys(STATE_CENTERS);
-      const visible = [];
-      for (const [slug, state] of Object.entries(STATE_CENTERS)) {
-        if (!mapStateSlugs.includes(slug)) continue;
-        const inside = state.lon >= bounds.getWest() && state.lon <= bounds.getEast()
-          && state.lat >= bounds.getSouth() && state.lat <= bounds.getNorth();
-        if (inside) visible.push({ slug, ...state });
-      }
-      const candidates = (visible.length ? visible : Object.entries(STATE_CENTERS)
-        .filter(([slug]) => mapStateSlugs.includes(slug))
-        .map(([slug, state]) => ({ slug, ...state })))
-        .map((state) => ({
-          ...state,
-          distance: haversine([center.lng, center.lat], [state.lon, state.lat]),
-        }))
-        .sort((a, b) => a.distance - b.distance);
-      const limit = map.getZoom() < 7 ? 3 : 1;
-      return candidates.slice(0, limit);
-    }
-    function refreshSourceInfo() {
-      const visible = visibleStateEntries();
-      const states = visible.length
-        ? visible
-        : [...activeStateSlugs].map((slug) => {
-          const state = STATE_CENTERS[slug] || {name: slug};
-          return { slug, name: state.name || slug };
-        });
-      if (!states.length) {
-        if (sourceTitle) sourceTitle.textContent = "";
-        sourceList.innerHTML = '<li class="source-item"><div class="source-line"><a href="https://maplibre.org/" target="_blank" rel="noopener noreferrer">© MapLibre</a></div></li>';
-        return;
-      }
-      if (sourceTitle) sourceTitle.textContent = "";
-      const mapLibre = '<li class="source-item"><div class="source-line"><a href="https://maplibre.org/" target="_blank" rel="noopener noreferrer">© MapLibre</a></div></li>';
-      sourceList.innerHTML = mapLibre + states
-        .map((state) => {
-          const lines = formatMetadataInfo(state).map((line) => escapeHtml(line));
-          return `<li class="source-item"><div class="source-line">${lines.join("")}</div></li>`;
-        })
-        .join("");
-    }
-    function formatResultList(results) {
-      return results
-        .map((result, index) => `
-          <button class=\"search-result\" type=\"button\" data-index=\"${index}\">
-            <div class=\"search-title\">${escapeHtml(result.label || \"Treffer\")}</div>
-            <div class=\"search-meta\">${escapeHtml([result.subtitle, result.state_label || result.state].filter(Boolean).join(\" · \"))}</div>
-          </button>
-        `)
-        .join(\"\");
-    }
-
-    function lonLatToTile(lon, lat, zoom) {
-      const clampedLat = Math.max(-85.05112878, Math.min(85.05112878, Number(lat)));
-      const scale = 2 ** zoom;
-      const x = Math.floor(((Number(lon) + 180) / 360) * scale);
-      const rad = clampedLat * Math.PI / 180;
-      const y = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * scale);
-      return { x: Math.max(0, Math.min(scale - 1, x)), y: Math.max(0, Math.min(scale - 1, y)), z: zoom };
-    }
-
-    function tileUrlFromTemplate(template, tile) {
-      return String(template || "")
-        .replace("{z}", String(tile.z))
-        .replace("{x}", String(tile.x))
-        .replace("{y}", String(tile.y));
-    }
-
-    function resultPrefetchPoints(result) {
-      const points = [];
-      if (result.center?.length === 2) {
-        points.push([Number(result.center[0]), Number(result.center[1])]);
-      }
-      if (result.bbox?.length === 4) {
-        const [minLon, minLat, maxLon, maxLat] = result.bbox.map(Number);
-        if ([minLon, minLat, maxLon, maxLat].every(Number.isFinite)) {
-          points.push(
-            [(minLon + maxLon) / 2, (minLat + maxLat) / 2],
-            [minLon, minLat],
-            [minLon, maxLat],
-            [maxLon, minLat],
-            [maxLon, maxLat]
-          );
-        }
-      }
-      return points.filter(([lon, lat]) => Number.isFinite(lon) && Number.isFinite(lat));
-    }
-
-    async function prefetchResultTiles(result) {
-      const template = window.__okTilejson?.tiles?.[0];
-      if (!template || !result || !layerSettings.alkis) return;
-      const points = resultPrefetchPoints(result);
-      if (!points.length) return;
-      const zooms = result.result_type === "street" ? [17] : [17, 18];
-      const urls = [];
-      const seen = new Set();
-      for (const zoom of zooms) {
-        for (const [lon, lat] of points) {
-          const tile = lonLatToTile(lon, lat, zoom);
-          for (let dx = -1; dx <= 1; dx += 1) {
-            for (let dy = -1; dy <= 1; dy += 1) {
-              const neighbor = { z: tile.z, x: tile.x + dx, y: tile.y + dy };
-              const max = 2 ** neighbor.z;
-              if (neighbor.x < 0 || neighbor.y < 0 || neighbor.x >= max || neighbor.y >= max) continue;
-              const key = `${neighbor.z}/${neighbor.x}/${neighbor.y}`;
-              if (seen.has(key)) continue;
-              seen.add(key);
-              urls.push(tileUrlFromTemplate(template, neighbor));
-              if (urls.length >= 20) break;
-            }
-            if (urls.length >= 20) break;
-          }
-          if (urls.length >= 20) break;
-        }
-        if (urls.length >= 20) break;
-      }
-      if (!urls.length) return;
-      const fetches = urls.map((url) => fetch(url, { cache: "force-cache", credentials: "same-origin" }).catch(() => null));
-      await Promise.race([
-        Promise.allSettled(fetches),
-        new Promise((resolve) => window.setTimeout(resolve, 900)),
-      ]);
-    }
-
-    async function zoomToResult(result) {
-      await prefetchResultTiles(result);
-      if (result.result_type === "street" && result.center && result.center.length === 2) {
-        const targetZoom = Number.isFinite(Number(result.zoom)) ? Number(result.zoom) : 17.4;
-        map.flyTo({ center: result.center, zoom: Math.max(targetZoom, 17.2), duration: 450 });
-        return;
-      }
-      if (result.bbox && result.bbox.length === 4) {
-        map.fitBounds(
-          [[result.bbox[0], result.bbox[1]], [result.bbox[2], result.bbox[3]]],
-          { padding: 80, maxZoom: 18.5, duration: 500 }
-        );
-        return;
-      }
-      if (result.center && result.center.length === 2) {
-        const targetZoom = Number.isFinite(Number(result.zoom)) ? Number(result.zoom) : Math.max(map.getZoom(), 17.5);
-        map.flyTo({ center: result.center, zoom: targetZoom, duration: 450 });
-      }
-    }
-
-    function startupSearchQueryFromUrl() {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get("okSearchOpen") !== "1") return "";
-      const mode = params.get("okSearchMode") || "address";
-      if (mode === "parcel") {
-        const parts = [
-          params.get("okGemarkung") ? `Gemarkung ${params.get("okGemarkung")}` : "",
-          params.get("okFlur") ? `Flur ${params.get("okFlur")}` : "",
-          params.get("okFlurstueck") ? `Flurstück ${params.get("okFlurstueck")}` : "",
-        ].filter(Boolean);
-        return parts.join(" ");
-      }
-      const streetLine = [params.get("okStreet"), params.get("okHouseNumber")].filter(Boolean).join(" ");
-      const placeLine = [params.get("okPostcode"), params.get("okPlace")].filter(Boolean).join(" ");
-      return [streetLine, placeLine].filter(Boolean).join(", ");
-    }
-
-    function applyStartupSearchFromUrl() {
-      const query = startupSearchQueryFromUrl();
-      if (!query || !searchInput) return;
-      searchInput.value = query;
-      searchInput.dataset.selectedSearchValue = "";
-      searchInput.focus({ preventScroll: true });
-      performSearch(query).catch((error) => {
-        if (error.name === "AbortError") return;
-        console.error(error);
-        setStatus(`Suche konnte nicht geladen werden: ${error.message}`);
-      });
-    }
-
-    async function performSearch(query) {
-      const value = query.trim();
-      if (value.length < 2) {
-        searchResults.hidden = true;
-        return;
-      }
-      const cacheKey = value.normalize("NFKC").toLocaleLowerCase("de-DE");
-      let data = searchResponseCache.get(cacheKey);
-      if (!data) {
-        if (searchAbort) searchAbort.abort();
-        searchAbort = new AbortController();
-        const response = await fetch(`${searchUrl}&q=${encodeURIComponent(value)}&limit=12`, { signal: searchAbort.signal });
-        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-        data = await response.json();
-        if (searchResponseCache.size >= 80) {
-          searchResponseCache.delete(searchResponseCache.keys().next().value);
-        }
-        searchResponseCache.set(cacheKey, data);
-      }
-      const results = data.results || [];
-      if (!results.length) {
-        searchResults.innerHTML = `<div class=\"search-meta\" style=\"padding: 8px 10px\">Keine Treffer</div>`;
-        searchResults.hidden = false;
-        return;
-      }
-      searchResults.innerHTML = formatResultList(results);
-      searchResults.hidden = false;
-
-      for (const button of searchResults.querySelectorAll(\".search-result\")) {
-        button.addEventListener(\"click\", async () => {
-          const result = results[Number(button.dataset.index)];
-          searchResults.hidden = true;
-          if (!result) return;
-          const selectedLabel = result.address?.label || result.label || searchInput.value;
-          if (selectedLabel) {
-            searchInput.value = selectedLabel;
-            searchInput.dataset.selectedSearchValue = selectedLabel;
-          }
-          const shouldSelectFeature = result.result_type === "address" || result.kind === "parcel" || result.kind === "building";
-          if (!shouldSelectFeature) {
-            clearSelection();
-            zoomToResult(result);
-            return;
-          }
-          if (result.kind === \"parcel\" || result.kind === \"building\") {
-            clearSelection();
-            selectResult(result);
-          }
-          zoomToResult(result);
-          if (result.center?.length === 2) {
-            const preferredKind = result.kind === "parcel" ? "parcel" : result.kind === "building" || result.kind === "address" ? "building" : null;
-            queryFeaturesAt(result.center[0], result.center[1], false, preferredKind).catch((error) => {
-              console.error(error);
-              setStatus(`Auswahl konnte nicht geladen werden: ${error.message}`);
-            });
-          };
-        });
-      }
-    }
-
-    function selectResult(result) {
-      if (!result || !result.feature) return;
-      if (result.kind === \"parcel\") selectedParcels.set(itemKey(result.feature), result.feature);
-      if (result.kind === \"building\") selectedBuildings.set(itemKey(result.feature), result.feature);
-      renderSelection();
-    }
-
-    function preferredSelectionKind(event) {
-      if (!map || !event?.point) return null;
-      try {
-        const buildingLayers = ["building-fill", "building-outline"].filter((id) => map.getLayer(id));
-        if (buildingLayers.length && map.queryRenderedFeatures(event.point, { layers: buildingLayers }).length) return "building";
-        const parcelLayers = ["parcel-fill", "parcel-outline"].filter((id) => map.getLayer(id));
-        if (parcelLayers.length && map.queryRenderedFeatures(event.point, { layers: parcelLayers }).length) return "parcel";
-      } catch (error) {
-        console.warn("Auswahltyp konnte nicht über Kartenlayer bestimmt werden", error);
-      }
-      return null;
-    }
-
-    async function queryFeaturesAt(lng, lat, additive, preferredKind = null) {
-      const url = `${featureUrl}&lon=${encodeURIComponent(lng)}&lat=${encodeURIComponent(lat)}`;
-      const data = await loadJson(url);
-      const resolvedKind = preferredKind || ((data.buildings || []).length ? "building" : (data.parcels || []).length ? "parcel" : null);
-      if (!additive) clearSelection();
-      if (!resolvedKind || resolvedKind === "parcel") {
-        for (const parcel of data.parcels || []) {
-          const key = itemKey(parcel);
-          if (additive && selectedParcels.has(key)) selectedParcels.delete(key);
-          else selectedParcels.set(key, parcel);
-        }
-      }
-      if (!resolvedKind || resolvedKind === "building") {
-        for (const building of data.buildings || []) {
-          const key = itemKey(building);
-          if (additive && selectedBuildings.has(key)) selectedBuildings.delete(key);
-          else selectedBuildings.set(key, building);
-        }
-      }
-      renderSelection();
-    }
-
-    function startMeasureVertexDrag(event, tool) {
-      if (activeTool === "erase") return;
-      const feature = event.features && event.features[0];
-      if (!feature) return;
-      dragMeasureVertex = { tool, index: Number(feature.properties.index) };
-      suppressNextMapClick = true;
-      if (event.preventDefault) event.preventDefault();
-      if (event.originalEvent?.preventDefault) event.originalEvent.preventDefault();
-      if (map.dragPan?.disable) map.dragPan.disable();
-      if (map.touchZoomRotate?.disable) map.touchZoomRotate.disable();
-      map.getCanvas().style.cursor = "grabbing";
-    }
-
-    function updateMeasureVertexDrag(event) {
-      if (!dragMeasureVertex) return;
-      if (!event.lngLat) return;
-      const coord = nearestSnapCoordinate(event, [event.lngLat.lng, event.lngLat.lat]);
-      if (dragMeasureVertex.tool === "line" && measurePoints[dragMeasureVertex.index]) {
-        measurePoints[dragMeasureVertex.index] = coord;
-      }
-      if (dragMeasureVertex.tool === "area" && areaPoints[dragMeasureVertex.index]) {
-        areaPoints[dragMeasureVertex.index] = coord;
-      }
-      applyMeasureLayers();
-    }
-
-    function stopMeasureVertexDrag() {
-      if (!dragMeasureVertex) return;
-      dragMeasureVertex = null;
-      if (map.dragPan?.enable) map.dragPan.enable();
-      if (map.touchZoomRotate?.enable) map.touchZoomRotate.enable();
-      map.getCanvas().style.cursor = activeTool === "measureLine" || activeTool === "measureArea" ? "crosshair" : "";
-      setMeasureStatus();
-    }
-
-    function startPinDrag(event) {
-      if (activeTool === "erase") return;
-      if (!pinnedPoints.length) return;
-      const feature = event.features && event.features[0];
-      const pinIndex = Number(feature?.properties?.pinIndex);
-      if (!Number.isInteger(pinIndex) || !pinnedPoints[pinIndex]) return;
-      dragPin = { index: pinIndex };
-      pinMoved = false;
-      suppressNextMapClick = true;
-      if (event.preventDefault) event.preventDefault();
-      if (event.originalEvent?.preventDefault) event.originalEvent.preventDefault();
-      if (map.dragPan?.disable) map.dragPan.disable();
-      if (map.touchZoomRotate?.disable) map.touchZoomRotate.disable();
-      map.getCanvas().style.cursor = "grabbing";
-    }
-
-    function updatePinDrag(event) {
-      if (!dragPin || !event.lngLat) return;
-      pinMoved = true;
-      pinnedPoints[dragPin.index] = nearestSnapCoordinate(event, [event.lngLat.lng, event.lngLat.lat]);
-      setPinSource();
-    }
-
-    function stopPinDrag() {
-      if (!dragPin) return;
-      dragPin = null;
-      if (pinMoved) {
-        suppressNextMapClick = true;
-      }
-      pinMoved = false;
-      if (map.dragPan?.enable) map.dragPan.enable();
-      if (map.touchZoomRotate?.enable) map.touchZoomRotate.enable();
-      setSnapIndicator(null);
-      map.getCanvas().style.cursor = activeTool === "pin" ? "crosshair" : "";
-    }
-
-    function startAnnotationVertexDrag(event) {
-      if (activeTool === "erase") return;
-      const feature = event.features && event.features[0];
-      if (!feature || (feature.properties.annotationIndex === undefined && String(feature.properties.draft) !== "true")) return;
-      dragAnnotationVertex = {
-        draft: String(feature.properties.draft) === "true",
-        annotationIndex: feature.properties.annotationIndex === undefined ? null : Number(feature.properties.annotationIndex),
-        vertexIndex: Number(feature.properties.vertexIndex),
-      };
-      suppressNextMapClick = true;
-      if (event.preventDefault) event.preventDefault();
-      if (event.originalEvent?.preventDefault) event.originalEvent.preventDefault();
-      if (map.dragPan?.disable) map.dragPan.disable();
-      if (map.touchZoomRotate?.disable) map.touchZoomRotate.disable();
-      map.getCanvas().style.cursor = "grabbing";
-    }
-
-    function updateAnnotationVertexDrag(event) {
-      if (!dragAnnotationVertex || !event.lngLat) return;
-      const nextPoint = nearestSnapCoordinate(event, [event.lngLat.lng, event.lngLat.lat]);
-      if (dragAnnotationVertex.draft) {
-        if (!annotationPoints[dragAnnotationVertex.vertexIndex]) return;
-        annotationPoints[dragAnnotationVertex.vertexIndex] = nextPoint;
-      } else {
-        const annotation = annotations[dragAnnotationVertex.annotationIndex];
-        if (!annotation || !annotation.points[dragAnnotationVertex.vertexIndex]) return;
-        annotation.points[dragAnnotationVertex.vertexIndex] = nextPoint;
-      }
-      applyAnnotationLayers();
-    }
-
-    function stopAnnotationVertexDrag() {
-      if (!dragAnnotationVertex) return;
-      dragAnnotationVertex = null;
-      if (map.dragPan?.enable) map.dragPan.enable();
-      if (map.touchZoomRotate?.enable) map.touchZoomRotate.enable();
-      setSnapIndicator(null);
-      map.getCanvas().style.cursor = activeTool === "drawLine" || activeTool === "drawPolygon" ? "crosshair" : "";
-    }
-
-    function drawingToolActive() {
-      return ["measureLine", "measureArea", "measureRadius", "drawLine", "drawPolygon", "pin", "erase"].includes(activeTool);
-    }
-
-    function startSpacePan(event) {
-      if (event.code !== "Space" || spacePanActive || !drawingToolActive()) return;
-      const target = event.target;
-      if (target && ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName)) return;
-      event.preventDefault();
-      spacePanActive = true;
-      if (map?.dragPan?.enable) map.dragPan.enable();
-      if (map) map.getCanvas().style.cursor = "grab";
-    }
-
-    function stopSpacePan(event) {
-      if (event.code !== "Space" || !spacePanActive) return;
-      event.preventDefault();
-      spacePanActive = false;
-      if (map) {
-        map.getCanvas().style.cursor = drawingToolActive()
-          ? (activeTool === "erase" ? ERASER_CURSOR : "crosshair")
-          : "";
-      }
-      setEraserInteractionState();
-    }
-
-    function finishActiveDrawing() {
-      if (activeTool === "drawLine" || activeTool === "drawPolygon") {
-        dropDuplicateAnnotationEndpoint();
-        commitAnnotation();
-        setSnapIndicator(null);
-        return true;
-      }
-      return false;
-    }
-
-    function handleEscapeFinish(event) {
-      if (event.key !== "Escape") return;
-      if (finishActiveDrawing()) {
-        event.preventDefault();
-      }
-    }
-
-    function cancelLongPress() {
-      if (longPressTimer) {
-        clearTimeout(longPressTimer);
-        longPressTimer = 0;
-      }
-      longPressStart = null;
-    }
-
-    function startLongPressSelection(event) {
-      if (activeTool !== "none" || dragMeasureVertex || !event.lngLat) return;
-      const touches = event.originalEvent?.touches;
-      if (touches && touches.length > 1) return;
-      cancelLongPress();
-      const startPoint = event.point;
-      const lngLat = [event.lngLat.lng, event.lngLat.lat];
-      longPressStart = startPoint;
-      const preferredKind = preferredSelectionKind(event);
-      longPressTimer = window.setTimeout(() => {
-        suppressNextMapClick = true;
-        longPressTimer = 0;
-        if (navigator?.vibrate) navigator.vibrate(18);
-        queryFeaturesAt(lngLat[0], lngLat[1], true, preferredKind).catch((error) => {
-          console.error(error);
-          setStatus(`Auswahl konnte nicht geladen werden: ${error.message}`);
-        });
-      }, 520);
-    }
-
-    function moveLongPressSelection(event) {
-      if (!longPressTimer || !longPressStart || !event.point) return;
-      const dx = event.point.x - longPressStart.x;
-      const dy = event.point.y - longPressStart.y;
-      if (Math.sqrt(dx * dx + dy * dy) > 12) {
-        cancelLongPress();
-      }
-    }
-
-    function attachMapEvents() {
-      map.on(\"click\", (event) => {
-        if (spacePanActive) return;
-        if (exportCropMode) return;
-        if (suppressNextMapClick) {
-          suppressNextMapClick = false;
-          return;
-        }
-        if (activeTool === "erase") {
-          eraseItemAt(event);
-          return;
-        }
-        if (activeTool === "measureLine" || activeTool === "measureArea" || activeTool === "measureRadius") {
-          addMeasurePoint(nearestSnapCoordinate(event, [event.lngLat.lng, event.lngLat.lat]));
-          return;
-        }
-        if (activeTool === "drawLine" || activeTool === "drawPolygon") {
-          addAnnotationPoint(nearestSnapCoordinate(event, [event.lngLat.lng, event.lngLat.lat]));
-          return;
-        }
-        if (activeTool === "pin") {
-          const pin = nearestSnapCoordinate(event, [event.lngLat.lng, event.lngLat.lat]);
-          pinnedPoints.push(pin);
-          setPinSource();
-          setSnapIndicator(null);
-          return;
-        }
-        const additive = Boolean(event.originalEvent?.metaKey || event.originalEvent?.ctrlKey);
-        queryFeaturesAt(event.lngLat.lng, event.lngLat.lat, additive, preferredSelectionKind(event)).catch((error) => {
-          console.error(error);
-          setStatus(`Auswahl konnte nicht geladen werden: ${error.message}`);
-        });
-      });
-      map.on("dblclick", (event) => {
-        if (spacePanActive) return;
-        if (activeTool === "drawLine" || activeTool === "drawPolygon") {
-          if (event.preventDefault) event.preventDefault();
-          if (event.originalEvent?.preventDefault) event.originalEvent.preventDefault();
-          finishActiveDrawing();
-        }
-      });
-      map.on("contextmenu", (event) => {
-        if (finishActiveDrawing()) {
-          if (event.preventDefault) event.preventDefault();
-          if (event.originalEvent?.preventDefault) event.originalEvent.preventDefault();
-        }
-      });
-      map.on("mousedown", startExportCrop);
-      map.on("touchstart", startExportCrop);
-      map.on("mousedown", startEraseBrush);
-      map.on("touchstart", startEraseBrush);
-      map.on("mousedown", "measure-point", (event) => startMeasureVertexDrag(event, "line"));
-      map.on("mousedown", "measure-area-point", (event) => startMeasureVertexDrag(event, "area"));
-      map.on("touchstart", "measure-point", (event) => startMeasureVertexDrag(event, "line"));
-      map.on("touchstart", "measure-area-point", (event) => startMeasureVertexDrag(event, "area"));
-      map.on("mousedown", "annotations-point", startAnnotationVertexDrag);
-      map.on("touchstart", "annotations-point", startAnnotationVertexDrag);
-      map.on("mousedown", "pins-fill", startPinDrag);
-      map.on("touchstart", "pins-fill", startPinDrag);
-      map.on("touchstart", startLongPressSelection);
-      map.on("touchmove", moveLongPressSelection);
-      map.on("touchend", cancelLongPress);
-      map.on("touchcancel", () => {
-        stopExportCrop();
-        stopEraseBrush();
-        cancelLongPress();
-      });
-      map.on("mouseenter", "measure-point", () => { map.getCanvas().style.cursor = "grab"; });
-      map.on("mouseenter", "measure-area-point", () => { map.getCanvas().style.cursor = "grab"; });
-      map.on("mouseenter", "annotations-point", () => { map.getCanvas().style.cursor = "grab"; });
-      map.on("mouseenter", "pins-fill", () => { map.getCanvas().style.cursor = activeTool === "pin" ? "crosshair" : "grab"; });
-      map.on("mouseleave", "measure-point", () => {
-        if (!dragMeasureVertex) map.getCanvas().style.cursor = activeTool === "measureLine" || activeTool === "measureArea" ? "crosshair" : "";
-      });
-      map.on("mouseleave", "measure-area-point", () => {
-        if (!dragMeasureVertex) map.getCanvas().style.cursor = activeTool === "measureLine" || activeTool === "measureArea" ? "crosshair" : "";
-      });
-      map.on("mouseleave", "annotations-point", () => {
-        if (!dragAnnotationVertex) map.getCanvas().style.cursor = activeTool === "drawLine" || activeTool === "drawPolygon" ? "crosshair" : "";
-      });
-      map.on("mouseleave", "pins-fill", () => {
-        if (!dragPin) map.getCanvas().style.cursor = activeTool === "pin" ? "crosshair" : "";
-      });
-      map.on(\"mousemove\", (event) => {
-        updateCursorInfo(event);
-        updateExportCrop(event);
-        updateEraseBrush(event);
-        updateMeasureVertexDrag(event);
-        updateAnnotationVertexDrag(event);
-        updatePinDrag(event);
-        if (activeTool === "pin" && !dragPin && !spacePanActive) {
-          map.getCanvas().style.cursor = "crosshair";
-        }
-      });
-      map.on("touchmove", (event) => {
-        updateExportCrop(event);
-        updateEraseBrush(event);
-        updateMeasureVertexDrag(event);
-        updateAnnotationVertexDrag(event);
-        updatePinDrag(event);
-      });
-      map.on("mouseup", () => {
-        stopExportCrop();
-        stopEraseBrush();
-        stopMeasureVertexDrag();
-        stopAnnotationVertexDrag();
-        stopPinDrag();
-      });
-      map.on("touchend", () => {
-        stopExportCrop();
-        stopEraseBrush();
-        stopMeasureVertexDrag();
-        stopAnnotationVertexDrag();
-        stopPinDrag();
-      });
-      map.on("touchcancel", () => {
-        stopExportCrop();
-        stopMeasureVertexDrag();
-        stopAnnotationVertexDrag();
-        stopPinDrag();
-      });
-      map.on(\"mouseout\", () => {
-        statusEl.textContent = \"Karte wird geladen ...\";
-        stopMeasureVertexDrag();
-        stopAnnotationVertexDrag();
-        stopPinDrag();
-      });
-      map.on(\"move\", updateScaleInfo);
-      map.on(\"zoom\", updateScaleInfo);
-      map.on(\"moveend\", () => {
-      updateBootstrapBackdrop();
-        refreshSourceInfo();
-        if (layerSettings.aerial) updateLuftbildLayers();
-      });
-    }
-
-    async function initializeMeta() {
-      const [datasetsPayload, statePayload] = await Promise.all([
-        loadJson(datasetsUrl).catch(() => ({ datasets: [] })),
-        loadJson(metadataUrl).catch(() => ({ states: [] }))
-      ]);
-      const datasetInfo = (datasetsPayload.datasets || []).find((item) => item.id === \"__DATASET__\");
-      if (datasetInfo && Array.isArray(datasetInfo.sources)) {
-        for (const source of datasetInfo.sources) {
-          const match = String(source).match(/^([a-z0-9_-]+)_(?:detail|overview)\\.pmtiles$/);
-          if (!match) continue;
-          activeStateSlugs.add(match[1]);
-        }
-      }
-      if (!activeStateSlugs.size && \"__DATASET__\" !== \"deutschland\") {
-        activeStateSlugs.add(stateSlug(\"__DATASET__\"));
-      }
-      for (const row of statePayload.states || []) {
-        if (row && row.bundesland) {
-          stateMetadata.set(stateSlug(row.bundesland), row);
-        }
-      }
-      refreshSourceInfo();
-    }
-
-    async function main() {
-      const [style, tilejson] = await Promise.all([
-        loadJson(__STYLE_URL__),
-        loadJson(__TILEJSON_URL__)
-      ]);
-      window.__okTilejson = tilejson;
-
-      const bounds = tilejson.bounds || [5.5, 47.0, 15.5, 55.5];
-      const webMinZoom = Math.min(tilejson.minzoom ?? 4, 4);
-      const center = tilejson.center || [
-        (bounds[0] + bounds[2]) / 2,
-        (bounds[1] + bounds[3]) / 2,
-        Math.max(tilejson.minzoom || webMinZoom, webMinZoom),
-      ];
-
-      map = new maplibregl.Map({
-        container: \"map\",
-        preserveDrawingBuffer: !isTouchLikeDevice,
-        style,
-        center: [center[0], center[1]],
-        zoom: center[2],
-        minZoom: webMinZoom,
-        maxZoom: Math.max(tilejson.maxzoom || 20, 20),
-        attributionControl: false,
-        dragRotate: false,
-        pitchWithRotate: false,
-        pitch: 0,
-        bearing: 0,
-        hash: true,
-      });
-
-      window.__okMap = map;\n      map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), \"bottom-left\");
-      map.dragRotate.disable();
-      map.touchZoomRotate.disableRotation();
-
-      map.once(\"load\", async () => {
-        addSelectionLayers();
-        attachMapEvents();
-        map.setBearing(0);
-        map.setPitch(0);
-        if (map.getLayer("state-outlines")) map.moveLayer("state-outlines");
-        if (map.getLayer("state-labels")) map.moveLayer("state-labels");
-        normalizeStreetLabelWrapping();
-        syncLayerSettingsUi();\n        applyLayerSettings();
-        updateScaleInfo();
-        setStatus(\"Karte bereit.\");
-        statusEl.dataset.ready = \"true\";
-        statusLeft.textContent = \"1:–\";
-        statusCenter.textContent = \"–\";
-        statusRight.textContent = \"\";
-        await initializeMeta();
-        const boundsObj = map.getBounds();
-        window.__okGermanyBounds = new maplibregl.LngLatBounds(
-          boundsObj.getSouthWest(),
-          boundsObj.getNorthEast()
-        );
-        captureStableFrame();
-        applyStartupSearchFromUrl();
-      });
-
-      map.on("movestart", () => showFrameFallback());
-      map.on("zoomstart", () => showFrameFallback());
-      map.on("dragstart", () => showFrameFallback());
-      map.on("idle", () => {
-        captureStableFrame();
-        hideFrameFallbackSoon();
-      });
-      map.on("render", () => {
-        if (map.loaded()) captureStableFrame();
-      });
-      map.on("rotate", () => {
-        if (map.getBearing() !== 0) map.setBearing(0);
-      });
-      map.on("pitch", () => {
-        if (map.getPitch() !== 0) map.setPitch(0);
-      });
-
-      if (!window.location.hash || !/^#\\d/.test(window.location.hash)) {
-        map.fitBounds(
-          [[bounds[0], bounds[1]], [bounds[2], bounds[3]]],
-          { padding: 40, duration: 0, maxZoom: 10 }
-        );
-      }
-
-      searchForm.addEventListener(\"submit\", (event) => {
-        event.preventDefault();
-        performSearch(searchInput.value).catch((error) => {
-          if (error.name === \"AbortError\") return;
-          console.error(error);
-          setStatus(`Suche konnte nicht geladen werden: ${error.message}`);
-        });
-      });
-
-      searchInput.addEventListener(\"input\", () => {
-        window.clearTimeout(searchTimer);
-        const value = searchInput.value.trim();
-        delete searchInput.dataset.selectedSearchValue;
-        if (value.length < 3) {
-          searchResults.hidden = true;
-          return;
-        }
-        searchTimer = window.setTimeout(() => {
-          performSearch(value).catch((error) => {
-            if (error.name === \"AbortError\") return;
-            console.error(error);
-            setStatus(`Suche konnte nicht geladen werden: ${error.message}`);
-          });
-        }, 120);
-      });
-
-      searchInput.addEventListener("focus", () => {
-        const value = searchInput.value.trim();
-        if (value.length < 3 || value === searchInput.dataset.selectedSearchValue) return;
-        window.clearTimeout(searchTimer);
-        searchTimer = window.setTimeout(() => {
-          performSearch(value).catch((error) => {
-            if (error.name === "AbortError") return;
-            console.error(error);
-            setStatus(`Suche konnte nicht geladen werden: ${error.message}`);
-          });
-        }, 80);
-      });
-
-      selectionClose.addEventListener(\"click\", () => {
-        clearSelection();
-      });
-
-      sourceToggle.addEventListener(\"click\", () => {
-        const nextOpen = sourceDetails.hidden;
-        sourcePanel.dataset.open = nextOpen ? \"true\" : \"false\";
-        sourceDetails.hidden = !nextOpen;
-        sourceToggle.setAttribute(\"aria-expanded\", nextOpen ? \"true\" : \"false\");
-      });
-
-      toolDockToggle.addEventListener(\"click\", () => {
-        const nextOpen = toolDock.dataset.open !== \"true\";
-        toolDock.dataset.open = nextOpen ? \"true\" : \"false\";
-        toolDockToggle.setAttribute(\"aria-expanded\", nextOpen ? \"true\" : \"false\");
-      });
-
-      layerToggle.addEventListener("click", () => {
-        const nextOpen = layerMenu.hidden;
-        layerMenu.hidden = !nextOpen;
-        layerToggle.setAttribute("aria-expanded", nextOpen ? "true" : "false");
-      });
-      for (const input of layerGroupInputs) {
-        input.addEventListener("click", (event) => event.stopPropagation());
-        input.addEventListener("change", () => {
-          const keys = layerSettingGroups[input.dataset.layerGroup] || [];
-          for (const key of keys) layerSettings[key] = input.checked;
-          syncLayerSettingsUi();
-          applyLayerSettings();
-        });
-      }
-      for (const input of layerSettingInputs) {
-        input.addEventListener("change", () => {
-          const key = input.dataset.layerSetting;
-          if (Object.prototype.hasOwnProperty.call(layerSettings, key)) {
-            layerSettings[key] = input.checked;
-            syncLayerSettingsUi();
-            applyLayerSettings();
-          }
-        });
-      }
-      document.addEventListener("click", (event) => {
-        if (!event.target.closest("#layerSwitch")) {
-          layerMenu.hidden = true;
-          layerToggle.setAttribute("aria-expanded", "false");
-        }
-      });
-      document.addEventListener("keydown", startSpacePan);
-      document.addEventListener("keydown", handleEscapeFinish);
-      document.addEventListener("keyup", stopSpacePan);
-
-      annotationColorPicker.addEventListener("input", () => {
-        annotationColor = annotationColorPicker.value || "#f86d14";
-        applyAnnotationLayers();
-      });
-
-      toolSelect.addEventListener(\"click\", () => {
-        setToolMode(\"none\");
-      });
-
-      toolMeasureLine.addEventListener(\"click\", () => {
-        setToolMode(\"measureLine\");
-      });
-
-      toolMeasureArea.addEventListener(\"click\", () => {
-        setToolMode(\"measureArea\");
-      });
-
-      toolDrawLine.addEventListener("click", () => {
-        setToolMode("drawLine");
-      });
-
-      toolDrawPolygon.addEventListener("click", () => {
-        setToolMode("drawPolygon");
-      });
-
-      toolErase.addEventListener("click", () => {
-        setToolMode("erase");
-      });
-
-      toolMeasureRadius.addEventListener(\"click\", () => {
-        setToolMode(\"measureRadius\");
-      });
-
-      toolMeasureUndo.addEventListener(\"click\", () => {
-        if (activeTool === \"measureLine\" || activeTool === \"measureArea\" || activeTool === \"measureRadius\") {
-          removeLastMeasurePoint();
-        } else {
-          setStatus(\"Messwerkzeug aktivieren, dann letzten Punkt entfernen.\");
-        }
-      });
-
-      toolPin.addEventListener(\"click\", () => {
-        setToolMode(\"pin\");
-      });
-
-      toolMapExport.addEventListener("click", () => {
-        setToolMode("none");
-        const willOpen = exportPanel.hidden;
-        exportPanel.hidden = !willOpen;
-        toolMapExport.classList.toggle("active", willOpen);
-        toolMapExport.dataset.state = willOpen ? "active" : "off";
-        toolMapExport.setAttribute("aria-pressed", willOpen ? "true" : "false");
-        if (willOpen) {
-          updateExportSummary();
-          setExportSettingsOpen(false);
-          setExportCropMode(true);
-        } else {
-          setExportCropMode(false);
-          clearExportCropRect();
-        }
-      });
-
-      exportClose.addEventListener("click", () => {
-        exportPanel.hidden = true;
-        toolMapExport.classList.remove("active");
-        toolMapExport.dataset.state = "off";
-        toolMapExport.setAttribute("aria-pressed", "false");
-        setExportCropMode(false);
-        setExportSettingsOpen(false);
-        clearExportCropRect();
-      });
-
-      exportSelectArea?.addEventListener("click", () => {
-        setToolMode("none");
-        setExportCropMode(true);
-      });
-
-      exportUseView?.addEventListener("click", () => {
-        setExportCropMode(false);
-        clearExportCropRect();
-      });
-
-      [exportPaper, exportOrientation, exportScale].forEach((control) => {
-        control?.addEventListener("change", () => {
-          updateExportSummary();
-          refitExportCropRectToOrientation();
-          if (exportCropRect) setExportStatus("Rahmen an Format und Ausrichtung angepasst.");
-        });
-      });
-      exportOutput?.addEventListener("change", updateExportSummary);
-
-      exportSettingsToggle?.addEventListener("click", () => {
-        const nextOpen = exportPanel.dataset.settingsOpen !== "true";
-        setExportSettingsOpen(nextOpen);
-      });
-
-      map.on("move", () => {
-        if (!exportPanel.hidden && exportCropRect) refitExportCropRectToOrientation();
-      });
-      map.on("zoom", () => {
-        if (!exportPanel.hidden && exportCropRect) refitExportCropRectToOrientation();
-      });
-
-      exportDownloadPng.addEventListener("click", () => {
-        setExportCropMode(false);
-        exportMapFile();
-      });
-
-      onofficeTransferSelection?.addEventListener("click", () => {
-        transferOnOfficeSelection();
-      });
-
-      onofficeExportPdf?.addEventListener("click", () => {
-        setExportCropMode(false);
-        exportPdfForOnOffice();
-      });
-
-      toolCopyCoords.addEventListener(\"click\", async () => {
-        const center = map.getCenter();
-        const text = [
-          `Kartenmitte (WGS84, Dezimal): ${formatCoordinate(center.lat, "lat")}, ${formatCoordinate(center.lng, "lon")}`,
-          `Kartenmitte (WGS84, DMS): ${formatCoordinateDms(center.lat, "lat")}, ${formatCoordinateDms(center.lng, "lon")}`,
-        ].join(\"\\n\");
-        try {
-          await copyText(text);
-          setStatus(\"Koordinaten in die Zwischenablage kopiert.\");
-        } catch (error) {
-          setStatus(\"Koordinaten konnten nicht kopiert werden.\");
-        }
-      });
-
-      toolCopyCursor.addEventListener(\"click\", async () => {
-        if (!lastCursorLngLat) {
-          setStatus(\"Bitte zuerst die Karte mit der Maus berühren.\");
-          return;
-        }
-        const [lng, lat] = lastCursorLngLat;
-        const text = [
-          `Maus (WGS84, Dezimal): ${formatCoordinate(lat, "lat")}, ${formatCoordinate(lng, "lon")}`,
-          `Maus (WGS84, DMS): ${formatCoordinateDms(lat, \"lat\")}, ${formatCoordinateDms(lng, \"lon\")}`,
-        ].join(\"\\n\");
-        try {
-          await copyText(text);
-          setStatus(\"Maus-Position in die Zwischenablage kopiert.\");
-        } catch (error) {
-          setStatus(\"Koordinaten konnten nicht kopiert werden.\");
-        }
-      });
-
-      toolExport.addEventListener(\"click\", async () => {
-        const parcels = [...selectedParcels.values()];
-        const buildings = [...selectedBuildings.values()];
-        const payload = {
-          createdAt: new Date().toISOString(),
-          parcels,
-          buildings,
-          parcelCount: parcels.length,
-          buildingCount: buildings.length,
-        };
-        if (!parcels.length && !buildings.length) {
-          setStatus(\"Keine Auswahl zum Exportieren vorhanden.\");
-          return;
-        }
-        try {
-          await copyText(JSON.stringify(payload, null, 2));
-          setStatus(\"Auswahl als JSON kopiert.\");
-        } catch (error) {
-          setStatus(\"Export konnte nicht in die Zwischenablage kopiert werden.\");
-        }
-      });
-
-      toolExportCsv.addEventListener(\"click\", async () => {
-        if (!selectedParcels.size && !selectedBuildings.size) {
-          setStatus(\"Keine Auswahl zum CSV-Export vorhanden.\");
-          return;
-        }
-        try {
-          await copyText(exportSelectionAsCsv());
-          setStatus(\"Auswahl als CSV kopiert.\");
-        } catch (error) {
-          setStatus(\"CSV-Export konnte nicht in die Zwischenablage kopiert werden.\");
-        }
-      });
-
-      toolExportView.addEventListener(\"click\", async () => {
-        const center = map.getCenter();
-        const state = `#${center.lng.toFixed(6)},${center.lat.toFixed(6)},${map.getZoom().toFixed(2)}`;
-        const url = `${window.location.origin}${window.location.pathname}${window.location.search}${state}`;
-        try {
-          await copyText(url);
-          setStatus(\"Ansicht wurde als Link kopiert.\");
-        } catch (error) {
-          setStatus(\"Ansicht-Link konnte nicht kopiert werden.\");
-        }
-      });
-
-      toolCopyViewport.addEventListener(\"click\", async () => {
-        const payload = copyViewportMetadata();
-        if (!payload) {
-          setStatus(\"Ausschnitt konnte nicht erfasst werden.\");
-          return;
-        }
-        try {
-          await copyText(JSON.stringify(payload, null, 2));
-          setStatus(\"Ausschnittdaten kopiert.\");
-        } catch (error) {
-          setStatus(\"Ausschnitt konnte nicht kopiert werden.\");
-        }
-      });
-
-      toolSelectionReport.addEventListener(\"click\", async () => {
-        const payload = copySelectionAsReport();
-        if (!payload.selection.parcelCount && !payload.selection.buildingCount) {
-          setStatus(\"Keine Auswahl für den Exposé-Export vorhanden.\");
-          return;
-        }
-        try {
-          await copyText(selectionReportText(payload));
-          setStatus(\"Exposé-Zusammenfassung kopiert.\");
-        } catch (error) {
-          setStatus(\"Exposé-Export konnte nicht kopiert werden.\");
-        }
-      });
-
-      toolZoomSelection.addEventListener(\"click\", () => {
-        if (zoomToSelection()) {
-          setStatus(\"Auswahl in den Fokus gesetzt.\");
-        }
-      });
-
-      toolClear.addEventListener(\"click\", () => {
-        clearSelection();
-        clearMeasure();
-        pinnedPoints = [];
-        if (isMapReady()) {
-          setPinSource();
-        }
-        setToolMode(\"none\");
-      });
-
-      toolHome.addEventListener(\"click\", () => {
-        map.fitBounds(
-          [[bounds[0], bounds[1]], [bounds[2], bounds[3]]],
-          { padding: 40, duration: 200 }
-        );
-      });
-
-      toolCopy.addEventListener(\"click\", async () => {
-        const center = map.getCenter();
-        const state = `#${Math.round(center.lng * 1000000) / 1000000},${Math.round(center.lat * 1000000) / 1000000},${map.getZoom().toFixed(2)}`;
-        const url = `${window.location.origin}${window.location.pathname}${window.location.search}${state}`;
-        try {
-          await copyText(url);
-          setStatus(\"Ansicht-Link kopiert.\");
-        } catch (error) {
-          setStatus(\"Link konnte nicht in die Zwischenablage kopiert werden.\");
-        }
-      });
-    }
-
-    main().catch((error) => {
-      console.error(error);
-      setStatus(`Karte konnte nicht geladen werden: ${error.message}`);
-    });
-  </script>
-</body>
-    </html>"""
-    state_centers = {slug: {"name": name, "lon": lon, "lat": lat} for slug, (name, lon, lat) in STATE_LABEL_POINTS.items()}
-    return (
-        template
-        .replace("__STYLE_URL__", json.dumps(style_url))
-        .replace("__TILEJSON_URL__", json.dumps(tilejson_url))
-        .replace("__FEATURE_URL__", json.dumps(feature_url))
-        .replace("__SEARCH_URL__", json.dumps(search_url))
-        .replace("__DATASETS_URL__", json.dumps(datasets_url))
-        .replace("__METADATA_URL__", json.dumps(metadata_url))
-        .replace("__STATE_CENTERS__", json.dumps(state_centers))
-        .replace("__DATASET__", dataset)
-    )
-
 
 
 def _safe_version_name(version: str) -> str:
@@ -14117,6 +12479,8 @@ def warm_search_indexes() -> None:
         search_direct_geocoder_for_dataset("feldstraße 18 hildesheim", 5, states)
         search_direct_geocoder_for_dataset("Glasewitzer Str. 3", 5, states)
         search_fast_cadastre_parcels_for_dataset("Könnigde", "1", "66/4", 5, {"sachsen-anhalt"})
+        if poi_index_available():
+            search_poi_suggestions("Rathaus", states, 1)
     except Exception as exc:
         print(f"search warmup failed: {exc}")
 
@@ -14389,28 +12753,97 @@ def _active_volume_asset_path(state_slug: str, asset_path: str) -> Path:
 
 
 
+def _cadastre_rendering_capability(state_slug: str) -> dict | None:
+    config = KATASTER_WMS_CONFIGS.get(state_slug)
+    if not config:
+        return None
+    return {
+        "profile": "official-wms-full-v1",
+        "tile_template": f"/katasterbild/{state_slug}/{{z}}/{{x}}/{{y}}.png",
+        "tile_size": int(config.get("tile_size", 512)),
+        "minzoom": int(config.get("minzoom", 17)),
+        "maxzoom": int(config.get("maxzoom", 22)),
+        "revision": str(config.get("revision") or "official-wms-v1"),
+        "attribution": str(config.get("attribution") or ""),
+        "presentation": "full",
+    }
+
+
+def _aerial_rendering_capability(state_slug: str, *, attribution: str = "") -> dict | None:
+    config = LUFTBILD_WMS_CONFIGS.get(state_slug)
+    if not config:
+        return None
+    return {
+        "profile": "official-wms-aerial-v1",
+        "tile_template": f"/luftbild/{state_slug}/{{z}}/{{x}}/{{y}}.png",
+        # The upstream request may deliberately use a larger image for a
+        # high-DPI tile. MapLibre's logical XYZ tile size remains 512 pixels.
+        "tile_size": int(config.get("map_tile_size", 512)),
+        "minzoom": int(config.get("minzoom", 17)),
+        "maxzoom": int(config.get("maxzoom", 22)),
+        "revision": str(config.get("revision") or "aerial-wms-v1"),
+        "attribution": str(config.get("attribution") or attribution or ""),
+        "presentation": "aerial",
+    }
+
+
+def _export_capability(state_slug: str) -> dict | None:
+    if state_slug not in KATASTER_WMS_CONFIGS:
+        return None
+    return {
+        "profile": "official-raster-v1",
+        "pdf": "raster",
+        "png": "raster",
+        "dxf": False,
+        "vector_pdf": False,
+        "fine_grained_layers": False,
+    }
+
+
 def _api_v1_state_rows() -> list[dict]:
     metadata_by_slug = {
         _state_metadata_slug(str(row.get("bundesland") or row.get("state") or row.get("name") or "")): row
         for row in _state_metadata_cache()
         if isinstance(row, dict)
     }
+    active_states = set(active_bucket_state_keys())
+    # Official raster-only states are valid visual coverage even before a
+    # local feature/search package is available. Keep `active` reserved for
+    # interactive local data so API consumers can distinguish both modes.
+    visible_states = active_states | set(KATASTER_WMS_CONFIGS)
     rows: list[dict] = []
-    for slug in active_bucket_state_keys():
+    for slug in sorted(visible_states):
         name, lon, lat = STATE_LABEL_POINTS.get(slug, (slug.replace("-", " ").title(), 0, 0))
         meta = metadata_by_slug.get(slug, {})
-        rows.append(
-            {
-                "slug": slug,
-                "name": str(meta.get("bundesland") or meta.get("name") or name),
-                "center": {"lon": lon, "lat": lat},
-                "datenstand": meta.get("datenstand"),
-                "datenjahr": meta.get("datenjahr"),
-                "quellenvermerk": meta.get("quellenvermerk"),
-                "lizenz": meta.get("lizenz"),
-                "active": True,
-            }
+        data_active = slug in active_states
+        row = {
+            "slug": slug,
+            "name": str(meta.get("bundesland") or meta.get("name") or name),
+            "center": {"lon": lon, "lat": lat},
+            "datenstand": meta.get("datenstand"),
+            "datenjahr": meta.get("datenjahr"),
+            "quellenvermerk": meta.get("quellenvermerk"),
+            "lizenz": meta.get("lizenz"),
+            "active": data_active,
+            "visual_active": True,
+            "interactive": data_active,
+        }
+        cadastre_rendering = _cadastre_rendering_capability(slug)
+        aerial_rendering = _aerial_rendering_capability(
+            slug,
+            attribution=str(row.get("quellenvermerk") or ""),
         )
+        rendering = {}
+        if cadastre_rendering:
+            rendering["cadastre_raster"] = cadastre_rendering
+        if aerial_rendering:
+            rendering["aerial_raster"] = aerial_rendering
+        if rendering:
+            row["rendering"] = rendering
+        export_capability = _export_capability(slug)
+        if export_capability:
+            row["export"] = export_capability
+        rows.append(row)
     return rows
 
 
@@ -14475,7 +12908,9 @@ def api_v1_contract() -> dict:
             "tiles": "GET /api/v1/tiles/{state}/{z}/{x}/{y}.mvt",
             "search_address": "GET /api/v1/search/address?place=&street=&house_number=",
             "search_parcel": "GET /api/v1/search/parcel?gemarkung=&flur=&flurstueck=",
+            "search_poi": "GET /api/v1/search/poi?poi_id=",
             "search_dataset": "GET /api/v1/search/{dataset}?q=&mode=",
+            "suggest_search": "GET /api/v1/suggest/search?q=",
             "suggest_places": "GET /api/v1/suggest/places?q=",
             "suggest_streets": "GET /api/v1/suggest/streets?place=&q=",
             "suggest_gemarkungen": "GET /api/v1/suggest/gemarkungen?q=",
@@ -14605,7 +13040,7 @@ def api_v1_states() -> dict:
 @app.api_route("/api/v1/sources", methods=["GET", "HEAD"])
 def api_v1_sources() -> dict:
     states = _api_v1_state_rows()
-    return {
+    payload = {
         "dataset": VIRTUAL_GERMANY_DATASET,
         "states": states,
         "sources": [
@@ -14619,6 +13054,23 @@ def api_v1_sources() -> dict:
             for row in states
         ],
     }
+    if poi_index_available():
+        metadata = poi_index_metadata()
+        payload["poi"] = {
+            "source": "OpenStreetMap",
+            "license": "ODbL 1.0",
+            "attribution": "© OpenStreetMap-Mitwirkende",
+            "copyright_url": "https://www.openstreetmap.org/copyright",
+            "created_at_utc": metadata.get("created_at_utc"),
+            "active_states": metadata.get("active_states"),
+        }
+        payload["attributions"] = [
+            {
+                "text": "© OpenStreetMap-Mitwirkende",
+                "href": "https://www.openstreetmap.org/copyright",
+            }
+        ]
+    return payload
 
 
 @app.api_route("/api/v1/datasets", methods=["GET", "HEAD"])
@@ -14675,6 +13127,9 @@ def api_v1_search_address(
     house_number: str = "",
     limit: Annotated[int, Query(ge=1, le=30)] = 12,
     state: str = "",
+    near_lon: Annotated[float | None, Query(ge=-180, le=180)] = None,
+    near_lat: Annotated[float | None, Query(ge=-90, le=90)] = None,
+    analytics_query: str = "",
     analytics_id: str | None = None,
     analytics_scope: str | None = None,
 ) -> dict:
@@ -14685,7 +13140,7 @@ def api_v1_search_address(
         return _record_search_analytics(
             started_at=analytics_started,
             scope=analytics_scope,
-            query_text=query,
+            query_text=analytics_query.strip() or query,
             state=state,
             payload=payload,
             access_mode=access.mode,
@@ -14704,7 +13159,17 @@ def api_v1_search_address(
         if not q.strip()
         else tuple()
     )
-    if candidate_override:
+    if q.strip():
+        result = search_unified_address_suggestions_for_dataset(
+            VIRTUAL_GERMANY_DATASET,
+            query,
+            limit,
+            state=state_key,
+            near_lon=near_lon,
+            near_lat=near_lat,
+            exact_house_number=True,
+        )
+    elif candidate_override:
         active_states = set(active_bucket_state_keys())
         structured_state = requested_state_context(state_key, active_states)
         search_states = {structured_state} if structured_state else active_states
@@ -14771,6 +13236,7 @@ def api_v1_search_parcel(
     flur: str = "",
     limit: Annotated[int, Query(ge=1, le=30)] = 12,
     state: str = "",
+    analytics_query: str = "",
     analytics_id: str | None = None,
     analytics_scope: str | None = None,
 ) -> dict:
@@ -14792,8 +13258,69 @@ def api_v1_search_parcel(
     return _record_search_analytics(
         started_at=analytics_started,
         scope=analytics_scope,
-        query_text=query,
+        query_text=analytics_query.strip() or query,
         state=state,
+        payload=payload,
+        access_mode=access.mode,
+    )
+
+
+@app.api_route("/api/v1/search/poi", methods=["GET", "HEAD"])
+def api_v1_search_poi(
+    request: Request,
+    access: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    poi_id: Annotated[str, Query(min_length=3, max_length=80)],
+    state: str = "",
+    analytics_query: str = "",
+    analytics_id: str | None = None,
+    analytics_scope: str | None = None,
+) -> dict:
+    # ``poi_id`` is a stable technical identifier, not a user's conscious
+    # search input.  Never fall back to it for analytics: direct API calls
+    # without the original text remain deliberately untracked.
+    requested_query_text = analytics_query.strip()
+    analytics_query_text = (
+        ""
+        if re.fullmatch(
+            r"(?:osm:)?[nwr](?::)?[1-9]\d*",
+            requested_query_text,
+            flags=re.IGNORECASE,
+        )
+        else requested_query_text
+    )
+    analytics_started = (
+        _search_analytics_started(
+            request,
+            analytics_id,
+            analytics_scope,
+            {"poi"},
+        )
+        if analytics_query_text
+        else None
+    )
+    active_states = set(active_bucket_state_keys())
+    requested_state = normalize_state_key(state)
+    allowed_states = (
+        {requested_state}
+        if requested_state and requested_state in active_states
+        else (active_states if not requested_state else set())
+    )
+    result = search_poi_by_id(poi_id, allowed_states)
+    payload = {
+        "query": requested_query_text or poi_id.strip(),
+        "count": 1 if result else 0,
+        "results": [result] if result else [],
+    }
+    analytics_state = (
+        str(result.get("state") or state)
+        if isinstance(result, dict)
+        else state
+    )
+    return _record_search_analytics(
+        started_at=analytics_started,
+        scope=analytics_scope,
+        query_text=analytics_query_text,
+        state=analytics_state,
         payload=payload,
         access_mode=access.mode,
     )
@@ -14838,6 +13365,48 @@ def api_v1_dataset_search(
         state=state,
         payload=payload,
         access_mode=access.mode,
+    )
+
+
+@app.api_route("/api/v1/suggest/addresses", methods=["GET", "HEAD"], tags=["Search"])
+def api_v1_suggest_addresses(
+    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    q: Annotated[str, Query(min_length=2, max_length=140)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 10,
+    state: str = "",
+    near_lon: Annotated[float | None, Query(ge=-180, le=180)] = None,
+    near_lat: Annotated[float | None, Query(ge=-90, le=90)] = None,
+) -> dict:
+    # Autocomplete is deliberately untracked.  Only a conscious submit or a
+    # selected suggestion reaches /search/address with an analytics marker.
+    return search_unified_address_suggestions_for_dataset(
+        VIRTUAL_GERMANY_DATASET,
+        q,
+        limit,
+        state=state,
+        near_lon=near_lon,
+        near_lat=near_lat,
+    )
+
+
+@app.api_route("/api/v1/suggest/search", methods=["GET", "HEAD"], tags=["Search"])
+def api_v1_suggest_search(
+    _: Annotated[ApiAccessContext, Depends(RequireScopes("search:basic"))],
+    q: Annotated[str, Query(min_length=2, max_length=140)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 10,
+    state: str = "",
+    near_lon: Annotated[float | None, Query(ge=-180, le=180)] = None,
+    near_lat: Annotated[float | None, Query(ge=-90, le=90)] = None,
+) -> dict:
+    # This endpoint is intentionally untracked.  A selected result is recorded
+    # exactly once by /search/address or /search/parcel.
+    return search_unified_suggestions_for_dataset(
+        VIRTUAL_GERMANY_DATASET,
+        q,
+        limit,
+        state=state,
+        near_lon=near_lon,
+        near_lat=near_lat,
     )
 
 
@@ -15025,33 +13594,25 @@ def feature_detail_for_id(
                 result = result_from_compact_feature(row)
                 feature = result["feature"]
                 feature["source_db"] = feature.get("source_db") or source_db
-                if row["kind"] == "building" and sqlite_table_exists(con, "feature_addresses"):
-                    address_rows = con.execute(
-                        """
-                        SELECT
-                          address AS compact_address,
-                          street_house AS compact_street_house,
-                          parcel_id AS compact_address_parcel_id,
-                          lon AS compact_address_lon,
-                          lat AS compact_address_lat,
-                          source AS compact_address_source
-                        FROM feature_addresses
-                        WHERE feature_id = ?
-                        LIMIT 25
-                        """,
-                        (row["id"],),
-                    ).fetchall()
+                address_relations = compact_feature_relation_addresses(con, row)
+                if address_relations.addresses:
                     feature["addresses"] = enrich_addresses_with_postcode(
-                        [compact_address_properties(address_row) for address_row in address_rows],
+                        address_relations.addresses,
                         result["center"][0],
                         result["center"][1],
                         state_key,
                     )
                     feature["address"] = feature["addresses"][0]["label"] if feature["addresses"] else feature.get("address", "")
+                apply_feature_address_relation_metadata(feature, address_relations)
                 if row["kind"] == "parcel":
                     area_m2 = compact_feature_area_m2(con, row["id"])
                     if area_m2 is not None:
                         feature["amtliche_flaeche_m2"] = area_m2
+                result["feature"] = normalize_feature_properties_for_response(
+                    state_key or entry.name,
+                    str(row["kind"] or ""),
+                    feature,
+                )
                 result["state"] = state_key or entry.name
                 return result
 
@@ -15080,15 +13641,22 @@ def feature_detail_for_id(
                 enrich_gemarkung_from_lookup(entry.path, feature)
             try:
                 geom = wkb.loads(bytes(row["geometry_wkb"]))
+                address_relations = addresses_for_feature(con, dict(row), geom)
                 feature["addresses"] = enrich_addresses_with_postcode(
-                    addresses_for_feature(con, dict(row), geom),
+                    address_relations.addresses,
                     result["center"][0],
                     result["center"][1],
                     state_key,
                 )
                 feature["address"] = feature["addresses"][0]["label"] if feature["addresses"] else feature.get("address", "")
+                apply_feature_address_relation_metadata(feature, address_relations)
             except (GEOSException, TypeError, ValueError):
                 pass
+            result["feature"] = normalize_feature_properties_for_response(
+                state_key or entry.name,
+                str(row["kind"] or ""),
+                feature,
+            )
             result["state"] = state_key or entry.name
             return result
     return None
@@ -15101,6 +13669,392 @@ def _onoffice_feature_reference(raw: dict) -> dict:
         "source_db": str(raw.get("source_db") or "").strip(),
         "gml_id": str(raw.get("gml_id") or raw.get("id") or "").strip(),
     }
+
+
+ONOFFICE_SELECTION_MAX_FEATURES = 50
+ONOFFICE_INTERSECTION_MAX_CANDIDATES = 200
+
+
+def _onoffice_reference_key(reference: dict) -> tuple[str, str, str, str]:
+    return (
+        normalize_state_key(str(reference.get("state") or "")),
+        str(reference.get("kind") or "").strip().lower(),
+        str(reference.get("source_db") or "").strip(),
+        str(reference.get("gml_id") or "").strip(),
+    )
+
+
+def _onoffice_result_reference(result: dict) -> dict:
+    feature = result.get("feature") if isinstance(result.get("feature"), dict) else {}
+    return {
+        "state": normalize_state_key(str(result.get("state") or "")),
+        "kind": str(result.get("kind") or "").strip().lower(),
+        "source_db": str(result.get("source_db") or feature.get("source_db") or "").strip(),
+        "gml_id": str(result.get("gml_id") or feature.get("gml_id") or feature.get("id") or "").strip(),
+    }
+
+
+def _onoffice_compact_feature_row(
+    con: sqlite3.Connection,
+    reference: dict,
+) -> sqlite3.Row | None:
+    kind = str(reference.get("kind") or "")
+    clauses = ["f.kind = ?"]
+    params: list[object] = [kind] if kind in {"parcel", "building"} else [""]
+    if kind not in {"parcel", "building"}:
+        clauses = ["f.kind IN ('parcel', 'building')"]
+        params = []
+    clauses.append(
+        """
+        (
+          f.id = ?
+          OR json_extract(f.properties_json, '$.gml_id') = ?
+          OR (
+            json_extract(f.properties_json, '$.source_db') = ?
+            AND json_extract(f.properties_json, '$.gml_id') = ?
+          )
+        )
+        """
+    )
+    params.extend(
+        [
+            reference["gml_id"],
+            reference["gml_id"],
+            reference["source_db"],
+            reference["gml_id"],
+        ]
+    )
+    geometry_join = ""
+    geometry_column = "NULL AS trusted_geometry_wkb"
+    if sqlite_table_exists(con, "feature_geometries"):
+        geometry_join = "LEFT JOIN feature_geometries g ON g.feature_id = f.id"
+        geometry_column = "g.geometry_wkb AS trusted_geometry_wkb"
+    return con.execute(
+        f"""
+        SELECT f.*, {geometry_column}
+        FROM features f
+        {geometry_join}
+        WHERE {' AND '.join(clauses)}
+        ORDER BY f.kind, f.id
+        LIMIT 1
+        """,
+        tuple(params),
+    ).fetchone()
+
+
+def _onoffice_standard_feature_row(
+    con: sqlite3.Connection,
+    reference: dict,
+) -> sqlite3.Row | None:
+    clauses = ["source_db = ?", "gml_id = ?"]
+    params: list[object] = [reference["source_db"], reference["gml_id"]]
+    if reference["kind"] in {"parcel", "building"}:
+        clauses.insert(0, "kind = ?")
+        params.insert(0, reference["kind"])
+    return con.execute(
+        f"""
+        SELECT *
+        FROM features
+        WHERE {' AND '.join(clauses)}
+        ORDER BY kind, source_db, gml_id
+        LIMIT 1
+        """,
+        tuple(params),
+    ).fetchone()
+
+
+def _onoffice_row_geometry(row: sqlite3.Row, compact: bool):
+    column = "trusted_geometry_wkb" if compact else "geometry_wkb"
+    if column not in row.keys() or row[column] is None:
+        return None
+    try:
+        return wkb.loads(bytes(row[column]))
+    except (GEOSException, TypeError, ValueError):
+        return None
+
+
+def _onoffice_compact_addresses(
+    con: sqlite3.Connection,
+    row: sqlite3.Row,
+    state: str,
+    center: list[float],
+) -> FeatureAddressRelations:
+    relations = compact_feature_relation_addresses(con, row)
+    return FeatureAddressRelations(
+        enrich_addresses_with_postcode(
+            relations.addresses,
+            center[0],
+            center[1],
+            state,
+        ),
+        total=relations.total,
+        limit=relations.limit,
+    )
+
+
+def _onoffice_detail_from_row(
+    con: sqlite3.Connection,
+    entry: FeatureDbEntry,
+    row: sqlite3.Row,
+    geom,
+    compact: bool,
+) -> dict:
+    if compact:
+        result = result_from_compact_feature(row)
+        feature = result["feature"]
+        if geom is not None:
+            point = geom.representative_point()
+            result["center"] = [point.x, point.y]
+            result["bbox"] = list(geom.bounds)
+            feature["geometry"] = mapping(geom)
+        address_relations = _onoffice_compact_addresses(
+            con,
+            row,
+            entry.name,
+            result["center"],
+        )
+        if address_relations.addresses:
+            feature["addresses"] = address_relations.addresses
+            feature["address"] = address_relations.addresses[0].get("label") or feature.get("address", "")
+        apply_feature_address_relation_metadata(feature, address_relations)
+        if str(row["kind"] or "") == "parcel":
+            area_m2 = compact_feature_area_m2(con, str(row["id"] or ""))
+            if area_m2 is not None:
+                feature["amtliche_flaeche_m2"] = area_m2
+    else:
+        result = result_from_feature(row, geom)
+        feature = result["feature"]
+        if str(row["kind"] or "") == "parcel":
+            enrich_gemarkung_from_lookup(entry.path, feature)
+        address_relations = addresses_for_feature(con, dict(row), geom)
+        addresses = enrich_addresses_with_postcode(
+            address_relations.addresses,
+            result["center"][0],
+            result["center"][1],
+            entry.name,
+        )
+        if addresses:
+            feature["addresses"] = addresses
+            feature["address"] = addresses[0].get("label") or feature.get("address", "")
+        apply_feature_address_relation_metadata(feature, address_relations)
+    result["feature"] = normalize_feature_properties_for_response(
+        entry.name,
+        str(row["kind"] or ""),
+        feature,
+    )
+    result["state"] = entry.name
+    return result
+
+
+def _onoffice_intersection_candidate_rows(
+    con: sqlite3.Connection,
+    *,
+    compact: bool,
+    target_kind: str,
+    bounds: tuple[float, float, float, float],
+) -> list[sqlite3.Row] | None:
+    min_lon, min_lat, max_lon, max_lat = bounds
+    limit = ONOFFICE_INTERSECTION_MAX_CANDIDATES + 1
+    if compact:
+        if not (
+            sqlite_table_exists(con, "feature_bbox_index")
+            and sqlite_table_exists(con, "feature_geometries")
+        ):
+            return None
+        return con.execute(
+            """
+            SELECT f.*, g.geometry_wkb AS trusted_geometry_wkb
+            FROM feature_bbox_index i
+            JOIN features f ON f.rowid = i.rowid
+            JOIN feature_geometries g ON g.feature_id = f.id
+            WHERE f.kind = ?
+              AND i.min_lon <= ? AND i.max_lon >= ?
+              AND i.min_lat <= ? AND i.max_lat >= ?
+            ORDER BY f.kind, f.id
+            LIMIT ?
+            """,
+            (target_kind, max_lon, min_lon, max_lat, min_lat, limit),
+        ).fetchall()
+    if not sqlite_table_exists(con, "feature_index"):
+        return None
+    return con.execute(
+        """
+        SELECT f.*
+        FROM feature_index i
+        JOIN features f ON f.id = i.id
+        WHERE f.kind = ?
+          AND i.min_lon <= ? AND i.max_lon >= ?
+          AND i.min_lat <= ? AND i.max_lat >= ?
+        ORDER BY f.kind, f.source_db, f.gml_id, f.id
+        LIMIT ?
+        """,
+        (target_kind, max_lon, min_lon, max_lat, min_lat, limit),
+    ).fetchall()
+
+
+def resolve_onoffice_selection_feature(
+    reference: dict,
+    *,
+    expand_intersections: bool,
+) -> tuple[dict | None, list[dict], list[str]]:
+    warnings: list[str] = []
+    for entry in feature_geometry_entries_for_state(reference["state"]):
+        with sqlite_feature_connection(entry.path) as con:
+            compact = compact_feature_schema(con)
+            row = (
+                _onoffice_compact_feature_row(con, reference)
+                if compact
+                else _onoffice_standard_feature_row(con, reference)
+            )
+            if row is None:
+                continue
+            geom = _onoffice_row_geometry(row, compact)
+            if geom is None:
+                detail = _onoffice_detail_from_row(con, entry, row, None, compact) if compact else None
+                if detail is not None:
+                    warnings.append(
+                        f"Trusted geometry unavailable for {_onoffice_result_reference(detail)['gml_id']}; intersections were not expanded."
+                    )
+                return detail, [], warnings
+
+            detail = _onoffice_detail_from_row(con, entry, row, geom, compact)
+            kind = str(detail.get("kind") or "")
+            if not expand_intersections or kind not in {"building", "parcel"}:
+                return detail, [], warnings
+
+            target_kind = "parcel" if kind == "building" else "building"
+            candidate_rows = _onoffice_intersection_candidate_rows(
+                con,
+                compact=compact,
+                target_kind=target_kind,
+                bounds=geom.bounds,
+            )
+            if candidate_rows is None:
+                warnings.append(
+                    f"Spatial index unavailable for {entry.name}; intersections were not expanded."
+                )
+                return detail, [], warnings
+            if len(candidate_rows) > ONOFFICE_INTERSECTION_MAX_CANDIDATES:
+                raise HTTPException(
+                    status_code=422,
+                    detail="intersection candidate limit exceeded",
+                )
+
+            intersections: dict[tuple[str, str, str, str], dict] = {}
+            invalid_geometry_count = 0
+            for candidate_row in candidate_rows:
+                candidate_geom = _onoffice_row_geometry(candidate_row, compact)
+                if candidate_geom is None:
+                    invalid_geometry_count += 1
+                    continue
+                try:
+                    intersects = geom.intersects(candidate_geom)
+                except GEOSException:
+                    invalid_geometry_count += 1
+                    continue
+                if not intersects:
+                    continue
+                candidate = _onoffice_detail_from_row(
+                    con,
+                    entry,
+                    candidate_row,
+                    candidate_geom,
+                    compact,
+                )
+                candidate_key = _onoffice_reference_key(
+                    _onoffice_result_reference(candidate)
+                )
+                intersections[candidate_key] = candidate
+            if invalid_geometry_count:
+                warnings.append(
+                    f"{invalid_geometry_count} intersection candidate(s) had invalid geometry and were ignored."
+                )
+            return (
+                detail,
+                [intersections[key] for key in sorted(intersections)],
+                warnings,
+            )
+    return None, [], warnings
+
+
+def _onoffice_structured_address(raw: dict) -> dict | None:
+    street, house_number = address_display_parts(raw)
+    postal_code = str(raw.get("post_code") or raw.get("postal_code") or "").strip()
+    city = str(
+        raw.get("city")
+        or raw.get("municipality")
+        or raw.get("locality")
+        or ""
+    ).strip()
+    country = str(raw.get("country") or raw.get("land") or "").strip()
+    label = str(raw.get("label") or "").strip()
+    if not any((street, house_number, postal_code, city, country, label)):
+        return None
+    return {
+        "street": street,
+        "house_number": house_number,
+        "postal_code": postal_code,
+        "city": city,
+        "country": country,
+        "label": label,
+    }
+
+
+def _onoffice_feature_addresses(feature: dict) -> list[dict]:
+    raw_addresses = (
+        feature.get("addresses")
+        if isinstance(feature.get("addresses"), list)
+        else []
+    )
+    if not raw_addresses and feature.get("address"):
+        raw_addresses = [{"label": feature.get("address")}]
+    addresses: dict[tuple[str, str, str, str, str, str], dict] = {}
+    for raw in raw_addresses:
+        if not isinstance(raw, dict):
+            continue
+        address = _onoffice_structured_address(raw)
+        if address is None:
+            continue
+        key = tuple(
+            str(address[field] or "").strip().casefold()
+            for field in (
+                "street",
+                "house_number",
+                "postal_code",
+                "city",
+                "country",
+                "label",
+            )
+        )
+        addresses[key] = address
+    return [addresses[key] for key in sorted(addresses)]
+
+
+def _onoffice_cadastral_fields(feature: dict) -> dict:
+    return {
+        "gemarkung": str(feature.get("gemarkung") or "").strip(),
+        "gemarkungsnummer": str(feature.get("gemarkungsnummer") or "").strip(),
+        "flur": str(feature.get("flur") or "").strip(),
+        "flurstueck": str(feature.get("flurstueck") or "").strip(),
+        "flurstueckskennzeichen": str(
+            feature.get("flurstueckskennzeichen") or ""
+        ).strip(),
+        "zaehler": str(feature.get("zaehler") or "").strip(),
+        "nenner": str(feature.get("nenner") or "").strip(),
+    }
+
+
+def _onoffice_official_area(feature: dict) -> int | float | None:
+    value = feature.get("amtliche_flaeche_m2")
+    if value is None:
+        return None
+    try:
+        area = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(area) or area < 0:
+        return None
+    return int(area) if area.is_integer() else area
 
 
 def _onoffice_address_labels(features: list[dict]) -> list[str]:
@@ -15129,22 +14083,99 @@ def _onoffice_parcel_label(feature: dict) -> str:
     return ", ".join(part for part in parts if part)
 
 
-def build_onoffice_selection_payload(features: list[dict]) -> dict:
+def build_onoffice_selection_payload(
+    features: list[dict],
+    *,
+    selection_metadata: dict[tuple[str, str, str, str], dict] | None = None,
+    warnings: list[str] | None = None,
+) -> dict:
+    selection_metadata = selection_metadata or {}
     parcels = [item for item in features if item.get("kind") == "parcel"]
     buildings = [item for item in features if item.get("kind") == "building"]
     addresses = _onoffice_address_labels(buildings) or _onoffice_address_labels(parcels)
     parcel_labels = [_onoffice_parcel_label(item.get("feature") or {}) for item in parcels]
-    parcel_labels = [label for label in parcel_labels if label]
+    parcel_labels = list(dict.fromkeys(label for label in parcel_labels if label))
     parcel_areas = [
-        item.get("feature", {}).get("amtliche_flaeche_m2")
+        _onoffice_official_area(item.get("feature", {}))
         for item in parcels
-        if item.get("feature", {}).get("amtliche_flaeche_m2") is not None
     ]
+    complete_official_area = bool(parcels) and all(
+        area is not None for area in parcel_areas
+    )
+    structured_addresses: dict[
+        tuple[str, str, str, str, str, str],
+        dict,
+    ] = {}
+    structured_parcels: list[dict] = []
+    feature_payloads: list[dict] = []
+    for item in features:
+        feature = item.get("feature") if isinstance(item.get("feature"), dict) else {}
+        reference = _onoffice_result_reference(item)
+        reference_key = _onoffice_reference_key(reference)
+        metadata = selection_metadata.get(reference_key) or {}
+        feature_addresses = _onoffice_feature_addresses(feature)
+        for address in feature_addresses:
+            address_key = tuple(
+                str(address[field] or "").strip().casefold()
+                for field in (
+                    "street",
+                    "house_number",
+                    "postal_code",
+                    "city",
+                    "country",
+                    "label",
+                )
+            )
+            structured_addresses[address_key] = address
+        cadastral = (
+            _onoffice_cadastral_fields(feature)
+            if item.get("kind") == "parcel"
+            else None
+        )
+        official_area_m2 = (
+            _onoffice_official_area(feature)
+            if item.get("kind") == "parcel"
+            else None
+        )
+        if cadastral is not None:
+            structured_parcels.append(
+                {
+                    "reference": reference,
+                    **cadastral,
+                    "official_area_m2": official_area_m2,
+                }
+            )
+        geometry = feature.get("geometry")
+        feature_payloads.append(
+            {
+                **reference,
+                "label": item.get("label"),
+                "subtitle": item.get("subtitle"),
+                "center": item.get("center"),
+                "bbox": item.get("bbox"),
+                "selection_origin": metadata.get("origin") or "requested",
+                "expanded_from": metadata.get("expanded_from") or [],
+                "addresses": feature_addresses,
+                "cadastral": cadastral,
+                "official_area_m2": official_area_m2,
+                "geometry": geometry if isinstance(geometry, dict) else None,
+                "properties": feature,
+            }
+        )
     suggested_fields = {
         "openkataster_adresse": "; ".join(addresses),
         "openkataster_flurstuecke": "; ".join(parcel_labels),
-        "openkataster_amtliche_flaeche_m2": sum(float(area) for area in parcel_areas) if parcel_areas else None,
+        "openkataster_amtliche_flaeche_m2": (
+            sum(float(area) for area in parcel_areas if area is not None)
+            if complete_official_area
+            else None
+        ),
     }
+    requested_count = sum(
+        1
+        for item in feature_payloads
+        if item["selection_origin"] == "requested"
+    )
     return {
         "integration": "onoffice",
         "mode": "selection-payload-preview",
@@ -15153,25 +14184,32 @@ def build_onoffice_selection_payload(features: list[dict]) -> dict:
             "parcel_count": len(parcels),
             "building_count": len(buildings),
             "address_count": len(addresses),
+            "requested_count": requested_count,
+            "expanded_count": len(feature_payloads) - requested_count,
         },
         "suggested_fields": suggested_fields,
-        "features": [
-            {
-                "state": item.get("state"),
-                "kind": item.get("kind"),
-                "source_db": item.get("source_db"),
-                "gml_id": item.get("gml_id"),
-                "label": item.get("label"),
-                "subtitle": item.get("subtitle"),
-                "center": item.get("center"),
-                "bbox": item.get("bbox"),
-                "properties": item.get("feature") or {},
-            }
-            for item in features
-        ],
-        "warnings": [
+        "structured_fields": {
+            "addresses": [
+                structured_addresses[key]
+                for key in sorted(structured_addresses)
+            ],
+            "parcels": structured_parcels,
+            "official_area": {
+                "complete": complete_official_area,
+                "total_m2": suggested_fields[
+                    "openkataster_amtliche_flaeche_m2"
+                ],
+            },
+        },
+        "features": feature_payloads,
+        "warnings": list(
+            dict.fromkeys(
+                [
             "This endpoint only prepares an onOffice payload. Writing to onOffice requires an authenticated onOffice adapter.",
-        ],
+                    *(warnings or []),
+                ]
+            )
+        ),
     }
 
 
@@ -15260,14 +14298,28 @@ def api_v1_onoffice_selection_payload(
 ) -> dict:
     if not access.is_pro:
         raise HTTPException(status_code=403, detail="pro access required")
+    expand_intersections = payload.get("expand_intersections", False)
+    if not isinstance(expand_intersections, bool):
+        raise HTTPException(
+            status_code=422,
+            detail="expand_intersections must be a boolean",
+        )
     raw_features = payload.get("features") or payload.get("selection") or []
     if not isinstance(raw_features, list):
         raise HTTPException(status_code=422, detail="features must be a list")
-    if len(raw_features) > 50:
+    if len(raw_features) > ONOFFICE_SELECTION_MAX_FEATURES:
         raise HTTPException(status_code=422, detail="selection is too large")
 
-    features: list[dict] = []
+    requested_features: list[dict] = []
+    requested_keys: set[tuple[str, str, str, str]] = set()
+    raw_keys: set[tuple[str, str, str, str]] = set()
+    expansion_candidates: dict[tuple[str, str, str, str], dict] = {}
+    expansion_sources: dict[
+        tuple[str, str, str, str],
+        dict[tuple[str, str, str, str], dict],
+    ] = {}
     missing: list[dict] = []
+    warnings: list[str] = []
     for raw in raw_features:
         if not isinstance(raw, dict):
             continue
@@ -15275,13 +14327,67 @@ def api_v1_onoffice_selection_payload(
         if not ref["state"] or not ref["source_db"] or not ref["gml_id"]:
             missing.append({**ref, "reason": "incomplete reference"})
             continue
-        detail = feature_detail_for_id(ref["state"], ref["source_db"], ref["gml_id"], ref["kind"])
+        raw_key = _onoffice_reference_key(ref)
+        if raw_key in raw_keys:
+            continue
+        raw_keys.add(raw_key)
+        detail, intersections, detail_warnings = resolve_onoffice_selection_feature(
+            ref,
+            expand_intersections=expand_intersections,
+        )
+        warnings.extend(detail_warnings)
         if not detail:
             missing.append({**ref, "reason": "feature not found"})
             continue
-        features.append(detail)
+        actual_reference = _onoffice_result_reference(detail)
+        actual_key = _onoffice_reference_key(actual_reference)
+        if actual_key not in requested_keys:
+            requested_keys.add(actual_key)
+            requested_features.append(detail)
+        for candidate in intersections:
+            candidate_reference = _onoffice_result_reference(candidate)
+            candidate_key = _onoffice_reference_key(candidate_reference)
+            expansion_candidates[candidate_key] = candidate
+            sources = expansion_sources.setdefault(candidate_key, {})
+            sources[actual_key] = actual_reference
 
-    response = build_onoffice_selection_payload(features)
+    expanded_features = [
+        expansion_candidates[key]
+        for key in sorted(expansion_candidates)
+        if key not in requested_keys
+    ]
+    if (
+        len(requested_features) + len(expanded_features)
+        > ONOFFICE_SELECTION_MAX_FEATURES
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="expanded selection is too large",
+        )
+
+    selection_metadata: dict[tuple[str, str, str, str], dict] = {
+        key: {"origin": "requested", "expanded_from": []}
+        for key in requested_keys
+    }
+    for candidate in expanded_features:
+        candidate_key = _onoffice_reference_key(
+            _onoffice_result_reference(candidate)
+        )
+        sources = expansion_sources.get(candidate_key, {})
+        selection_metadata[candidate_key] = {
+            "origin": "intersection",
+            "expanded_from": [
+                sources[source_key]
+                for source_key in sorted(sources)
+            ],
+        }
+    features = [*requested_features, *expanded_features]
+    response = build_onoffice_selection_payload(
+        features,
+        selection_metadata=selection_metadata,
+        warnings=warnings,
+    )
+    response["expand_intersections"] = expand_intersections
     response["missing"] = missing
     return response
 
@@ -15386,24 +14492,91 @@ def bootstrap_backdrop(state: str) -> FileResponse:
     return FileResponse(path, media_type="image/webp")
 
 
-@app.api_route("/luftbild/{state_slug}/{z}/{x}/{y}.png", methods=["GET", "HEAD"])
-def luftbild_tile(state_slug: str, z: int, x: int, y: int) -> Response:
-    if state_slug not in LUFTBILD_WMS_CONFIGS:
-        raise HTTPException(status_code=404, detail="Luftbild not configured")
+def _wms_tile(
+    state_slug: str,
+    z: int,
+    x: int,
+    y: int,
+    *,
+    configs: dict[str, dict],
+    service_name: str,
+    cache_namespace: str = "",
+) -> Response:
+    if state_slug not in configs:
+        raise HTTPException(status_code=404, detail=f"{service_name} not configured")
     if z < 0 or z > 22 or x < 0 or y < 0 or x >= 2**z or y >= 2**z:
         raise HTTPException(status_code=400, detail="Invalid tile coordinate")
 
-    config = {**LUFTBILD_WMS_CONFIGS[state_slug], "crs": "EPSG:3857"}
+    # Every configured upstream currently advertises Web Mercator. Requesting
+    # the native XYZ bounds avoids reprojection seams between adjacent tiles.
+    config = {**configs[state_slug], "crs": "EPSG:3857"}
+    try:
+        min_zoom = max(0, int(config.get("minzoom", 0)))
+        max_zoom = min(22, int(config.get("maxzoom", 22)))
+    except (TypeError, ValueError):
+        min_zoom, max_zoom = 0, 22
+    if z < min_zoom or z > max_zoom:
+        raise HTTPException(status_code=400, detail=f"{service_name} is unavailable at this zoom")
     layer = config.get("layer")
     if not layer:
-        raise HTTPException(status_code=404, detail="Luftbild layer not configured")
+        raise HTTPException(status_code=404, detail=f"{service_name} layer not configured")
 
-    cache_path = _luftbild_cache_path(state_slug, str(layer), str(config["crs"]), z, x, y)
+    image_format = str(config.get("format", "image/png"))
+    media_type = _luftbild_media_type(image_format)
+    try:
+        tile_size = max(256, min(2048, int(config.get("tile_size", LUFTBILD_TILE_SIZE))))
+    except (TypeError, ValueError):
+        tile_size = LUFTBILD_TILE_SIZE
+    try:
+        upstream_timeout = max(1.0, min(30.0, float(config.get("timeout", 20))))
+    except (TypeError, ValueError):
+        upstream_timeout = 20.0
+    try:
+        upstream_attempts = max(1, min(3, int(config.get("attempts", 1))))
+    except (TypeError, ValueError):
+        upstream_attempts = 1
+
+    cache_state = f"{cache_namespace}-{state_slug}" if cache_namespace else state_slug
+    cache_layer = str(layer)
+    if cache_namespace:
+        cache_layer = "__".join(
+            (
+                str(config.get("revision") or "v1"),
+                str(layer),
+                str(config.get("styles") or "default"),
+                str(config.get("version") or "1.3.0"),
+                "transparent" if config.get("transparent") else "opaque",
+            )
+        )
+    cache_path = _luftbild_cache_path(
+        cache_state,
+        cache_layer,
+        str(config["crs"]),
+        z,
+        x,
+        y,
+        tile_size=tile_size,
+        image_format=image_format,
+    )
+    try:
+        cache_ttl_seconds = max(0, int(config.get("cache_ttl_seconds", 0)))
+    except (TypeError, ValueError):
+        cache_ttl_seconds = 0
+    cache_control = str(config.get("cache_control") or "public, max-age=604800, immutable")
+    cache_is_fresh = False
     if cache_path.exists():
+        try:
+            cache_is_fresh = not cache_ttl_seconds or time.time() - cache_path.stat().st_mtime <= cache_ttl_seconds
+        except OSError:
+            cache_is_fresh = False
+    if cache_is_fresh:
         return FileResponse(
             cache_path,
-            media_type="image/png",
-            headers={"Cache-Control": "public, max-age=604800, immutable"},
+            media_type=media_type,
+            headers={
+                "Cache-Control": cache_control,
+                "X-OpenKataster-Cache": "HIT",
+            },
         )
 
     bbox, _center_lat = _luftbild_wms_bbox(config, z, x, y)
@@ -15412,33 +14585,103 @@ def luftbild_tile(state_slug: str, z: int, x: int, y: int) -> Response:
         "REQUEST": "GetMap",
         "VERSION": config.get("version", "1.3.0"),
         "LAYERS": layer,
-        "STYLES": "",
-        "FORMAT": config.get("format", "image/png"),
-        "TRANSPARENT": "false",
+        "STYLES": str(config.get("styles") or ""),
+        "FORMAT": image_format,
+        "TRANSPARENT": "true" if config.get("transparent") else "false",
         "CRS": config["crs"],
         "BBOX": ",".join(f"{value:.3f}" for value in bbox),
-        "WIDTH": str(LUFTBILD_TILE_SIZE),
-        "HEIGHT": str(LUFTBILD_TILE_SIZE),
+        "WIDTH": str(tile_size),
+        "HEIGHT": str(tile_size),
     }
     url = f"{config['url']}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(url, headers={"User-Agent": "OpenKataster/1.0"})
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            content_type = response.headers.get("Content-Type", "")
-            data = response.read()
-    except urllib.error.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Luftbild WMS error: {exc.code}") from exc
-    except urllib.error.URLError as exc:
-        raise HTTPException(status_code=502, detail="Luftbild WMS unavailable") from exc
+    data = b""
+    content_type = ""
+    for attempt_index in range(upstream_attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=upstream_timeout) as response:
+                content_type = response.headers.get("Content-Type", "")
+                data = response.read()
+            break
+        except urllib.error.HTTPError as exc:
+            if attempt_index + 1 < upstream_attempts and exc.code in {429, 500, 502, 503, 504}:
+                continue
+            if cache_path.exists():
+                return FileResponse(
+                    cache_path,
+                    media_type=media_type,
+                    headers={"Cache-Control": "public, max-age=300", "X-OpenKataster-Cache": "STALE"},
+                )
+            raise HTTPException(
+                status_code=502,
+                detail=f"{service_name} WMS error: {exc.code}",
+                headers={"Cache-Control": "no-store"},
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as exc:
+            if attempt_index + 1 < upstream_attempts:
+                continue
+            if cache_path.exists():
+                return FileResponse(
+                    cache_path,
+                    media_type=media_type,
+                    headers={"Cache-Control": "public, max-age=300", "X-OpenKataster-Cache": "STALE"},
+                )
+            raise HTTPException(
+                status_code=502,
+                detail=f"{service_name} WMS unavailable",
+                headers={"Cache-Control": "no-store"},
+            ) from exc
 
-    if not data or ("image/" not in content_type.lower() and not data.startswith((b"\x89PNG", b"\xff\xd8", b"GIF"))):
-        raise HTTPException(status_code=502, detail="Luftbild WMS returned no image")
+    try:
+        max_response_bytes = max(1024, min(32 * 1024 * 1024, int(config.get("max_response_bytes", 10 * 1024 * 1024))))
+    except (TypeError, ValueError):
+        max_response_bytes = 10 * 1024 * 1024
+    if len(data) > max_response_bytes:
+        raise HTTPException(
+            status_code=502,
+            detail=f"{service_name} WMS returned an oversized image",
+            headers={"Cache-Control": "no-store"},
+        )
+    if not data or not data.startswith((b"\x89PNG", b"\xff\xd8", b"GIF")):
+        raise HTTPException(
+            status_code=502,
+            detail=f"{service_name} WMS returned no image",
+            headers={"Cache-Control": "no-store"},
+        )
 
     _write_luftbild_cache(cache_path, data)
     return Response(
         content=data,
-        media_type="image/png",
-        headers={"Cache-Control": "public, max-age=604800, immutable"},
+        media_type=media_type,
+        headers={
+            "Cache-Control": cache_control,
+            "X-OpenKataster-Cache": "MISS",
+        },
+    )
+
+
+@app.api_route("/luftbild/{state_slug}/{z}/{x}/{y}.png", methods=["GET", "HEAD"])
+def luftbild_tile(state_slug: str, z: int, x: int, y: int) -> Response:
+    return _wms_tile(
+        state_slug,
+        z,
+        x,
+        y,
+        configs=LUFTBILD_WMS_CONFIGS,
+        service_name="Luftbild",
+    )
+
+
+@app.api_route("/katasterbild/{state_slug}/{z}/{x}/{y}.png", methods=["GET", "HEAD"])
+def katasterbild_tile(state_slug: str, z: int, x: int, y: int) -> Response:
+    return _wms_tile(
+        state_slug,
+        z,
+        x,
+        y,
+        configs=KATASTER_WMS_CONFIGS,
+        service_name="Katasterbild",
+        cache_namespace="katasterbild",
     )
 
 
@@ -15478,112 +14721,6 @@ def viewer_asset(viewer_version: str, asset_path: str) -> FileResponse:
         headers={"Cache-Control": "public, max-age=300"},
     )
 
-
-@app.get("/embed-contract-v1.js", include_in_schema=False)
-def embed_contract_javascript() -> Response:
-    script = r'''(() => {
-  const params = new URLSearchParams(window.location.search);
-  const parentOrigin = params.get("okParentOrigin") || "*";
-  const isEmbedded = window.parent && window.parent !== window;
-  if (!isEmbedded) return;
-
-  const post = (type, payload = {}) => window.parent.postMessage({
-    type,
-    version: 1,
-    dataset: "deutschland",
-    ...payload,
-  }, parentOrigin);
-
-  const mapState = () => {
-    const map = window.__okMap;
-    if (!map || !map.getCenter) return null;
-    const center = map.getCenter();
-    return { center: [center.lng, center.lat], zoom: map.getZoom(), bearing: 0, pitch: 0 };
-  };
-
-  const compactItem = (kind, item) => ({
-    kind,
-    state: item.state || item.bundesland || null,
-    source_db: item.source_db || null,
-    gml_id: item.gml_id || item.id || null,
-    label: item.label || item.name || null,
-    address: item.address || item.adresse || null,
-    center: Array.isArray(item.center) ? item.center : null,
-    bbox: Array.isArray(item.bbox) ? item.bbox : null,
-  });
-
-  const selectionState = () => {
-    try {
-      const parcels = typeof selectedParcels !== "undefined"
-        ? [...selectedParcels.values()].map((item) => compactItem("parcel", item)) : [];
-      const buildings = typeof selectedBuildings !== "undefined"
-        ? [...selectedBuildings.values()].map((item) => compactItem("building", item)) : [];
-      return { parcels, buildings };
-    } catch (_) {
-      return { parcels: [], buildings: [] };
-    }
-  };
-
-  let lastSelection = "";
-  const publishSelection = () => {
-    const selection = selectionState();
-    const signature = JSON.stringify(selection);
-    if (signature === lastSelection) return;
-    lastSelection = signature;
-    post("openkataster:selection", { selection });
-  };
-
-  const selectionBody = document.getElementById("selectionBody");
-  if (selectionBody) new MutationObserver(publishSelection).observe(selectionBody, { childList: true, subtree: true });
-
-  window.addEventListener("message", (event) => {
-    if (event.source !== window.parent) return;
-    if (parentOrigin !== "*" && event.origin !== parentOrigin) return;
-    const message = event.data;
-    if (!message || typeof message !== "object" || message.version !== 1) return;
-    const map = window.__okMap;
-    if (message.type === "openkataster:set-view" && map) {
-      const center = Array.isArray(message.center) ? message.center.map(Number) : null;
-      const zoom = Number(message.zoom);
-      if (center && center.length === 2 && center.every(Number.isFinite)) {
-        map.easeTo({ center, zoom: Number.isFinite(zoom) ? zoom : map.getZoom(), bearing: 0, pitch: 0, duration: 350 });
-      }
-    } else if (message.type === "openkataster:clear-selection") {
-      document.getElementById("toolClear")?.click();
-      publishSelection();
-    } else if (message.type === "openkataster:set-layers" && message.layers) {
-      for (const [name, enabled] of Object.entries(message.layers)) {
-        const input = document.querySelector(`[data-layer-setting="${CSS.escape(name)}"]`);
-        if (input && input.checked !== Boolean(enabled)) {
-          input.checked = Boolean(enabled);
-          input.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-      }
-    } else if (message.type === "openkataster:search-address") {
-      const values = message.address || {};
-      const fields = { addressPlace: values.place, addressStreet: values.street, addressHouseNumber: values.house_number };
-      for (const [id, value] of Object.entries(fields)) {
-        const input = document.getElementById(id);
-        if (input && value != null) input.value = String(value);
-      }
-      document.getElementById("cadastreSearchButton")?.click();
-    } else if (message.type === "openkataster:request-state") {
-      post("openkataster:state", { map: mapState(), selection: selectionState() });
-    }
-  });
-
-  const ready = () => {
-    const map = window.__okMap;
-    if (!map || !map.getCenter) return window.setTimeout(ready, 50);
-    const publishReady = () => post("openkataster:ready", {
-      capabilities: ["set-view", "search-address", "set-layers", "clear-selection", "selection"],
-      map: mapState(),
-    });
-    if (map.loaded && map.loaded()) publishReady(); else map.once("load", publishReady);
-  };
-  ready();
-})();'''
-    return Response(content=script, media_type="text/javascript; charset=utf-8", headers={"Cache-Control": "public, max-age=300"})
 
 @app.api_route("/viewer/{dataset}", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def viewer(
@@ -15630,23 +14767,6 @@ def _viewer_app_response(claims: dict) -> HTMLResponse:
     if origin:
         headers["Content-Security-Policy"] = f"frame-ancestors {origin}"
     return HTMLResponse(content=index_path.read_text(encoding="utf-8"), headers=headers)
-
-
-@app.api_route("/embed-runtime/{dataset}", methods=["GET", "HEAD"], include_in_schema=False)
-def embed_runtime_viewer(
-    request: Request,
-    dataset: str,
-    token: Annotated[str, Query()],
-):
-    claims = _verify_embed_session(token)
-    if not claims or claims.get("typ") != "embed" or claims.get("dataset") != dataset:
-        raise HTTPException(status_code=403, detail="valid embed session required")
-    return _canonical_embed_redirect(
-        request,
-        dataset,
-        {"token": token, "session": None, "iframe": "1"},
-        status_code=308,
-    )
 
 
 @app.api_route("/embed/onoffice", methods=["GET", "HEAD"])
@@ -16319,7 +15439,10 @@ PUBLIC_OPENAPI_PATHS = {
     "/api/v1/tiles/{state}/{z}/{x}/{y}.mvt",
     "/api/v1/search/address",
     "/api/v1/search/parcel",
+    "/api/v1/search/poi",
     "/api/v1/search/{dataset}",
+    "/api/v1/suggest/search",
+    "/api/v1/suggest/addresses",
     "/api/v1/suggest/places",
     "/api/v1/suggest/streets",
     "/api/v1/suggest/gemarkungen",
@@ -16346,7 +15469,7 @@ def public_openapi_schema() -> dict:
         routes=app.routes,
         tags=[
             {"name": "Embed", "description": "Kurzlebige, domain-gebundene iframe-Sessions."},
-            {"name": "Search", "description": "Adress- und Flurstückssuche."},
+            {"name": "Search", "description": "Adress-, Flurstücks- und POI-Suche."},
             {"name": "Features", "description": "Geometrien und fachliche Objektinformationen."},
             {"name": "Map", "description": "Öffentliche Karten- und Quellenressourcen."},
         ],
@@ -16356,7 +15479,10 @@ def public_openapi_schema() -> dict:
     protected_paths = {
         "/api/v1/search/address",
         "/api/v1/search/parcel",
+        "/api/v1/search/poi",
         "/api/v1/search/{dataset}",
+        "/api/v1/suggest/search",
+        "/api/v1/suggest/addresses",
         "/api/v1/suggest/places",
         "/api/v1/suggest/streets",
         "/api/v1/suggest/gemarkungen",
@@ -16389,6 +15515,18 @@ def public_openapi_schema() -> dict:
             "query": "Feldstraße 18 Hildesheim",
             "count": 1,
             "results": [{"label": "Feldstraße 18, 31134 Hildesheim", "center": [9.95, 52.15]}],
+        },
+        "/api/v1/search/poi": {
+            "query": "Hannover Hauptbahnhof",
+            "count": 1,
+            "results": [
+                {
+                    "kind": "poi",
+                    "poi_id": "osm:n:123",
+                    "label": "Hannover Hauptbahnhof",
+                    "center": [9.741, 52.377],
+                }
+            ],
         },
         "/api/v1/features/point-preview": {
             "access": "free",

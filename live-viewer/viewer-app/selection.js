@@ -1,7 +1,9 @@
 import { addressLabel, escapeHtml, featureKey, formatArea, polygonAreaMeters } from './utils.js';
+import { normalizeSelectionReferences, selectionFromPayload } from './workspace.js?v=20260719-onoffice-workspace2';
 
 const HIDDEN_DYNAMIC_FIELDS = new Set([
   'source_db', 'gml_id', 'id', 'geometry', 'bbox', 'center', 'addresses', 'address',
+  'address_relation_count', 'address_relation_limit', 'address_relations_truncated', 'lage',
   'flurstueckskennzeichen',
   'gebaeudekennzeichen',
   'zaehler', 'nenner', 'flurstuecksfolge', 'nutzungen', 'nutzung_haupt',
@@ -14,12 +16,36 @@ const FIELD_LABELS = {
 
 const BUILDING_OFFICIAL_AREA_KEYS = ['amtliche_flaeche_m2', 'grundflaeche_m2'];
 const BUILDING_GEOMETRIC_AREA_KEYS = ['geometrische_flaeche_m2'];
+const PARCEL_LOCATION_DISPLAY_MAX_LENGTH = 240;
+const WELCOME_HOVER_HIT_LAYERS = ['welcome-hover-building-hit', 'welcome-hover-parcel-hit'];
+const WELCOME_HOVER_LAYERS = [
+  'welcome-hover-parcel-hit', 'welcome-hover-parcel-line',
+  'welcome-hover-building-hit', 'welcome-hover-building-line'
+];
+const WELCOME_HIDDEN_SELECTION_LAYERS = [
+  'selected-parcels-v2', 'selected-buildings-v2',
+  'search-highlight-parcels-v2', 'search-highlight-buildings-v2'
+];
 
 function hasValue(value) {
   if (value === null || value === undefined) return false;
   if (typeof value === 'string') return value.trim() !== '';
-  if (Array.isArray(value)) return value.length > 0;
-  return typeof value !== 'object' || Object.keys(value).length > 0;
+  if (Array.isArray(value)) return value.some(hasValue);
+  return typeof value !== 'object' || Object.values(value).some(hasValue);
+}
+
+function normalizedDisplayText(value) {
+  if (Array.isArray(value)) return value.map(normalizedDisplayText).filter(Boolean).join(', ');
+  if (typeof value !== 'string' && typeof value !== 'number') return '';
+  return String(value).replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/gi, '').trim();
+}
+
+function buildingName(item) {
+  return normalizedDisplayText(item?.name);
+}
+
+function isBayernLod2Building(item) {
+  return String(item?.source_db || '').trim().toLocaleLowerCase('de-DE').replaceAll('_', '-') === 'bayern-lod2';
 }
 
 function geometryArea(geometry) {
@@ -89,6 +115,32 @@ export function selectionAddressLabels(item = {}) {
   const fallback = addressLabel(item);
   if (!labels.length && fallback && fallback !== '–') labels.push(fallback);
   return [...new Set(labels)];
+}
+
+function compactDisplayKey(value) {
+  return normalizedDisplayText(value)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('de-DE')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+export function parcelDisplayLocation(item = {}) {
+  const location = normalizedDisplayText(item.lage);
+  if (!location || location.length > PARCEL_LOCATION_DISPLAY_MAX_LENGTH) return '';
+  const locationKey = compactDisplayKey(location);
+  if (!locationKey) return '';
+  const addressKeys = new Set();
+  for (const label of selectionAddressLabels(item)) {
+    addressKeys.add(compactDisplayKey(label));
+    addressKeys.add(compactDisplayKey(label.split(',', 1)[0]));
+  }
+  for (const address of Array.isArray(item.addresses) ? item.addresses : []) {
+    if (!address || typeof address !== 'object') continue;
+    addressKeys.add(compactDisplayKey(address.street_house));
+    addressKeys.add(compactDisplayKey([address.street, address.house_number].filter(Boolean).join(' ')));
+  }
+  return addressKeys.has(locationKey) ? '' : location;
 }
 
 export function previewNoticeScrollOffset({ scrollLeft, scrollWidth, clientWidth }) {
@@ -182,14 +234,67 @@ export function withoutSelectionItem({ buildings = [], parcels = [] } = {}, kind
   };
 }
 
-export function createSelectionController({ map, api, store, layout, elements }) {
+export function welcomeHoverCandidate(features = []) {
+  const building = features.find((feature) => feature?.layer?.id === 'welcome-hover-building-hit');
+  const parcel = features.find((feature) => feature?.layer?.id === 'welcome-hover-parcel-hit');
+  const feature = building || parcel;
+  if (!feature) return null;
+  const id = feature.properties?.gml_id ?? feature.id;
+  if (id === null || id === undefined || String(id).trim() === '') return null;
+  const kind = building ? 'building' : 'parcel';
+  return {
+    id,
+    key: `${kind}:${String(id)}`,
+    kind,
+    sourceLayer: kind === 'building' ? 'building_fills' : 'surfaces'
+  };
+}
+
+export function waitForAccessReady(store) {
+  const current = store.getState().access;
+  if (current?.ready) return Promise.resolve(current);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsubscribe = () => {};
+    const finish = (state) => {
+      if (settled || !state?.access?.ready) return;
+      settled = true;
+      unsubscribe();
+      resolve(state.access);
+    };
+    unsubscribe = store.subscribe(finish);
+    finish(store.getState());
+  });
+}
+
+export function createSelectionController({
+  map,
+  api,
+  store,
+  layout,
+  elements,
+  isWelcomeMode = () => false,
+  onWelcomePointer = () => {}
+}) {
   const { selectionContent, selectionCount, selectTool, selectionDock } = elements;
   let request = null;
+  let restoreRequest = null;
   let geometryRequest = null;
   let flashTimers = [];
   let clearGeneration = 0;
   let clearObserver = null;
   let noticeAlignmentFrame = null;
+  let columnAlignmentFrame = null;
+  let welcomeHoverFrame = null;
+  let pendingWelcomeHoverPoint = null;
+  let activeWelcomeHover = null;
+  let welcomeOverlayRects = [];
+  let welcomeOverlayRectsAt = 0;
+  let welcomePointerVisible = false;
+  const fineHoverPointer = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(hover: hover) and (pointer: fine)')
+    : { matches: false };
 
   function featureCollection(items) {
     return { type: 'FeatureCollection', features: items.filter((item) => item.geometry).map((item) => ({ type: 'Feature', properties: { id: featureKey(item) }, geometry: item.geometry })) };
@@ -280,6 +385,133 @@ export function createSelectionController({ map, api, store, layout, elements })
     map.addLayer({ id: 'selected-buildings-v2', type: 'line', source: 'selected-buildings-v2', paint: { 'line-color': '#ed3c32', 'line-width': 2.8 } });
     map.addLayer({ id: 'search-highlight-parcels-v2', type: 'line', source: 'search-highlight-parcels-v2', paint: { 'line-color': '#ed3c32', 'line-width': 2.4, 'line-dasharray': [2.5, 1.35], 'line-opacity': 0 } });
     map.addLayer({ id: 'search-highlight-buildings-v2', type: 'line', source: 'search-highlight-buildings-v2', paint: { 'line-color': '#ed3c32', 'line-width': 2.8, 'line-opacity': 0 } });
+    setWelcomeMode(isWelcomeMode());
+  }
+
+  function restoreToolCursor() {
+    const activeTool = store.getState().activeTool;
+    const canvas = map.getCanvas?.();
+    if (canvas?.style) canvas.style.cursor = ['export', 'measure', 'select'].includes(activeTool) ? 'crosshair' : '';
+  }
+
+  function setWelcomeHoverState(candidate, enabled) {
+    if (!candidate || !map.getSource('alkis-v2')) return;
+    try {
+      map.setFeatureState({ source: 'alkis-v2', sourceLayer: candidate.sourceLayer, id: candidate.id }, { welcomeHover: enabled });
+    } catch (_) {
+      // Source tiles may be changing while the pointer leaves the map.
+    }
+  }
+
+  function publishWelcomePointer(point) {
+    if (!point) {
+      if (!welcomePointerVisible) return;
+      welcomePointerVisible = false;
+      onWelcomePointer(null);
+      return;
+    }
+    welcomePointerVisible = true;
+    onWelcomePointer({ x: point.x, y: point.y });
+  }
+
+  function refreshWelcomeOverlayRects() {
+    welcomeOverlayRectsAt = Date.now();
+    welcomeOverlayRects = [];
+    if (typeof window === 'undefined' || window.parent === window) return;
+    try {
+      const frameRect = window.frameElement?.getBoundingClientRect?.();
+      if (!frameRect) return;
+      const container = map.getContainer?.();
+      const scaleX = frameRect.width > 0 && container?.clientWidth > 0
+        ? frameRect.width / container.clientWidth
+        : 1;
+      const scaleY = frameRect.height > 0 && container?.clientHeight > 0
+        ? frameRect.height / container.clientHeight
+        : 1;
+      welcomeOverlayRects = [...window.parent.document.querySelectorAll('.welcome-page [data-welcome-blocker]')]
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0)
+        .map((rect) => ({
+          left: (rect.left - frameRect.left) / scaleX,
+          right: (rect.right - frameRect.left) / scaleX,
+          top: (rect.top - frameRect.top) / scaleY,
+          bottom: (rect.bottom - frameRect.top) / scaleY
+        }));
+    } catch (_) {
+      // Cross-origin embeddings simply rely on the parent clear-hover message.
+    }
+  }
+
+  function welcomeOverlayContains(point) {
+    if (!point || !isWelcomeMode()) return false;
+    if (Date.now() - welcomeOverlayRectsAt > 160) refreshWelcomeOverlayRects();
+    return welcomeOverlayRects.some((rect) => (
+      point.x >= rect.left && point.x <= rect.right &&
+      point.y >= rect.top && point.y <= rect.bottom
+    ));
+  }
+
+  function clearWelcomeFeature() {
+    setWelcomeHoverState(activeWelcomeHover, false);
+    activeWelcomeHover = null;
+    restoreToolCursor();
+  }
+
+  function clearWelcomeHover() {
+    if (welcomeHoverFrame !== null) window.cancelAnimationFrame(welcomeHoverFrame);
+    welcomeHoverFrame = null;
+    pendingWelcomeHoverPoint = null;
+    clearWelcomeFeature();
+    publishWelcomePointer(null);
+  }
+
+  function setWelcomeMode(enabled) {
+    welcomeOverlayRectsAt = 0;
+    for (const id of WELCOME_HOVER_LAYERS) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', enabled ? 'visible' : 'none');
+    }
+    for (const id of WELCOME_HIDDEN_SELECTION_LAYERS) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', enabled ? 'none' : 'visible');
+    }
+    if (!enabled) clearWelcomeHover();
+  }
+
+  function renderWelcomeHover() {
+    welcomeHoverFrame = null;
+    const point = pendingWelcomeHoverPoint;
+    pendingWelcomeHoverPoint = null;
+    if (!point || !isWelcomeMode() || !fineHoverPointer.matches || welcomeOverlayContains(point)) {
+      clearWelcomeHover();
+      return;
+    }
+    publishWelcomePointer(point);
+    if (map.getZoom() <= 17) {
+      clearWelcomeFeature();
+      return;
+    }
+    const layers = WELCOME_HOVER_HIT_LAYERS.filter((id) => map.getLayer(id));
+    let candidate = null;
+    if (layers.length) {
+      try {
+        candidate = welcomeHoverCandidate(map.queryRenderedFeatures([point.x, point.y], { layers }));
+      } catch (_) {
+        // A tile/style transition can invalidate a rendered query for one frame.
+      }
+    }
+    if (candidate?.key === activeWelcomeHover?.key) return;
+    setWelcomeHoverState(activeWelcomeHover, false);
+    activeWelcomeHover = candidate;
+    setWelcomeHoverState(activeWelcomeHover, true);
+  }
+
+  function scheduleWelcomeHover(event) {
+    const point = event?.point ? { x: event.point.x, y: event.point.y } : null;
+    if (!point || !isWelcomeMode() || !fineHoverPointer.matches || welcomeOverlayContains(point)) {
+      clearWelcomeHover();
+      return;
+    }
+    pendingWelcomeHoverPoint = point;
+    if (welcomeHoverFrame === null) welcomeHoverFrame = window.requestAnimationFrame(renderWelcomeHover);
   }
 
   function updateSources() {
@@ -320,13 +552,62 @@ export function createSelectionController({ map, api, store, layout, elements })
     noticeAlignmentFrame = window.requestAnimationFrame(alignPreviewNotices);
   }
 
+  function textWidth(element) {
+    const range = element?.ownerDocument?.createRange?.();
+    if (!range) return Number(element?.scrollWidth) || 0;
+    range.selectNodeContents(element);
+    return range.getBoundingClientRect().width;
+  }
+
+  function cellPadding(cell) {
+    const style = window.getComputedStyle(cell);
+    return (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
+  }
+
+  function addressCellContentWidth(cell) {
+    const entries = [...cell.querySelectorAll('.address-chip, .address-relation-note')];
+    return entries.length ? Math.max(...entries.map(textWidth)) : textWidth(cell);
+  }
+
+  function areaCellContentWidth(cell) {
+    const grid = cell.querySelector('.selection-area-grid');
+    if (!grid) return textWidth(cell);
+    const entries = [...grid.children];
+    const gap = Number.parseFloat(window.getComputedStyle(grid).columnGap) || 0;
+    const entryWidth = entries.length ? Math.max(...entries.map(textWidth)) : 0;
+    return entryWidth * entries.length + gap * Math.max(entries.length - 1, 0);
+  }
+
+  function alignSelectionColumns() {
+    columnAlignmentFrame = null;
+    if (!selectionContent.style || typeof selectionContent.querySelectorAll !== 'function') return;
+    const slots = [
+      { name: 'address', property: '--selection-address-width', measure: addressCellContentWidth },
+      { name: 'areas', property: '--selection-areas-width', measure: areaCellContentWidth }
+    ];
+    for (const slot of slots) selectionContent.style.removeProperty(slot.property);
+    for (const slot of slots) {
+      const cells = [...selectionContent.querySelectorAll(`[data-selection-column="${slot.name}"]`)];
+      if (!cells.length) continue;
+      const width = Math.ceil(Math.max(...cells.map((cell) => slot.measure(cell) + cellPadding(cell))));
+      if (Number.isFinite(width) && width > 0) selectionContent.style.setProperty(slot.property, `${width}px`);
+    }
+  }
+
+  function scheduleSelectionColumnAlignment() {
+    if (typeof window === 'undefined' || typeof selectionContent.querySelectorAll !== 'function') return;
+    if (columnAlignmentFrame !== null) return;
+    columnAlignmentFrame = window.requestAnimationFrame(alignSelectionColumns);
+  }
+
   function render(state = store.getState()) {
     const { parcels, buildings, loading } = state.selection;
-    const html = state.access.pro
+    const html = state.access.ready && state.access.pro
       ? [buildings.length ? buildingTable(buildings) : '', parcels.length ? parcelTable(parcels) : ''].join('')
       : freePreviewTable(buildings, parcels);
     if (selectionContent.innerHTML !== html) selectionContent.innerHTML = html;
     schedulePreviewNoticeAlignment();
+    scheduleSelectionColumnAlignment();
     const count = parcels.length + buildings.length;
     selectionCount.textContent = loading && !count ? 'Auswahl wird geladen' : count === 1 ? '1 Objekt ausgewählt' : `${count} Objekte ausgewählt`;
     updateSources();
@@ -337,9 +618,16 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function freePreviewTable(buildings, parcels) {
     const sections = [];
+    const buildingAreas = buildingAreaVisibility(buildings, { preview: true });
+    const showBuildingFloorArea = buildings.some((item) => Array.isArray(item.available_fields) && item.available_fields.includes('geschossflaeche_m2'));
+    const showBuildingObjectHeight = buildings.some((item) => (
+      !isBayernLod2Building(item)
+      && Array.isArray(item.available_fields)
+      && item.available_fields.includes('objekthoehe_m')
+    ));
     if (buildings.length) sections.push(lockedPreviewTable('Gebäude', buildings, [
       { label: 'Gebäudefunktion', keys: ['gebaeudefunktion_text', 'gebaeudefunktion'] },
-      { label: 'Name', keys: ['name'] },
+      { label: 'Name', keys: ['name'], value: buildingName },
       { label: 'Vollgeschosse', keys: ['geschosse_oberirdisch'], compact: true },
       { label: 'Unterirdische Geschosse', keys: ['geschosse_unterirdisch'], compact: true },
       { label: 'Dachform', keys: ['dachform_text', 'dachform'] },
@@ -348,13 +636,17 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Bauweise', keys: ['bauweise_text', 'bauweise'] },
       { label: 'Baujahr', keys: ['baujahr'], compact: true },
       { label: 'Umbauter Raum', keys: ['umbauter_raum_m3'], compact: true },
-      { label: 'Objekthöhe', keys: ['objekthoehe_m'], compact: true },
+      { label: 'Objekthöhe', keys: ['objekthoehe_m'], visible: showBuildingObjectHeight, compact: true },
       { label: 'Lage', keys: ['lage_zur_erdoberflaeche_text', 'lage_zur_erdoberflaeche'] },
       { label: 'Hochhaus', keys: ['hochhaus'], compact: true },
       { label: 'Weitere Gebäudefunktion', keys: ['weitere_gebaeudefunktion_text', 'weitere_gebaeudefunktion'] },
       { label: 'Zustand', keys: ['zustand_text', 'zustand'] },
       { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
-      { label: 'Flächen', keys: ['geschossflaeche_m2', ...BUILDING_OFFICIAL_AREA_KEYS, ...BUILDING_GEOMETRIC_AREA_KEYS], alwaysVisible: true, slot: 'areas' }
+      areaColumn([
+        { kind: 'floor', label: 'Geschossfläche', keys: ['geschossflaeche_m2'], visible: showBuildingFloorArea },
+        { kind: 'official', label: 'Amtliche Fläche', keys: BUILDING_OFFICIAL_AREA_KEYS, visible: buildingAreas.showOfficial },
+        { kind: 'geometric', label: 'Geometrische Fläche', keys: BUILDING_GEOMETRIC_AREA_KEYS, visible: buildingAreas.showGeometric }
+      ])
     ], 'building', 'Gebäudeinfos sind im Pro-Plan verfügbar.'));
     if (parcels.length) sections.push(lockedPreviewTable('Flurstücke', parcels, [
       { label: 'Gem.-Schl.', title: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'], compact: true },
@@ -362,13 +654,16 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Flur', keys: ['flur'], compact: true },
       { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], compact: true },
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'] },
+      { label: 'Lage', keys: ['lage'] },
       { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
       { label: 'Abweichender Rechtszustand', keys: ['abweichender_rechtszustand'] },
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'] },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'] },
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], compact: true },
       { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
-      { label: 'Flächen', keys: ['amtliche_flaeche_m2'], alwaysVisible: true, slot: 'areas' }
+      areaColumn([
+        { kind: 'official', label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
+      ])
     ], 'parcel', 'Flurstücksinfos sind im Pro-Plan verfügbar.'));
     return sections.join('');
   }
@@ -376,12 +671,50 @@ export function createSelectionController({ map, api, store, layout, elements })
   function lockedPreviewTable(title, items, definitions, kind, message) {
     const available = new Set(items.flatMap((item) => Array.isArray(item.available_fields) ? item.available_fields : []));
     const columns = definitions.filter((column) => column.visible !== false && (column.alwaysVisible || column.keys.some((key) => available.has(key))));
-    const headers = columns.map((column) => {
+    const firstSlotIndex = columns.findIndex((column) => column.slot);
+    const fillIndex = firstSlotIndex > 0 ? firstSlotIndex - 1 : -1;
+    const headers = columns.map((column, index) => {
       const fullLabel = column.title || column.label;
-      return `<th${tableColumnAttributes(column)} title="${escapeHtml(fullLabel)}">${escapeHtml(column.label)}</th>`;
+      const content = column.headerHtml || escapeHtml(column.label);
+      return `<th${tableColumnAttributes(column, index === fillIndex ? ['selection-column-fill'] : [])} title="${escapeHtml(fullLabel)}">${content}</th>`;
     }).join('');
-    const notice = `<tr class="selection-pro-notice"><td colspan="${Math.max(columns.length, 1)}"><span class="selection-pro-notice-copy" role="note"><span>${escapeHtml(message)}</span><a href="/pro" target="_top">Pro freischalten</a></span></td></tr>`;
-    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${headers}</tr></thead><tbody>${notice}</tbody></table></div></section>`;
+    const rows = items.map((item, rowIndex) => {
+      const availableFields = new Set(Array.isArray(item.available_fields) ? item.available_fields : []);
+      const cells = columns.map((column, columnIndex) => {
+        const attributes = tableColumnAttributes(column, columnIndex === fillIndex ? ['selection-column-fill'] : []);
+        const hasPreviewValue = column.keys.some((key) => availableFields.has(key));
+        if (!hasPreviewValue) return `<td${attributes}><span class="selection-locked-empty" aria-hidden="true">–</span></td>`;
+        const content = column.previewHtml
+          ? column.previewHtml(item, rowIndex)
+          : escapeHtml(lockedPreviewSample(column, rowIndex, columnIndex));
+        return `<td${attributes}><span class="selection-locked-value" aria-hidden="true">${content}</span></td>`;
+      }).join('');
+      return `<tr class="selection-locked-row">${previewSelectionActionCell(item, kind)}${cells}</tr>`;
+    }).join('');
+    const firstSummaryIndex = columns.findIndex((column) => typeof column.previewSummaryHtml === 'function');
+    const totals = items.length > 1 && firstSummaryIndex >= 0
+      ? `<tfoot><tr><td class="summary-label" colspan="${firstSummaryIndex + 1}">Summe</td>${columns.slice(firstSummaryIndex).map((column) => {
+        const attributes = tableColumnAttributes(column, ['summary-value']);
+        if (typeof column.previewSummaryHtml !== 'function') return `<td${attributes}></td>`;
+        return `<td${attributes}><span class="selection-locked-value selection-locked-summary" aria-hidden="true">${column.previewSummaryHtml()}</span></td>`;
+      }).join('')}</tr></tfoot>`
+      : '';
+    const notice = `<tr class="selection-pro-notice"><td colspan="${Math.max(columns.length + 1, 1)}"><span class="selection-pro-notice-copy" role="note"><span>${escapeHtml(message)}</span><a href="/pro" target="_top">Pro freischalten</a></span></td></tr>`;
+    return `<section class="selection-section" data-selection-kind="${kind}"><div class="selection-section-title">${escapeHtml(title)}</div><div class="selection-table-wrap"><table class="selection-data-table preview-table"><thead><tr>${selectionActionHeader()}${headers}</tr></thead><tbody>${rows}${notice}</tbody>${totals}</table></div></section>`;
+  }
+
+  function lockedPreviewSample(column, rowIndex, columnIndex) {
+    const label = String(column.title || column.label || '');
+    const sampleIndex = (rowIndex * 3 + columnIndex) % 3;
+    if (column.slot === 'address') return ['Musterstraße 12', 'Beispielweg 8', 'Am Markt 4'][sampleIndex];
+    if (/Gebäudefunktion/i.test(label)) return ['Wohngebäude', 'Nebengebäude', 'Garage'][sampleIndex];
+    if (/Gemarkungsschlüssel|Gem\.-Schl\./i.test(label)) return ['032410', '051230', '160510'][sampleIndex];
+    if (/Gemarkung/i.test(label)) return ['Musterfeld', 'Innenstadt', 'Nord'][sampleIndex];
+    if (/Flurstück/i.test(label)) return ['123/4', '77/9', '4752'][sampleIndex];
+    if (/Flur\b/i.test(label)) return ['7', '15', '0'][sampleIndex];
+    if (/Baujahr|Entstehung/i.test(label)) return ['1998', '2012', '2021'][sampleIndex];
+    if (column.compact) return ['2', '4', '7'][sampleIndex];
+    return ['Beispielangabe', 'Musterwert', 'Weitere Angabe'][sampleIndex];
   }
 
   function selectionActionHeader() {
@@ -391,6 +724,13 @@ export function createSelectionController({ map, api, store, layout, elements })
   function selectionActionCell(item, kind) {
     const noun = kind === 'parcel' ? 'Flurstück' : 'Gebäude';
     return `<td class="selection-action-column compact"><button class="selection-item-remove" type="button" data-selection-remove-kind="${kind}" data-selection-remove-key="${escapeHtml(featureKey(item))}" aria-label="${noun} aus Auswahl entfernen" title="Aus Auswahl entfernen">×</button></td>`;
+  }
+
+  function previewSelectionActionCell(item, kind) {
+    const key = typeof item?.preview_id === 'string' ? item.preview_id.trim() : '';
+    if (!key) return '<td class="selection-action-column compact"></td>';
+    const noun = kind === 'parcel' ? 'Flurstück' : 'Gebäude';
+    return `<td class="selection-action-column compact"><button class="selection-item-remove" type="button" data-selection-remove-kind="${kind}" data-selection-remove-key="${escapeHtml(key)}" aria-label="${noun} aus Auswahl entfernen" title="Aus Auswahl entfernen">×</button></td>`;
   }
 
   function tableColumnAttributes(column, additionalClasses = []) {
@@ -411,7 +751,14 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   function addressChips(item) {
     const labels = selectionAddressLabels(item);
-    return labels.length ? `<span class="address-list">${labels.map((label) => `<span class="address-chip">${escapeHtml(label)}</span>`).join('')}</span>` : '–';
+    const relationCount = Number(item?.address_relation_count);
+    const relationLimit = Number(item?.address_relation_limit);
+    const truncated = item?.address_relations_truncated === true && Number.isInteger(relationCount) && relationCount > 0;
+    const notice = truncated
+      ? `<span class="address-relation-note">${Number.isInteger(relationLimit) && relationLimit > 0 ? `${escapeHtml(relationLimit.toLocaleString('de-DE'))} von ${escapeHtml(relationCount.toLocaleString('de-DE'))} amtlichen Adresszuordnungen berücksichtigt` : `Von ${escapeHtml(relationCount.toLocaleString('de-DE'))} amtlichen Adresszuordnungen wurde nur ein Teil berücksichtigt`}</span>`
+      : '';
+    const chips = labels.map((label) => `<span class="address-chip">${escapeHtml(label)}</span>`).join('');
+    return chips || notice ? `<span class="address-list">${chips}${notice}</span>` : '–';
   }
 
   function parcelUsage(item) {
@@ -475,24 +822,48 @@ export function createSelectionController({ map, api, store, layout, elements })
     }).sort((a, b) => humanizeField(a).localeCompare(humanizeField(b), 'de')).map((key) => ({ label: humanizeField(key), keys: [key] }));
   }
 
-  function areaList(rows) {
+  function areaGrid(rows, { header = false } = {}) {
     if (!rows.length) return '–';
-    return `<span class="selection-area-list">${rows.map((row) => `<span class="selection-area-label">${escapeHtml(row.label)}</span><span class="selection-area-value">${formatCell(row.value, 'area')}</span>`).join('')}</span>`;
+    const className = header ? 'selection-area-grid selection-area-header' : 'selection-area-grid selection-area-values';
+    const entries = rows.map((row) => {
+      const content = header ? escapeHtml(row.label) : formatCell(row.value, 'area');
+      return `<span data-area-kind="${escapeHtml(row.kind)}">${content}</span>`;
+    }).join('');
+    return `<span class="${className}" style="--selection-area-count:${rows.length}">${entries}</span>`;
   }
 
   function areaColumn(rows) {
     const visibleRows = rows.filter((row) => row.visible !== false);
     const rowValue = (row, item) => row.value ? row.value(item) : pick(item, row.keys);
+    const label = visibleRows.map((row) => row.label).join(' / ');
     return {
-      label: 'Flächen',
-      keys: visibleRows.flatMap((row) => row.keys || []),
+      label,
+      title: label,
+      // Auch bewusst ausgeblendete Standardfelder gelten als verarbeitet.
+      // Andernfalls können sie als generische Rohdatenspalte zurückkehren.
+      keys: rows.flatMap((row) => row.keys || []),
       alwaysVisible: true,
+      visible: visibleRows.length > 0,
       slot: 'areas',
+      headerHtml: areaGrid(visibleRows, { header: true }),
+      previewSummaryHtml: () => areaGrid(visibleRows.map((row, areaIndex) => ({
+        ...row,
+        value: 1234 + areaIndex * 742
+      }))),
+      previewHtml: (item, rowIndex) => {
+        const availableFields = new Set(Array.isArray(item.available_fields) ? item.available_fields : []);
+        return areaGrid(visibleRows.map((row, areaIndex) => ({
+          ...row,
+          value: row.keys.some((key) => availableFields.has(key))
+            ? 486 + rowIndex * 137 + areaIndex * 59
+            : null
+        })));
+      },
       value: (item) => visibleRows.map((row) => rowValue(row, item)).filter(hasValue),
-      html: (item) => areaList(visibleRows.map((row) => ({ label: row.label, value: rowValue(row, item) }))),
-      summary: (items) => areaList(visibleRows.map((row) => {
+      html: (item) => areaGrid(visibleRows.map((row) => ({ ...row, value: rowValue(row, item) }))),
+      summary: (items) => areaGrid(visibleRows.map((row) => {
         const values = items.map((item) => rowValue(row, item)).filter(hasValue).map(Number).filter(Number.isFinite);
-        return { label: row.label, value: values.length ? values.reduce((sum, value) => sum + value, 0) : null };
+        return { ...row, value: values.length ? values.reduce((sum, value) => sum + value, 0) : null };
       }))
     };
   }
@@ -505,14 +876,17 @@ export function createSelectionController({ map, api, store, layout, elements })
       ? [...visibleDefinitions, ...extra]
       : [...visibleDefinitions.slice(0, firstTrailingIndex), ...extra, ...visibleDefinitions.slice(firstTrailingIndex)];
     const columns = orderedDefinitions.filter((column) => column.alwaysVisible || items.some((item) => hasValue(columnValue(column, item))));
-    const headers = columns.map((column) => {
+    const firstSlotIndex = columns.findIndex((column) => column.slot);
+    const fillIndex = firstSlotIndex > 0 ? firstSlotIndex - 1 : -1;
+    const headers = columns.map((column, index) => {
       const fullLabel = column.title || column.label;
-      return `<th${tableColumnAttributes(column)} title="${escapeHtml(fullLabel)}">${escapeHtml(column.label)}</th>`;
+      const content = column.headerHtml || escapeHtml(column.label);
+      return `<th${tableColumnAttributes(column, index === fillIndex ? ['selection-column-fill'] : [])} title="${escapeHtml(fullLabel)}">${content}</th>`;
     }).join('');
-    const rows = items.map((item) => `<tr>${selectionActionCell(item, kind)}${columns.map((column) => {
+    const rows = items.map((item) => `<tr>${selectionActionCell(item, kind)}${columns.map((column, index) => {
       const value = columnValue(column, item);
       const content = column.html ? column.html(item, value) : formatCell(value, column.format);
-      return `<td${tableColumnAttributes(column)}>${content}</td>`;
+      return `<td${tableColumnAttributes(column, index === fillIndex ? ['selection-column-fill'] : [])}>${content}</td>`;
     }).join('')}</tr>`).join('');
     const firstSumIndex = columns.findIndex((column) => column.sum || column.summary);
     const hasTotals = items.length > 1 && firstSumIndex >= 0;
@@ -530,7 +904,7 @@ export function createSelectionController({ map, api, store, layout, elements })
     const showFloorArea = buildings.some((item) => hasValue(item.geschossflaeche_m2));
     const columns = [
       { label: 'Gebäudefunktion', keys: ['gebaeudefunktion_text', 'gebaeudefunktion'] },
-      { label: 'Name', keys: ['name'] },
+      { label: 'Name', keys: ['name'], value: buildingName },
       { label: 'Vollgeschosse', keys: ['geschosse_oberirdisch'], compact: true },
       { label: 'Unterirdische Geschosse', keys: ['geschosse_unterirdisch'], compact: true },
       { label: 'Dachform', keys: ['dachform_text', 'dachform'] },
@@ -539,16 +913,23 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Bauweise', keys: ['bauweise_text', 'bauweise'] },
       { label: 'Baujahr', keys: ['baujahr'], compact: true },
       { label: 'Umbauter Raum', keys: ['umbauter_raum_m3'], format: 'volume', compact: true },
-      { label: 'Objekthöhe', keys: ['objekthoehe_m'], format: 'length', compact: true },
+      {
+        label: 'Objekthöhe',
+        keys: ['objekthoehe_m'],
+        value: (item) => isBayernLod2Building(item) ? null : item.objekthoehe_m,
+        format: 'length',
+        compact: true
+      },
       { label: 'Lage', keys: ['lage_zur_erdoberflaeche_text', 'lage_zur_erdoberflaeche'] },
       { label: 'Hochhaus', keys: ['hochhaus'], format: 'boolean', compact: true },
       { label: 'Weitere Gebäudefunktion', keys: ['weitere_gebaeudefunktion_text', 'weitere_gebaeudefunktion'] },
       { label: 'Zustand', keys: ['zustand_text', 'zustand'] },
       { label: 'Adressen', keys: ['addresses', 'address'], value: selectionAddressLabels, html: (item) => addressChips(item), alwaysVisible: true, slot: 'address' },
       areaColumn([
-        { label: 'Geschossfläche', keys: ['geschossflaeche_m2'], visible: showFloorArea },
-        { label: 'Amtliche Fläche', keys: BUILDING_OFFICIAL_AREA_KEYS, value: buildingOfficialArea, visible: areaVisibility.showOfficial },
+        { kind: 'floor', label: 'Geschossfläche', keys: ['geschossflaeche_m2'], visible: showFloorArea },
+        { kind: 'official', label: 'Amtliche Fläche', keys: BUILDING_OFFICIAL_AREA_KEYS, value: buildingOfficialArea, visible: areaVisibility.showOfficial },
         {
+          kind: 'geometric',
           label: 'Geometrische Fläche',
           keys: BUILDING_GEOMETRIC_AREA_KEYS,
           value: buildingGeometricArea,
@@ -566,6 +947,7 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Flur', keys: ['flur'], compact: true },
       { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], value: (item) => item.flurstueck || [item.zaehler, item.nenner].filter(Boolean).join('/'), compact: true },
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'], value: parcelUsage },
+      { label: 'Lage', keys: ['lage'], value: parcelDisplayLocation },
       { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
       { label: 'Abweichender Rechtszustand', keys: ['abweichender_rechtszustand'], format: 'boolean' },
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'], format: 'boolean' },
@@ -573,24 +955,28 @@ export function createSelectionController({ map, api, store, layout, elements })
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], format: 'date', compact: true },
       { label: 'Adressen', keys: ['addresses', 'address'], value: selectionAddressLabels, html: (item) => addressChips(item), alwaysVisible: true, slot: 'address' },
       areaColumn([
-        { label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
+        { kind: 'official', label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
       ])
     ];
     return dynamicTable('Flurstücke', parcels, columns, 'parcel');
   }
 
   async function selectAt(lngLat, additive = false, preferredKind = null) {
-    const state = store.getState();
     request?.abort();
-    request = new AbortController();
+    const controller = new AbortController();
+    request = controller;
+    const state = store.getState();
     selectTool.classList.add('is-loading');
     store.setState({ selection: { ...state.selection, loading: true } }, 'selection-loading');
     try {
-      const data = await (state.access.pro ? api.featureAt : api.featurePreviewAt)(
+      const access = await waitForAccessReady(store);
+      if (controller.signal.aborted || request !== controller) return null;
+      const data = await (access.pro ? api.featureAt : api.featurePreviewAt)(
         lngLat.lng,
         lngLat.lat,
-        request.signal
+        controller.signal
       );
+      if (controller.signal.aborted || request !== controller) return null;
       const next = store.getState();
       const hits = resolveHitStack({
         currentBuildings: next.selection.buildings,
@@ -601,12 +987,72 @@ export function createSelectionController({ map, api, store, layout, elements })
         preferredKind
       });
       store.setState({ selection: { ...hits, loading: false } }, 'selection');
+      return hits;
     } catch (error) {
-      if (error.name !== 'AbortError') console.error(error);
+      if (error.name === 'AbortError' || request !== controller) return null;
+      console.error(error);
       const current = store.getState();
       store.setState({ selection: { ...current.selection, loading: false } }, 'selection-error');
+      return null;
     } finally {
+      if (request === controller) {
+        request = null;
+        selectTool.classList.remove('is-loading');
+      }
+    }
+  }
+
+  async function restoreReferences(referenceSelection = {}) {
+    restoreRequest?.abort();
+    const controller = new AbortController();
+    restoreRequest = controller;
+    const normalized = normalizeSelectionReferences(referenceSelection);
+    selectTool.classList.add('is-loading');
+    store.setState({
+      selection: { parcels: [], buildings: [], loading: normalized.references.length > 0 }
+    }, 'selection-restore-loading');
+
+    if (!normalized.references.length) {
       selectTool.classList.remove('is-loading');
+      restoreRequest = null;
+      return {
+        applied: true,
+        selection: { parcels: [], buildings: [] },
+        missing: normalized.missing
+      };
+    }
+
+    try {
+      await waitForAccessReady(store);
+      if (controller.signal.aborted || restoreRequest !== controller) {
+        return { applied: false, aborted: true, selection: null, missing: [] };
+      }
+      const payload = await api.selectionPayload(normalized.references, controller.signal);
+      if (controller.signal.aborted || restoreRequest !== controller) {
+        return { applied: false, aborted: true, selection: null, missing: [] };
+      }
+      const restored = selectionFromPayload(payload);
+      store.setState({
+        selection: { ...restored.selection, loading: false }
+      }, 'selection-restore');
+      return {
+        applied: true,
+        selection: restored.selection,
+        missing: [...normalized.missing, ...restored.missing]
+      };
+    } catch (error) {
+      if (error?.name === 'AbortError' || restoreRequest !== controller) {
+        return { applied: false, aborted: true, selection: null, missing: [] };
+      }
+      store.setState({
+        selection: { parcels: [], buildings: [], loading: false }
+      }, 'selection-restore-error');
+      throw error;
+    } finally {
+      if (restoreRequest === controller) {
+        restoreRequest = null;
+        selectTool.classList.remove('is-loading');
+      }
     }
   }
 
@@ -671,7 +1117,13 @@ export function createSelectionController({ map, api, store, layout, elements })
 
   map.on('load', addLayers);
   selectionContent.addEventListener('scroll', schedulePreviewNoticeAlignment, { passive: true });
-  if (typeof window !== 'undefined') window.addEventListener('resize', schedulePreviewNoticeAlignment, { passive: true });
+  if (typeof window !== 'undefined') window.addEventListener('resize', () => {
+    welcomeOverlayRectsAt = 0;
+    clearWelcomeHover();
+    schedulePreviewNoticeAlignment();
+    scheduleSelectionColumnAlignment();
+  }, { passive: true });
+  if (typeof document !== 'undefined' && document.fonts?.ready) document.fonts.ready.then(scheduleSelectionColumnAlignment);
   selectionContent.addEventListener('click', (event) => {
     const button = event.target?.closest?.('[data-selection-remove-kind][data-selection-remove-key]');
     if (!button || !selectionContent.contains(button)) return;
@@ -684,11 +1136,20 @@ export function createSelectionController({ map, api, store, layout, elements })
     );
     store.setState({ selection: { ...current.selection, ...next } }, 'selection-item-remove');
   });
-  map.on('click', (event) => {
+  map.on('mousemove', scheduleWelcomeHover);
+  map.on('dragstart', clearWelcomeHover);
+  map.on('zoomstart', clearWelcomeFeature);
+  map.on('zoom', () => { if (map.getZoom() <= 17) clearWelcomeFeature(); });
+  map.getCanvas?.()?.addEventListener?.('mouseleave', clearWelcomeHover, { passive: true });
+  map.getCanvas?.()?.addEventListener?.('pointerleave', clearWelcomeHover, { passive: true });
+  if (typeof window !== 'undefined') window.addEventListener('blur', clearWelcomeHover, { passive: true });
+  map.on('click', async (event) => {
     if (store.getState().activeTool === 'select') {
-      selectAt(event.lngLat, true);
+      await selectAt(event.lngLat, true);
     }
   });
-  store.subscribe((state, reason) => { if (reason.startsWith('selection') || reason === 'restore') render(state); });
-  return { selectAt, flash, clear, render };
+  store.subscribe((state, reason) => {
+    if (reason.startsWith('selection') || ['restore', 'access', 'access-loading'].includes(reason)) render(state);
+  });
+  return { selectAt, restoreReferences, flash, clear, render, clearWelcomeHover, setWelcomeMode };
 }

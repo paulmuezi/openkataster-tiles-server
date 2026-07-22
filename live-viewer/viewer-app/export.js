@@ -93,6 +93,43 @@ function coordinateLocationLabel(value) {
   return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
 }
 
+function filenameSafe(value) {
+  return String(value || '')
+    .replaceAll('ß', 'ss')
+    .replaceAll('ẞ', 'SS')
+    .replaceAll('&', ' und ')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120);
+}
+
+function isCoordinateLocationLabel(value) {
+  return /^\s*[+-]?\d{1,2}(?:[.,]\d+)?\s*[,;]\s*[+-]?\d{1,3}(?:[.,]\d+)?\s*$/.test(String(value || ''));
+}
+
+export function exportLocationFilenameSegment(value) {
+  if (isCoordinateLocationLabel(value)) return 'Kartenausschnitt';
+  return filenameSafe(value) || 'Kartenausschnitt';
+}
+
+export async function resolveExportLocationLabel({ value, featureAt, selection }) {
+  try {
+    const features = await featureAt(value.lng, value.lat);
+    const centerLabel = locationLabelFromFeatures(features);
+    if (centerLabel) return centerLabel;
+  } catch (error) {
+    console.warn('[export] Standort am Exportzentrum konnte nicht aufgelöst werden.', error);
+  }
+
+  const selectionLabel = locationLabelFromFeatures({
+    buildings: selection?.buildings,
+    parcels: selection?.parcels
+  });
+  return selectionLabel || coordinateLocationLabel(value);
+}
+
 export function createExportController({
   map,
   api,
@@ -591,37 +628,16 @@ export function createExportController({
     return value.year + '-' + value.month + '-' + value.day;
   }
 
-  function filenameSafe(value) {
-    return String(value || '')
-      .replaceAll('ß', 'ss')
-      .replaceAll('ẞ', 'SS')
-      .replaceAll('&', ' und ')
-      .normalize('NFKD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^A-Za-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '')
-      .slice(0, 120);
-  }
-
   async function resolveExportLocation(value) {
-    try {
-      const features = await api.featureAt(value.lng, value.lat);
-      const centerLabel = locationLabelFromFeatures(features);
-      return centerLabel || coordinateLocationLabel(value);
-    } catch (error) {
-      console.warn('[export] Standort am Exportzentrum konnte nicht aufgelöst werden.', error);
-    }
-
-    const selection = store.getState().selection;
-    const selectionLabel = locationLabelFromFeatures({
-      buildings: selection.buildings,
-      parcels: selection.parcels
+    return resolveExportLocationLabel({
+      value,
+      featureAt: api.featureAt,
+      selection: store.getState().selection
     });
-    return selectionLabel || coordinateLocationLabel(value);
   }
 
   function exportFilenamePrefix(locationLabel) {
-    const address = filenameSafe(locationLabel) || 'Kartenausschnitt';
+    const address = exportLocationFilenameSegment(locationLabel);
     const format = exportPaper.value === 'ratio43' ? '4-3' : exportPaper.value.toUpperCase();
     return 'OpenKataster_' + address + '_1-' + exportScale.value + '_' + format + '_' + exportDateStamp();
   }

@@ -47,6 +47,8 @@ jobs:
           cache: pip
       - name: Install producer test dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gdal-bin
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pillow cryptography
       - name: Prepare isolated runtime paths
@@ -58,6 +60,7 @@ jobs:
           tests.test_extract_alkis_building_relation_patch
           tests.test_merge_alkis_feature_indexes
           tests.test_apply_alkis_building_relation_patch
+          tests.test_aerial_dop20_pilot
 
   viewer-node:
     runs-on: ubuntu-latest

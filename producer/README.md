@@ -51,3 +51,10 @@ the merged database is published atomically.
 
 Generated SQLite databases, compressed outputs, reports, and repair working
 directories are runtime artifacts and must remain outside this repository.
+
+## Aerial-image pilot
+
+`producer/aerial/dop20_pilot.py` provides a bounded, reproducible DOP20 pilot
+for one 1 km tile. It records source and licence metadata and creates a COG;
+it intentionally does not implement a nationwide WMS crawl. See
+`producer/aerial/README.md` for the Bavaria example and the production boundary.

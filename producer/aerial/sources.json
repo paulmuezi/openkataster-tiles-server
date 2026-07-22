@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "sources": {
+    "bayern": {
+      "title": "Digitale Orthophotos 20 cm (Bayern)",
+      "wms_url": "https://geoservices.bayern.de/od/wms/dop/v1/dop20",
+      "wms_version": "1.3.0",
+      "layer": "by_dop20c",
+      "metadata_layer": "by_dop20_info",
+      "crs": "EPSG:25832",
+      "tile_size_m": 1000,
+      "pixel_size_m": 0.2,
+      "max_request_pixels": 6000,
+      "formats": {
+        "image/jpeg": ".jpg",
+        "image/tiff": ".tif"
+      },
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "terms_url": "https://www.geodaten.bayern.de/odd/m/3/html/nutzungsbedingungen.html",
+        "attribution": "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de",
+        "modified_attribution": "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de (Daten verändert)"
+      },
+      "bulk_download": {
+        "preferred_for_production": true,
+        "product_url": "https://geodaten.bayern.de/opengeodata/OpenDataDetail.html?active=SERVICE&pn=dop20rgb"
+      }
+    }
+  }
+}

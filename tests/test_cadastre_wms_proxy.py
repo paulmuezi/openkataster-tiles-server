@@ -48,6 +48,7 @@ class CadastreWmsProxyTests(unittest.TestCase):
         self.assertEqual(params["CRS"], ["EPSG:3857"])
         self.assertEqual(params["WIDTH"], ["512"])
         self.assertEqual(params["HEIGHT"], ["512"])
+        self.assertEqual(params["DPI"], ["120"])
         self.assertEqual(params["TRANSPARENT"], ["true"])
         self.assertEqual(
             params["LAYERS"],
@@ -57,6 +58,28 @@ class CadastreWmsProxyTests(unittest.TestCase):
             ],
         )
         self.assertEqual(params["STYLES"], ["Farbe,Farbe,Farbe,Farbe,Farbe"])
+
+    def test_bavaria_request_uses_larger_screen_labels_without_changing_tile_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(main, "LUFTBILD_CACHE_DIR", Path(temp_dir)),
+                patch.object(main, "LUFTBILD_MIN_FREE_BYTES", 0),
+                patch.object(main, "_LUFTBILD_CACHE_LAST_CLEANUP", 0.0),
+                patch.object(main.urllib.request, "urlopen", return_value=_FakeResponse()) as urlopen,
+            ):
+                response = main.katasterbild_tile("bayern", 18, 139440, 90047)
+
+        self.assertEqual(response.status_code, 200)
+        request = urlopen.call_args.args[0]
+        params = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)
+        self.assertEqual(params["CRS"], ["EPSG:3857"])
+        self.assertEqual(params["WIDTH"], ["512"])
+        self.assertEqual(params["HEIGHT"], ["512"])
+        self.assertEqual(params["DPI"], ["120"])
+        self.assertEqual(params["LAYERS"], ["by_alkis_parzellarkarte_farbe"])
+        self.assertEqual(params["STYLES"], ["Farbe"])
+        self.assertIn("screen-dpi120", main.KATASTER_WMS_CONFIGS["bayern"]["revision"])
+        self.assertIn("screen-dpi120", main.KATASTER_WMS_CONFIGS["sachsen-anhalt"]["revision"])
 
     def test_unknown_state_and_out_of_range_zoom_never_reach_upstream(self) -> None:
         with patch.object(main.urllib.request, "urlopen") as urlopen:
@@ -91,7 +114,10 @@ class CadastreWmsProxyTests(unittest.TestCase):
         ):
             mixed_rows = main._api_v1_state_rows()
         by_slug = {row["slug"]: row for row in mixed_rows}
-        self.assertNotIn("rendering", by_slug["niedersachsen"])
+        self.assertNotIn(
+            "cadastre_raster",
+            by_slug["niedersachsen"].get("rendering", {}),
+        )
         self.assertTrue(by_slug["niedersachsen"]["active"])
         self.assertFalse(by_slug["bayern"]["active"])
         self.assertFalse(by_slug["bayern"]["interactive"])

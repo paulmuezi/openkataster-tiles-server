@@ -192,11 +192,12 @@ KATASTER_WMS_CONFIGS = {
         "version": "1.3.0",
         "transparent": True,
         "tile_size": 512,
+        "dpi": 120,
         "timeout": 20,
         "attempts": 2,
         "minzoom": 17,
         "maxzoom": 22,
-        "revision": "by-parzellarkarte-farbe-20260701-v1",
+        "revision": "by-parzellarkarte-farbe-screen-dpi120-v2",
         "attribution": "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de · CC BY 4.0",
         "cache_ttl_seconds": 24 * 60 * 60,
         "cache_control": "public, max-age=86400, stale-while-revalidate=3600",
@@ -218,11 +219,12 @@ KATASTER_WMS_CONFIGS = {
         "version": "1.3.0",
         "transparent": True,
         "tile_size": 512,
+        "dpi": 120,
         "timeout": 20,
         "attempts": 2,
         "minzoom": 17,
         "maxzoom": 22,
-        "revision": "st-adv-alkis-farbe-v1",
+        "revision": "st-adv-alkis-farbe-screen-dpi120-v2",
         "attribution": "© GeoBasis-DE / LVermGeo ST · Datenlizenz Deutschland – Namensnennung – Version 2.0",
         "cache_ttl_seconds": 24 * 60 * 60,
         "cache_control": "public, max-age=86400, stale-while-revalidate=3600",
@@ -14528,6 +14530,10 @@ def _wms_tile(
     except (TypeError, ValueError):
         tile_size = LUFTBILD_TILE_SIZE
     try:
+        output_dpi = max(0, min(600, int(config.get("dpi", 0))))
+    except (TypeError, ValueError):
+        output_dpi = 0
+    try:
         upstream_timeout = max(1.0, min(30.0, float(config.get("timeout", 20))))
     except (TypeError, ValueError):
         upstream_timeout = 20.0
@@ -14546,6 +14552,7 @@ def _wms_tile(
                 str(config.get("styles") or "default"),
                 str(config.get("version") or "1.3.0"),
                 "transparent" if config.get("transparent") else "opaque",
+                f"dpi-{output_dpi}" if output_dpi else "dpi-default",
             )
         )
     cache_path = _luftbild_cache_path(
@@ -14593,6 +14600,12 @@ def _wms_tile(
         "WIDTH": str(tile_size),
         "HEIGHT": str(tile_size),
     }
+    if output_dpi:
+        # XtraServer scales labels and cartographic symbols through the WMS
+        # DPI parameter. The XYZ BBOX and logical 512 px MapLibre tile stay
+        # unchanged, so this improves screen legibility without changing the
+        # map position, zoom level or feature geometry.
+        params["DPI"] = str(output_dpi)
     url = f"{config['url']}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(url, headers={"User-Agent": "OpenKataster/1.0"})
     data = b""

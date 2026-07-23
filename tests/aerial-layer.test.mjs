@@ -25,7 +25,7 @@ assert.match(sourcesSource, /onStateCapabilities\(state \|\| null\)/);
 assert.match(appSource, /state\?\.export\?\.dxf !== false/);
 assert.match(appSource, /dxfOption\.hidden = !dxfAvailable/);
 assert.match(appSource, /\.\/layers\.js\?v=20260722-hybrid-layers1/);
-assert.match(indexSource, /app\.js\?v=20260722-bayern-height1/);
-assert.match(indexSource, /styles\.css\?v=20260722-bayern-height1/);
+assert.match(indexSource, /app\.js\?v=20260722-schwerin-selection1/);
+assert.match(indexSource, /styles\.css\?v=20260722-land-register-table1/);
 
 console.log('aerial-layer-tests=ok');

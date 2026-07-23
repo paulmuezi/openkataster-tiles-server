@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -192,11 +192,16 @@ KATASTER_WMS_CONFIGS = {
         "version": "1.3.0",
         "transparent": True,
         "tile_size": 512,
+        "map_tile_size": 512,
+        "screen_dpi": 120,
+        "max_render_scale": 2,
+        "metatile_size": 2,
+        "bleed_pixels": 32,
         "timeout": 20,
         "attempts": 2,
         "minzoom": 17,
         "maxzoom": 22,
-        "revision": "by-parzellarkarte-farbe-20260701-v1",
+        "revision": "by-parzellarkarte-metatile2-dpi120-hidpi-v4",
         "attribution": "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de · CC BY 4.0",
         "cache_ttl_seconds": 24 * 60 * 60,
         "cache_control": "public, max-age=86400, stale-while-revalidate=3600",
@@ -218,11 +223,16 @@ KATASTER_WMS_CONFIGS = {
         "version": "1.3.0",
         "transparent": True,
         "tile_size": 512,
+        "map_tile_size": 512,
+        "screen_dpi": 120,
+        "max_render_scale": 2,
+        "metatile_size": 2,
+        "bleed_pixels": 32,
         "timeout": 20,
         "attempts": 2,
         "minzoom": 17,
         "maxzoom": 22,
-        "revision": "st-adv-alkis-farbe-v1",
+        "revision": "st-adv-alkis-metatile2-dpi120-hidpi-v4",
         "attribution": "© GeoBasis-DE / LVermGeo ST · Datenlizenz Deutschland – Namensnennung – Version 2.0",
         "cache_ttl_seconds": 24 * 60 * 60,
         "cache_control": "public, max-age=86400, stale-while-revalidate=3600",
@@ -383,7 +393,9 @@ def _write_luftbild_cache(cache_path: Path, data: bytes) -> bool:
         if _luftbild_cache_disk_free() - len(data) < LUFTBILD_MIN_FREE_BYTES:
             return False
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.tmp")
+        tmp_path = cache_path.with_name(
+            f".{cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
         try:
             tmp_path.write_bytes(data)
             os.replace(tmp_path, cache_path)
@@ -5578,8 +5590,11 @@ def result_from_feature(row: sqlite3.Row, geom=None) -> dict:
         geom = wkb.loads(bytes(row["geometry_wkb"]))
     properties = load_properties(row["properties_json"])
     kind = row["kind"]
-    properties["source_db"] = properties.get("source_db") or row["source_db"]
-    properties["gml_id"] = properties.get("gml_id") or row["gml_id"]
+    # The indexed columns are the trusted feature identity.  Presentation JSON
+    # can be stale (or malformed) and must never redirect relation lookups to a
+    # different source feature.
+    properties["source_db"] = str(row["source_db"] or "")
+    properties["gml_id"] = str(row["gml_id"] or "")
     properties["geometry"] = mapping(geom)
     min_lon, min_lat, max_lon, max_lat = geom.bounds
     point = geom.representative_point()
@@ -6444,7 +6459,7 @@ def query_features_in_index(path: Path, lon: float, lat: float) -> tuple[list[di
     parcels: list[dict] = []
     buildings: list[dict] = []
     state_key = state_key_for_feature_path(path)
-    with sqlite_feature_connection(path) as con:
+    with closing(sqlite_feature_connection(path)) as con:
         if compact_feature_schema(con):
             if sqlite_table_exists(con, "feature_geometries"):
                 if sqlite_table_exists(con, "feature_bbox_index"):
@@ -6585,8 +6600,10 @@ def query_features_in_index(path: Path, lon: float, lat: float) -> tuple[list[di
             if not (geom.covers(click) or geom.intersects(click)):
                 continue
             properties = load_properties(row["properties_json"])
-            properties["source_db"] = properties.get("source_db") or row["source_db"]
-            properties["gml_id"] = properties.get("gml_id") or row["gml_id"]
+            # Keep the same trusted identity contract as result_from_feature().
+            # formal land-register relations are keyed by this exact triple.
+            properties["source_db"] = str(row["source_db"] or "")
+            properties["gml_id"] = str(row["gml_id"] or "")
             if row["kind"] == "parcel":
                 enrich_gemarkung_from_lookup(path, properties)
             address_relations = addresses_for_feature(con, dict(row), geom)
@@ -6619,18 +6636,52 @@ def features_at_point_for_dataset(dataset: str, lon: float, lat: float) -> dict:
     if not entries:
         raise HTTPException(status_code=404, detail="feature index not found")
 
-    parcels: list[dict] = []
+    parcel_candidates: list[tuple[dict, FeatureDbEntry]] = []
     buildings: list[dict] = []
     for entry in entries:
         entry_parcels, entry_buildings = query_features_in_index(entry.path, lon, lat)
-        parcels.extend(entry_parcels)
+        parcel_candidates.extend((parcel, entry) for parcel in entry_parcels)
         buildings.extend(entry_buildings)
+
+    # The map table consumes the plain parcel property dictionaries returned by
+    # this endpoint, whereas the existing onOffice adapter enriches result
+    # wrappers.  Wrap only the final (already bounded) point-selection parcels,
+    # reuse the exact same 1:n resolver and request-wide 10k safety guard, then
+    # copy the public relation fields back.  Internal database paths remain on
+    # the temporary wrappers and can never enter the HTTP response.
+    selected_parcel_candidates = parcel_candidates[:16]
+    register_wrappers: list[dict] = []
+    for parcel, entry in selected_parcel_candidates:
+        register_wrappers.append(
+            {
+                "state": entry.name,
+                "kind": "parcel",
+                "source_db": str(parcel.get("source_db") or ""),
+                "gml_id": str(parcel.get("gml_id") or parcel.get("id") or ""),
+                "feature": parcel,
+                "_onoffice_feature_db_path": str(entry.path),
+            }
+        )
+    _enrich_onoffice_land_register_features(register_wrappers)
+    for (parcel, _entry), wrapper in zip(
+        selected_parcel_candidates,
+        register_wrappers,
+    ):
+        parcel["formal_land_register_entries"] = wrapper.get(
+            "formal_land_register_entries",
+            [],
+        )
+        authority = wrapper.get("land_register_office_authority")
+        if isinstance(authority, dict):
+            parcel["land_register_office_authority"] = authority
+        else:
+            parcel.pop("land_register_office_authority", None)
 
     return {
         "lon": lon,
         "lat": lat,
-        "count": len(parcels) + len(buildings),
-        "parcels": parcels[:16],
+        "count": len(parcel_candidates) + len(buildings),
+        "parcels": [parcel for parcel, _entry in selected_parcel_candidates],
         "buildings": buildings[:16],
     }
 
@@ -12757,10 +12808,13 @@ def _cadastre_rendering_capability(state_slug: str) -> dict | None:
     config = KATASTER_WMS_CONFIGS.get(state_slug)
     if not config:
         return None
+    max_scale = max(1, min(2, int(config.get("max_render_scale", 1))))
+    ratio_suffix = "{ratio}" if max_scale >= 2 else ""
     return {
         "profile": "official-wms-full-v1",
-        "tile_template": f"/katasterbild/{state_slug}/{{z}}/{{x}}/{{y}}.png",
-        "tile_size": int(config.get("tile_size", 512)),
+        "tile_template": f"/katasterbild/{state_slug}/{{z}}/{{x}}/{{y}}{ratio_suffix}.png",
+        "tile_size": int(config.get("map_tile_size", config.get("tile_size", 512))),
+        "max_scale": max_scale,
         "minzoom": int(config.get("minzoom", 17)),
         "maxzoom": int(config.get("maxzoom", 22)),
         "revision": str(config.get("revision") or "official-wms-v1"),
@@ -13673,6 +13727,7 @@ def _onoffice_feature_reference(raw: dict) -> dict:
 
 ONOFFICE_SELECTION_MAX_FEATURES = 50
 ONOFFICE_INTERSECTION_MAX_CANDIDATES = 200
+ONOFFICE_LAND_REGISTER_MAX_RELATIONS = 10_000
 
 
 def _onoffice_reference_key(reference: dict) -> tuple[str, str, str, str]:
@@ -13792,6 +13847,347 @@ def _onoffice_compact_addresses(
     )
 
 
+def _onoffice_natural_text_sort_key(value: object) -> tuple[tuple[object, ...], ...]:
+    text = str(value or "").strip()
+    if not text:
+        return ((0, "", ""),)
+    return tuple(
+        (1, int(part), len(part), part)
+        if part.isdigit()
+        else (0, part.casefold(), part)
+        for part in re.findall(r"\d+|\D+", text)
+    )
+
+
+def _onoffice_formal_land_register_entries(
+    con: sqlite3.Connection,
+    *,
+    source_db: str,
+    kind: str,
+    gml_id: str,
+) -> list[dict]:
+    """Return every formal sheet assignment for one exact feature reference.
+
+    The normalized relation is deliberately queried with the full trusted
+    feature identity.  In particular, a matching ``gml_id`` from another
+    source database must never leak into the onOffice payload.
+    """
+    if (
+        kind != "parcel"
+        or not source_db
+        or not gml_id
+        or not sqlite_table_exists(con, "formal_land_register_entries")
+        or not sqlite_table_exists(con, "feature_formal_land_register")
+    ):
+        return []
+    rows = con.execute(
+        """
+        SELECT
+            entry.book_key,
+            entry.land,
+            entry.district_code,
+            entry.sheet_number,
+            entry.district_name,
+            entry.land_register_office_land,
+            entry.land_register_office_code,
+            entry.land_register_office_name,
+            entry.completeness,
+            relation.resolution,
+            relation.resolution_depth,
+            relation.origin_book_key,
+            relation.relation_source_db
+        FROM feature_formal_land_register relation
+        JOIN formal_land_register_entries entry
+          ON entry.book_key = relation.book_key
+        WHERE relation.source_db = ?
+          AND relation.kind = ?
+          AND relation.gml_id = ?
+        """,
+        (source_db, kind, gml_id),
+    ).fetchall()
+    entries = [
+        {
+            "book_key": str(row["book_key"] or "").strip(),
+            "land": str(row["land"] or "").strip(),
+            "district_code": str(row["district_code"] or "").strip(),
+            "district_name": str(row["district_name"] or "").strip() or None,
+            "sheet_number": str(row["sheet_number"] or "").strip(),
+            "land_register_office_land": (
+                str(row["land_register_office_land"] or "").strip() or None
+            ),
+            "land_register_office_code": (
+                str(row["land_register_office_code"] or "").strip() or None
+            ),
+            "land_register_office_name": (
+                str(row["land_register_office_name"] or "").strip() or None
+            ),
+            "completeness": str(row["completeness"] or "").strip(),
+            "resolution": str(row["resolution"] or "").strip(),
+            "resolution_depth": int(row["resolution_depth"] or 0),
+            "origin_book_key": (
+                str(row["origin_book_key"] or "").strip() or None
+            ),
+            "relation_source_db": str(
+                row["relation_source_db"] or ""
+            ).strip(),
+        }
+        for row in rows
+    ]
+    entries.sort(
+        key=lambda entry: (
+            _onoffice_natural_text_sort_key(entry["land"]),
+            _onoffice_natural_text_sort_key(entry["district_name"]),
+            _onoffice_natural_text_sort_key(entry["district_code"]),
+            _onoffice_natural_text_sort_key(entry["sheet_number"]),
+            _onoffice_natural_text_sort_key(entry["book_key"]),
+            _onoffice_natural_text_sort_key(entry["resolution"]),
+            entry["resolution_depth"],
+        )
+    )
+    return entries
+
+
+def _onoffice_formal_land_register_entry_count(
+    con: sqlite3.Connection,
+    *,
+    source_db: str,
+    kind: str,
+    gml_id: str,
+) -> int:
+    if (
+        kind != "parcel"
+        or not source_db
+        or not gml_id
+        or not sqlite_table_exists(con, "formal_land_register_entries")
+        or not sqlite_table_exists(con, "feature_formal_land_register")
+    ):
+        return 0
+    row = con.execute(
+        """
+        SELECT COUNT(*) AS relation_count
+        FROM feature_formal_land_register relation
+        JOIN formal_land_register_entries entry
+          ON entry.book_key = relation.book_key
+        WHERE relation.source_db = ?
+          AND relation.kind = ?
+          AND relation.gml_id = ?
+        """,
+        (source_db, kind, gml_id),
+    ).fetchone()
+    return int(row["relation_count"] or 0) if row is not None else 0
+
+
+_ONOFFICE_LAND_REGISTER_AUTHORITY_OBJECTS = (
+    "feature_land_register_office_authority_status",
+    "feature_land_register_office_authority",
+    "land_register_office_authority_sources",
+    "formal_land_register_offices",
+)
+
+
+def _onoffice_land_register_office_authority_count(
+    con: sqlite3.Connection,
+    *,
+    source_db: str,
+    kind: str,
+    gml_id: str,
+) -> int:
+    if (
+        kind != "parcel"
+        or not source_db
+        or not gml_id
+        or any(
+            not sqlite_table_exists(con, name)
+            for name in _ONOFFICE_LAND_REGISTER_AUTHORITY_OBJECTS
+        )
+    ):
+        return 0
+    row = con.execute(
+        """
+        SELECT office_count
+        FROM feature_land_register_office_authority_status
+        WHERE source_db = ?
+          AND kind = ?
+          AND gml_id = ?
+        LIMIT 1
+        """,
+        (source_db, kind, gml_id),
+    ).fetchone()
+    return int(row["office_count"] or 0) if row is not None else 0
+
+
+def _onoffice_land_register_office_authority(
+    con: sqlite3.Connection,
+    *,
+    source_db: str,
+    kind: str,
+    gml_id: str,
+) -> dict | None:
+    """Return only explicitly linked authority data, never inferred sheets.
+
+    Authority references are a separate ALKIS path.  They can identify the
+    responsible office, but they do not establish a Grundbuchbezirk or a
+    Grundbuchblatt and therefore remain separate from formal sheet entries.
+    """
+    if (
+        kind != "parcel"
+        or not source_db
+        or not gml_id
+        or any(
+            not sqlite_table_exists(con, name)
+            for name in _ONOFFICE_LAND_REGISTER_AUTHORITY_OBJECTS
+        )
+    ):
+        return None
+    status_row = con.execute(
+        """
+        SELECT
+            winning_precedence,
+            office_count,
+            office_land,
+            office_code,
+            office_name,
+            status
+        FROM feature_land_register_office_authority_status
+        WHERE source_db = ?
+          AND kind = ?
+          AND gml_id = ?
+        LIMIT 1
+        """,
+        (source_db, kind, gml_id),
+    ).fetchone()
+    if status_row is None:
+        return None
+    winning_precedence = int(status_row["winning_precedence"])
+    office_rows = con.execute(
+        """
+        SELECT DISTINCT
+            source.office_land,
+            source.office_code,
+            office.office_name,
+            office.completeness
+        FROM features feature
+        JOIN feature_land_register_office_authority relation
+          ON relation.feature_id = feature.id
+        JOIN land_register_office_authority_sources source
+          ON source.id = relation.source_id
+        JOIN formal_land_register_offices office
+          ON office.land = source.office_land
+         AND office.office_code = source.office_code
+        WHERE feature.source_db = ?
+          AND feature.kind = ?
+          AND feature.gml_id = ?
+          AND source.precedence = ?
+        """,
+        (source_db, kind, gml_id, winning_precedence),
+    ).fetchall()
+    offices = [
+        {
+            "land": str(row["office_land"] or "").strip(),
+            "code": str(row["office_code"] or "").strip(),
+            "name": str(row["office_name"] or "").strip() or None,
+            "completeness": str(row["completeness"] or "").strip(),
+        }
+        for row in office_rows
+    ]
+    offices.sort(
+        key=lambda office: (
+            _onoffice_natural_text_sort_key(office["land"]),
+            _onoffice_natural_text_sort_key(office["name"]),
+            _onoffice_natural_text_sort_key(office["code"]),
+        )
+    )
+    return {
+        "status": str(status_row["status"] or "").strip(),
+        "winning_precedence": winning_precedence,
+        "office_count": int(status_row["office_count"] or 0),
+        "office_land": str(status_row["office_land"] or "").strip() or None,
+        "office_code": str(status_row["office_code"] or "").strip() or None,
+        "office_name": str(status_row["office_name"] or "").strip() or None,
+        "offices": offices,
+    }
+
+
+def _enrich_onoffice_land_register_features(features: list[dict]) -> None:
+    """Attach bounded, deduplicated 1:n register data to final selections.
+
+    Geometry expansion may encounter the same parcel multiple times.  Register
+    relations are therefore loaded only after the requested and expanded
+    feature lists have been deduplicated and checked against their 50-feature
+    limit.  A request-wide count happens before the first relation row is
+    materialized; oversized requests fail explicitly rather than truncating.
+    """
+    items_by_path_and_key: dict[
+        Path,
+        dict[tuple[str, str, str, str], list[dict]],
+    ] = {}
+    for item in features:
+        item["formal_land_register_entries"] = []
+        item.pop("land_register_office_authority", None)
+        reference = _onoffice_result_reference(item)
+        if reference["kind"] != "parcel":
+            continue
+        raw_path = item.get("_onoffice_feature_db_path")
+        if not isinstance(raw_path, str) or not raw_path:
+            continue
+        path = Path(raw_path)
+        reference_key = _onoffice_reference_key(reference)
+        items_by_path_and_key.setdefault(path, {}).setdefault(
+            reference_key,
+            [],
+        ).append(item)
+
+    relation_count = 0
+    for path, items_by_key in items_by_path_and_key.items():
+        con = sqlite_feature_connection(path)
+        try:
+            for reference_key in items_by_key:
+                _, kind, source_db, gml_id = reference_key
+                relation_count += _onoffice_formal_land_register_entry_count(
+                    con,
+                    source_db=source_db,
+                    kind=kind,
+                    gml_id=gml_id,
+                )
+                relation_count += _onoffice_land_register_office_authority_count(
+                    con,
+                    source_db=source_db,
+                    kind=kind,
+                    gml_id=gml_id,
+                )
+                if relation_count > ONOFFICE_LAND_REGISTER_MAX_RELATIONS:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="land register relation limit exceeded",
+                    )
+        finally:
+            con.close()
+
+    for path, items_by_key in items_by_path_and_key.items():
+        con = sqlite_feature_connection(path)
+        try:
+            for reference_key, matching_items in items_by_key.items():
+                _, kind, source_db, gml_id = reference_key
+                entries = _onoffice_formal_land_register_entries(
+                    con,
+                    source_db=source_db,
+                    kind=kind,
+                    gml_id=gml_id,
+                )
+                authority = _onoffice_land_register_office_authority(
+                    con,
+                    source_db=source_db,
+                    kind=kind,
+                    gml_id=gml_id,
+                )
+                for item in matching_items:
+                    item["formal_land_register_entries"] = entries
+                    if authority is not None:
+                        item["land_register_office_authority"] = authority
+        finally:
+            con.close()
+
+
 def _onoffice_detail_from_row(
     con: sqlite3.Connection,
     entry: FeatureDbEntry,
@@ -13824,6 +14220,15 @@ def _onoffice_detail_from_row(
     else:
         result = result_from_feature(row, geom)
         feature = result["feature"]
+        # The normalized JSON is presentation data and can be stale or
+        # inconsistent.  The standard schema's indexed columns are the
+        # trusted identity selected by _onoffice_standard_feature_row.
+        trusted_source_db = str(row["source_db"] or "").strip()
+        trusted_gml_id = str(row["gml_id"] or "").strip()
+        feature["source_db"] = trusted_source_db
+        feature["gml_id"] = trusted_gml_id
+        result["source_db"] = trusted_source_db
+        result["gml_id"] = trusted_gml_id
         if str(row["kind"] or "") == "parcel":
             enrich_gemarkung_from_lookup(entry.path, feature)
         address_relations = addresses_for_feature(con, dict(row), geom)
@@ -13843,6 +14248,7 @@ def _onoffice_detail_from_row(
         feature,
     )
     result["state"] = entry.name
+    result["_onoffice_feature_db_path"] = str(entry.path)
     return result
 
 
@@ -13899,7 +14305,7 @@ def resolve_onoffice_selection_feature(
 ) -> tuple[dict | None, list[dict], list[str]]:
     warnings: list[str] = []
     for entry in feature_geometry_entries_for_state(reference["state"]):
-        with sqlite_feature_connection(entry.path) as con:
+        with closing(sqlite_feature_connection(entry.path)) as con:
             compact = compact_feature_schema(con)
             row = (
                 _onoffice_compact_feature_row(con, reference)
@@ -14108,6 +14514,10 @@ def build_onoffice_selection_payload(
     ] = {}
     structured_parcels: list[dict] = []
     feature_payloads: list[dict] = []
+    formal_land_register_entry_count = 0
+    formal_land_register_parcel_count = 0
+    formal_land_register_multiple_parcel_count = 0
+    land_register_office_authority_parcel_count = 0
     for item in features:
         feature = item.get("feature") if isinstance(item.get("feature"), dict) else {}
         reference = _onoffice_result_reference(item)
@@ -14137,6 +14547,23 @@ def build_onoffice_selection_payload(
             if item.get("kind") == "parcel"
             else None
         )
+        formal_land_register_entries = (
+            item.get("formal_land_register_entries")
+            if isinstance(item.get("formal_land_register_entries"), list)
+            else []
+        )
+        land_register_office_authority = (
+            item.get("land_register_office_authority")
+            if isinstance(item.get("land_register_office_authority"), dict)
+            else None
+        )
+        formal_land_register_entry_count += len(formal_land_register_entries)
+        if item.get("kind") == "parcel" and formal_land_register_entries:
+            formal_land_register_parcel_count += 1
+            if len(formal_land_register_entries) > 1:
+                formal_land_register_multiple_parcel_count += 1
+        if item.get("kind") == "parcel" and land_register_office_authority:
+            land_register_office_authority_parcel_count += 1
         if cadastral is not None:
             structured_parcels.append(
                 {
@@ -14146,22 +14573,26 @@ def build_onoffice_selection_payload(
                 }
             )
         geometry = feature.get("geometry")
-        feature_payloads.append(
-            {
-                **reference,
-                "label": item.get("label"),
-                "subtitle": item.get("subtitle"),
-                "center": item.get("center"),
-                "bbox": item.get("bbox"),
-                "selection_origin": metadata.get("origin") or "requested",
-                "expanded_from": metadata.get("expanded_from") or [],
-                "addresses": feature_addresses,
-                "cadastral": cadastral,
-                "official_area_m2": official_area_m2,
-                "geometry": geometry if isinstance(geometry, dict) else None,
-                "properties": feature,
-            }
-        )
+        feature_payload = {
+            **reference,
+            "label": item.get("label"),
+            "subtitle": item.get("subtitle"),
+            "center": item.get("center"),
+            "bbox": item.get("bbox"),
+            "selection_origin": metadata.get("origin") or "requested",
+            "expanded_from": metadata.get("expanded_from") or [],
+            "addresses": feature_addresses,
+            "cadastral": cadastral,
+            "official_area_m2": official_area_m2,
+            "formal_land_register_entries": formal_land_register_entries,
+            "geometry": geometry if isinstance(geometry, dict) else None,
+            "properties": feature,
+        }
+        if land_register_office_authority is not None:
+            feature_payload["land_register_office_authority"] = (
+                land_register_office_authority
+            )
+        feature_payloads.append(feature_payload)
     suggested_fields = {
         "openkataster_adresse": "; ".join(addresses),
         "openkataster_flurstuecke": "; ".join(parcel_labels),
@@ -14186,6 +14617,14 @@ def build_onoffice_selection_payload(
             "address_count": len(addresses),
             "requested_count": requested_count,
             "expanded_count": len(feature_payloads) - requested_count,
+            "formal_land_register_entry_count": formal_land_register_entry_count,
+            "formal_land_register_parcel_count": formal_land_register_parcel_count,
+            "formal_land_register_multiple_parcel_count": (
+                formal_land_register_multiple_parcel_count
+            ),
+            "land_register_office_authority_parcel_count": (
+                land_register_office_authority_parcel_count
+            ),
         },
         "suggested_fields": suggested_fields,
         "structured_fields": {
@@ -14382,6 +14821,7 @@ def api_v1_onoffice_selection_payload(
             ],
         }
     features = [*requested_features, *expanded_features]
+    _enrich_onoffice_land_register_features(features)
     response = build_onoffice_selection_payload(
         features,
         selection_metadata=selection_metadata,
@@ -14492,6 +14932,79 @@ def bootstrap_backdrop(state: str) -> FileResponse:
     return FileResponse(path, media_type="image/webp")
 
 
+def _buffered_wms_frame(
+    bbox: list[float],
+    tile_size: int,
+    bleed_pixels: int,
+) -> tuple[list[float], int, int]:
+    """Expand a WMS request without changing its map units per pixel."""
+    bleed_pixels = max(0, min(tile_size // 4, int(bleed_pixels)))
+    if not bleed_pixels:
+        return list(bbox), tile_size, 0
+
+    min_x, min_y, max_x, max_y = bbox
+    units_per_pixel_x = (max_x - min_x) / tile_size
+    units_per_pixel_y = (max_y - min_y) / tile_size
+    buffered_bbox = [
+        min_x - bleed_pixels * units_per_pixel_x,
+        min_y - bleed_pixels * units_per_pixel_y,
+        max_x + bleed_pixels * units_per_pixel_x,
+        max_y + bleed_pixels * units_per_pixel_y,
+    ]
+    return buffered_bbox, tile_size + 2 * bleed_pixels, bleed_pixels
+
+
+_WMS_RENDER_LOCKS = tuple(threading.Lock() for _ in range(64))
+
+
+def _wms_render_lock(cache_key: str) -> threading.Lock:
+    digest = hashlib.sha256(cache_key.encode("utf-8")).digest()
+    return _WMS_RENDER_LOCKS[int.from_bytes(digest[:2], "big") % len(_WMS_RENDER_LOCKS)]
+
+
+def _split_wms_metatile(
+    data: bytes,
+    *,
+    request_size: int,
+    tile_size: int,
+    metatile_size: int,
+    bleed_pixels: int,
+    media_type: str,
+) -> dict[tuple[int, int], bytes]:
+    if metatile_size == 1 and not bleed_pixels:
+        return {(0, 0): data}
+
+    from io import BytesIO
+
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(BytesIO(data)) as source:
+            if source.size != (request_size, request_size):
+                raise ValueError(
+                    f"unexpected WMS image size {source.size!r}; "
+                    f"expected {(request_size, request_size)!r}"
+                )
+            source.load()
+            tiles: dict[tuple[int, int], bytes] = {}
+            for row in range(metatile_size):
+                for column in range(metatile_size):
+                    left = bleed_pixels + column * tile_size
+                    top = bleed_pixels + row * tile_size
+                    cropped = source.crop((left, top, left + tile_size, top + tile_size))
+                    output = BytesIO()
+                    if media_type == "image/jpeg":
+                        if cropped.mode not in {"L", "RGB"}:
+                            cropped = cropped.convert("RGB")
+                        cropped.save(output, format="JPEG", quality=92, subsampling=0)
+                    else:
+                        cropped.save(output, format="PNG", compress_level=6)
+                    tiles[(column, row)] = output.getvalue()
+            return tiles
+    except (OSError, UnidentifiedImageError, ValueError) as exc:
+        raise ValueError("invalid WMS metatile image") from exc
+
+
 def _wms_tile(
     state_slug: str,
     z: int,
@@ -14501,6 +15014,75 @@ def _wms_tile(
     configs: dict[str, dict],
     service_name: str,
     cache_namespace: str = "",
+    render_scale: int = 1,
+) -> Response:
+    config = configs.get(state_slug) or {}
+    try:
+        metatile_size = max(1, min(4, int(config.get("metatile_size", 1))))
+    except (TypeError, ValueError):
+        metatile_size = 1
+    if metatile_size == 1:
+        return _wms_tile_locked(
+            state_slug,
+            z,
+            x,
+            y,
+            configs=configs,
+            service_name=service_name,
+            cache_namespace=cache_namespace,
+            render_scale=render_scale,
+        )
+
+    anchor_x = x - x % metatile_size
+    anchor_y = y - y % metatile_size
+    lock_key = "\x1f".join(
+        (cache_namespace, state_slug, str(z), str(anchor_x), str(anchor_y), str(render_scale))
+    )
+    lock_digest = hashlib.sha256(lock_key.encode("utf-8")).digest()
+    with _wms_render_lock(lock_key):
+        lock_dir = LUFTBILD_CACHE_DIR / ".render-locks"
+        try:
+            lock_dir.mkdir(parents=True, exist_ok=True)
+            lock_path = lock_dir / f"{int.from_bytes(lock_digest[:2], 'big') % 64:02d}.lock"
+            lock_file = lock_path.open("a+b")
+        except OSError:
+            return _wms_tile_locked(
+                state_slug,
+                z,
+                x,
+                y,
+                configs=configs,
+                service_name=service_name,
+                cache_namespace=cache_namespace,
+                render_scale=render_scale,
+            )
+        with lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                return _wms_tile_locked(
+                    state_slug,
+                    z,
+                    x,
+                    y,
+                    configs=configs,
+                    service_name=service_name,
+                    cache_namespace=cache_namespace,
+                    render_scale=render_scale,
+                )
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _wms_tile_locked(
+    state_slug: str,
+    z: int,
+    x: int,
+    y: int,
+    *,
+    configs: dict[str, dict],
+    service_name: str,
+    cache_namespace: str = "",
+    render_scale: int = 1,
 ) -> Response:
     if state_slug not in configs:
         raise HTTPException(status_code=404, detail=f"{service_name} not configured")
@@ -14524,9 +15106,42 @@ def _wms_tile(
     image_format = str(config.get("format", "image/png"))
     media_type = _luftbild_media_type(image_format)
     try:
-        tile_size = max(256, min(2048, int(config.get("tile_size", LUFTBILD_TILE_SIZE))))
+        base_tile_size = max(256, min(2048, int(config.get("tile_size", LUFTBILD_TILE_SIZE))))
     except (TypeError, ValueError):
-        tile_size = LUFTBILD_TILE_SIZE
+        base_tile_size = LUFTBILD_TILE_SIZE
+    try:
+        map_tile_size = max(256, min(2048, int(config.get("map_tile_size", base_tile_size))))
+    except (TypeError, ValueError):
+        map_tile_size = base_tile_size
+    try:
+        max_render_scale = max(1, min(2, int(config.get("max_render_scale", 1))))
+        render_scale = int(render_scale)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid render scale") from exc
+    if render_scale < 1 or render_scale > max_render_scale:
+        raise HTTPException(status_code=400, detail="Invalid render scale")
+    tile_size = base_tile_size * render_scale
+    try:
+        screen_dpi = max(0, min(300, int(config.get("screen_dpi", config.get("dpi", 0)))))
+    except (TypeError, ValueError):
+        screen_dpi = 0
+    output_dpi = (
+        max(0, min(600, int(round(screen_dpi * tile_size / map_tile_size))))
+        if screen_dpi
+        else 0
+    )
+    try:
+        configured_bleed = max(0, int(config.get("bleed_pixels", 0)))
+    except (TypeError, ValueError):
+        configured_bleed = 0
+    bleed_pixels = max(
+        0,
+        min(tile_size // 4, int(round(configured_bleed * tile_size / map_tile_size))),
+    )
+    try:
+        metatile_size = max(1, min(4, int(config.get("metatile_size", 1))))
+    except (TypeError, ValueError):
+        metatile_size = 1
     try:
         upstream_timeout = max(1.0, min(30.0, float(config.get("timeout", 20))))
     except (TypeError, ValueError):
@@ -14539,15 +15154,25 @@ def _wms_tile(
     cache_state = f"{cache_namespace}-{state_slug}" if cache_namespace else state_slug
     cache_layer = str(layer)
     if cache_namespace:
-        cache_layer = "__".join(
+        revision = str(config.get("revision") or "v1")
+        cache_signature = "\x1f".join(
             (
-                str(config.get("revision") or "v1"),
+                revision,
                 str(layer),
                 str(config.get("styles") or "default"),
                 str(config.get("version") or "1.3.0"),
                 "transparent" if config.get("transparent") else "opaque",
+                f"logical-{map_tile_size}",
+                f"scale-{render_scale}",
+                f"screen-dpi-{screen_dpi}" if screen_dpi else "screen-dpi-default",
+                f"dpi-{output_dpi}" if output_dpi else "dpi-default",
+                f"metatile-{metatile_size}",
+                f"screen-bleed-{configured_bleed}",
+                f"physical-bleed-{bleed_pixels}",
             )
         )
+        cache_digest = hashlib.sha256(cache_signature.encode("utf-8")).hexdigest()[:20]
+        cache_layer = f"{revision}__{cache_digest}"
     cache_path = _luftbild_cache_path(
         cache_state,
         cache_layer,
@@ -14579,7 +15204,27 @@ def _wms_tile(
             },
         )
 
-    bbox, _center_lat = _luftbild_wms_bbox(config, z, x, y)
+    anchor_x = x - x % metatile_size
+    anchor_y = y - y % metatile_size
+    top_left_bbox, _center_lat = _luftbild_wms_bbox(config, z, anchor_x, anchor_y)
+    bottom_right_bbox, _center_lat = _luftbild_wms_bbox(
+        config,
+        z,
+        anchor_x + metatile_size - 1,
+        anchor_y + metatile_size - 1,
+    )
+    bbox = [
+        top_left_bbox[0],
+        bottom_right_bbox[1],
+        bottom_right_bbox[2],
+        top_left_bbox[3],
+    ]
+    metatile_pixel_size = tile_size * metatile_size
+    request_bbox, request_size, request_bleed_pixels = _buffered_wms_frame(
+        bbox,
+        metatile_pixel_size,
+        bleed_pixels,
+    )
     params = {
         "SERVICE": "WMS",
         "REQUEST": "GetMap",
@@ -14589,10 +15234,16 @@ def _wms_tile(
         "FORMAT": image_format,
         "TRANSPARENT": "true" if config.get("transparent") else "false",
         "CRS": config["crs"],
-        "BBOX": ",".join(f"{value:.3f}" for value in bbox),
-        "WIDTH": str(tile_size),
-        "HEIGHT": str(tile_size),
+        "BBOX": ",".join(f"{value:.3f}" for value in request_bbox),
+        "WIDTH": str(request_size),
+        "HEIGHT": str(request_size),
     }
+    if output_dpi:
+        # XtraServer scales labels and cartographic symbols through the WMS
+        # DPI parameter. For a 2x response the request DPI is doubled too, so
+        # downsampling to the logical MapLibre tile preserves the chosen
+        # on-screen symbol size.
+        params["DPI"] = str(output_dpi)
     url = f"{config['url']}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(url, headers={"User-Agent": "OpenKataster/1.0"})
     data = b""
@@ -14649,13 +15300,43 @@ def _wms_tile(
             headers={"Cache-Control": "no-store"},
         )
 
-    _write_luftbild_cache(cache_path, data)
+    try:
+        rendered_tiles = _split_wms_metatile(
+            data,
+            request_size=request_size,
+            tile_size=tile_size,
+            metatile_size=metatile_size,
+            bleed_pixels=request_bleed_pixels,
+            media_type=media_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"{service_name} WMS returned an invalid metatile image",
+            headers={"Cache-Control": "no-store"},
+        ) from exc
+
+    for (column, row), tile_data in rendered_tiles.items():
+        sibling_cache_path = _luftbild_cache_path(
+            cache_state,
+            cache_layer,
+            str(config["crs"]),
+            z,
+            anchor_x + column,
+            anchor_y + row,
+            tile_size=tile_size,
+            image_format=image_format,
+        )
+        _write_luftbild_cache(sibling_cache_path, tile_data)
+    data = rendered_tiles[(x - anchor_x, y - anchor_y)]
     return Response(
         content=data,
         media_type=media_type,
         headers={
             "Cache-Control": cache_control,
             "X-OpenKataster-Cache": "MISS",
+            "X-OpenKataster-Metatile": str(metatile_size),
+            "X-OpenKataster-Scale": str(render_scale),
         },
     )
 
@@ -14672,7 +15353,27 @@ def luftbild_tile(state_slug: str, z: int, x: int, y: int) -> Response:
     )
 
 
-@app.api_route("/katasterbild/{state_slug}/{z}/{x}/{y}.png", methods=["GET", "HEAD"])
+@app.api_route(
+    "/katasterbild/{state_slug}/{z:int}/{x:int}/{y:int}@2x.png",
+    methods=["GET", "HEAD"],
+)
+def katasterbild_tile_2x(state_slug: str, z: int, x: int, y: int) -> Response:
+    return _wms_tile(
+        state_slug,
+        z,
+        x,
+        y,
+        configs=KATASTER_WMS_CONFIGS,
+        service_name="Katasterbild",
+        cache_namespace="katasterbild",
+        render_scale=2,
+    )
+
+
+@app.api_route(
+    "/katasterbild/{state_slug}/{z:int}/{x:int}/{y:int}.png",
+    methods=["GET", "HEAD"],
+)
 def katasterbild_tile(state_slug: str, z: int, x: int, y: int) -> Response:
     return _wms_tile(
         state_slug,

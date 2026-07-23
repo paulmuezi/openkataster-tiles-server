@@ -75,6 +75,13 @@ export function createLayerController({ map, store, elements }) {
     return capability;
   }
 
+  function cadastreTileTemplate(capability) {
+    const template = String(capability?.tile_template || '');
+    return globalThis.navigator?.connection?.saveData === true
+      ? template.replace('{ratio}', '')
+      : template;
+  }
+
   function updateUnavailableStateMask() {
     const layerId = 'State_Overlay_Bavaria_SaxonyAnhalt_GeoJSON';
     if (!map.getLayer(layerId)) return;
@@ -275,11 +282,12 @@ export function createLayerController({ map, store, elements }) {
 
     const sourceId = `official-cadastre-${slug}`;
     const revision = encodeURIComponent(String(capability.revision || 'official-wms-v1'));
-    const separator = String(capability.tile_template).includes('?') ? '&' : '?';
+    const tileTemplate = cadastreTileTemplate(capability);
+    const separator = tileTemplate.includes('?') ? '&' : '?';
     if (!map.getSource(sourceId)) {
       map.addSource(sourceId, {
         type: 'raster',
-        tiles: [`${capability.tile_template}${separator}v=${revision}`],
+        tiles: [`${tileTemplate}${separator}v=${revision}`],
         tileSize: Number(capability.tile_size) || 512
       });
     }

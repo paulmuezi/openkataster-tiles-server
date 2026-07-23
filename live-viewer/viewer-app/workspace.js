@@ -136,7 +136,17 @@ function normalizedRestoredFeature(raw) {
     label: raw.label ?? properties.label ?? null,
     subtitle: raw.subtitle ?? properties.subtitle ?? null,
     center: Array.isArray(raw.center) ? raw.center : properties.center,
-    bbox: Array.isArray(raw.bbox) ? raw.bbox : properties.bbox
+    bbox: Array.isArray(raw.bbox) ? raw.bbox : properties.bbox,
+    formal_land_register_entries: Array.isArray(raw.formal_land_register_entries)
+      ? raw.formal_land_register_entries
+      : [],
+    land_register_office_authority: (
+      raw.land_register_office_authority
+      && typeof raw.land_register_office_authority === 'object'
+      && !Array.isArray(raw.land_register_office_authority)
+    )
+      ? raw.land_register_office_authority
+      : null
   };
 }
 

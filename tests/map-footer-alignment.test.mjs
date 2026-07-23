@@ -22,7 +22,7 @@ assert.match(
   /data-measure-panel-open="true"\] \.source-control,\s*[\s\S]*data-measure-panel-open="true"\] \.brand-mark \{ bottom: calc\(var\(--mobile-measure-bar-height\) \+ 8px \+ env\(safe-area-inset-bottom, 0px\)\); \}/,
   'source and brand stay aligned above the mobile measure bar'
 );
-assert.match(indexSource, /styles\.css\?v=20260722-bayern-height1/);
-assert.match(indexSource, /app\.js\?v=20260722-bayern-height1/);
+assert.match(indexSource, /styles\.css\?v=20260722-land-register-table1/);
+assert.match(indexSource, /app\.js\?v=20260722-schwerin-selection1/);
 
 console.log('map-footer-alignment-tests=ok');

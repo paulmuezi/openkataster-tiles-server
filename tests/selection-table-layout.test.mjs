@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { buildingAreaVisibility, createSelectionController, parcelDisplayLocation, previewNoticeScrollOffset, selectionAddressLabels } from '../live-viewer/viewer-app/selection.js';
+import { buildingAreaVisibility, createSelectionController, landRegisterGroups, parcelDisplayLocation, previewNoticeScrollOffset, selectionAddressLabels } from '../live-viewer/viewer-app/selection.js';
+import { selectionFromPayload } from '../live-viewer/viewer-app/workspace.js';
 
 for (const scenario of [
   { scrollLeft: 0, expected: 0 },
@@ -86,6 +87,114 @@ assert.equal(
   'Eine kurze, eigenständige katasterliche Lageangabe muss erhalten bleiben.'
 );
 
+assert.deepEqual(
+  landRegisterGroups({
+    formal_land_register_entries: [
+      {
+        land_register_office_name: 'Amtsgericht Schwerin',
+        land_register_office_code: '1270',
+        district_name: 'Badow',
+        district_code: '0001',
+        sheet_number: '108'
+      },
+      {
+        land_register_office_name: 'Amtsgericht Schwerin',
+        land_register_office_code: '1270',
+        district_name: 'Badow',
+        district_code: '0001',
+        sheet_number: '127'
+      },
+      {
+        land_register_office_name: 'Amtsgericht Stralsund',
+        land_register_office_code: '1250',
+        district_name: 'Binz',
+        district_code: '0217',
+        sheet_number: '9001'
+      }
+    ]
+  }),
+  [
+    {
+      office: 'Amtsgericht Schwerin',
+      officeCode: '1270',
+      district: 'Badow',
+      districtCode: '0001',
+      sheets: ['108', '127'],
+      authorityOnly: false
+    },
+    {
+      office: 'Amtsgericht Stralsund',
+      officeCode: '1250',
+      district: 'Binz',
+      districtCode: '0217',
+      sheets: ['9001'],
+      authorityOnly: false
+    }
+  ],
+  'Grundbuchblätter müssen nach ihrem echten Amtsgericht-/Grundbuch-Tupel gruppiert bleiben.'
+);
+
+assert.deepEqual(
+  landRegisterGroups({
+    land_register_office_authority: {
+      offices: [{ name: 'Amtsgericht Rostock', code: '1260' }]
+    }
+  }),
+  [{
+    office: 'Amtsgericht Rostock',
+    officeCode: '1260',
+    district: '',
+    districtCode: '',
+    sheets: [],
+    authorityOnly: true
+  }],
+  'Eine reine Dienststellenbeziehung darf Amtsgericht zeigen, aber kein Grundbuch oder Blatt erfinden.'
+);
+
+const restoredLandRegister = selectionFromPayload({
+  features: [{
+    state: 'mecklenburg-vorpommern',
+    kind: 'parcel',
+    source_db: 'alkis_mv',
+    gml_id: 'DEMV-test',
+    properties: { flurstueck: '12/3' },
+    formal_land_register_entries: [{ sheet_number: '108' }],
+    land_register_office_authority: { office_name: 'Amtsgericht Schwerin' }
+  }]
+});
+assert.deepEqual(
+  restoredLandRegister.selection.parcels[0].formal_land_register_entries,
+  [{ sheet_number: '108' }],
+  'Beim Wiederherstellen einer Auswahl dürfen top-level Grundbuchzuordnungen nicht verloren gehen.'
+);
+assert.equal(
+  restoredLandRegister.selection.parcels[0].land_register_office_authority.office_name,
+  'Amtsgericht Schwerin'
+);
+
+const stalePropertyRegister = selectionFromPayload({
+  features: [{
+    state: 'mecklenburg-vorpommern',
+    kind: 'parcel',
+    source_db: 'alkis_mv',
+    gml_id: 'DEMV-stale-register',
+    properties: {
+      formal_land_register_entries: [{ sheet_number: 'STALE-999' }],
+      land_register_office_authority: { office_name: 'Veraltetes Amtsgericht' }
+    }
+  }]
+});
+assert.deepEqual(
+  stalePropertyRegister.selection.parcels[0].formal_land_register_entries,
+  [],
+  'Veraltete Grundbuchdaten aus properties_json dürfen trusted Top-Level-Daten nicht ersetzen.'
+);
+assert.equal(
+  stalePropertyRegister.selection.parcels[0].land_register_office_authority,
+  null,
+  'Eine vom API bewusst ausgelassene Dienststellenzuordnung darf nicht aus properties_json wiederauferstehen.'
+);
+
 function renderSelection(selection, pro = true) {
   const state = {
     access: { ready: true, pro },
@@ -143,6 +252,47 @@ function areaEntries(fragment) {
 function areaRows(section) {
   return [...tablePart(section, 'tbody').matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map((match) => areaEntries(match[1]));
 }
+
+const landRegisterHtml = renderSelection({
+  buildings: [],
+  parcels: [{
+    source_db: 'alkis_mv',
+    gml_id: 'DEMV-land-register',
+    flurstueck: '12/3',
+    formal_land_register_entries: Array.from({ length: 7 }, (_value, index) => ({
+      land_register_office_name: 'Amtsgericht Schwerin',
+      land_register_office_code: '1270',
+      district_name: 'Badow',
+      district_code: '0001',
+      sheet_number: index === 6 ? '<script>7</script>' : String(index + 1)
+    }))
+  }]
+});
+const landRegisterSection = sectionFor(landRegisterHtml, 'parcel');
+assert.match(
+  tablePart(landRegisterSection, 'thead'),
+  /selection-land-register-header[\s\S]*Amtsgericht[\s\S]*Grundbuch[\s\S]*Grundbuchblatt/,
+  'Die drei fachlichen Grundbuchangaben müssen als klarer, gemeinsamer Tabellenblock beschriftet sein.'
+);
+assert.equal(
+  (landRegisterSection.match(/Amtsgericht Schwerin/g) || []).length,
+  1,
+  'Ein Gericht darf für mehrere Blätter desselben Grundbuchs nicht unnötig wiederholt werden.'
+);
+assert.match(landRegisterSection, /<summary>Weitere 2 anzeigen<\/summary>/, 'Mehr als fünf Blätter müssen kompakt aufklappbar bleiben.');
+assert.match(landRegisterSection, /max-height|selection-land-register-more-list/);
+assert.match(landRegisterSection, /&lt;script&gt;7&lt;\/script&gt;/, 'Auch Katalogtexte müssen HTML-sicher gerendert werden.');
+assert.doesNotMatch(landRegisterSection, /<script>7<\/script>/);
+
+const noLandRegisterHtml = renderSelection({
+  buildings: [],
+  parcels: [{ source_db: 'alkis_mv', gml_id: 'DEMV-no-register', flurstueck: '12/4' }]
+});
+assert.doesNotMatch(
+  tablePart(sectionFor(noLandRegisterHtml, 'parcel'), 'thead'),
+  /Amtsgericht|Grundbuchblatt/,
+  'Ohne Zuordnung darf kein leerer Grundbuchblock Platz in der Tabelle beanspruchen.'
+);
 
 const mixedBuildingHtml = renderSelection({
   parcels: [],
@@ -435,6 +585,26 @@ assert.match(freeParcelIdentityHtml, /<tr class="selection-pro-notice"><td colsp
 assert.equal((freeParcelIdentityHtml.match(/<tr class="selection-locked-row">/g) || []).length, 1, 'Free muss auch mit allen Grunddatenspalten genau eine sichere Vorschauzeile rendern.');
 assert.match(freeParcelIdentityHtml, /data-selection-remove-key="parcel-identity-free"/);
 assert.doesNotMatch(freeParcelIdentityHtml, /<tfoot>/, 'Ein einzelnes Free-Objekt darf keine Summenzeile erhalten.');
+
+const freeLandRegisterHtml = renderSelection({
+  buildings: [],
+  parcels: [{
+    preview_id: 'preview-land-register',
+    available_fields: ['flurstueck', 'formal_land_register_entries'],
+    formal_land_register_entries: [{
+      land_register_office_name: 'ECHTES GEHEIMES AMTSGERICHT',
+      district_name: 'ECHTES GEHEIMES GRUNDBUCH',
+      sheet_number: '999999'
+    }]
+  }]
+}, false);
+assert.match(freeLandRegisterHtml, /Amtsgericht[\s\S]*Grundbuch[\s\S]*Grundbuchblatt/);
+assert.match(freeLandRegisterHtml, /selection-locked-value/, 'Free darf die Verfügbarkeit nur mit geblurrten Beispielwerten andeuten.');
+assert.doesNotMatch(
+  freeLandRegisterHtml,
+  /ECHTES GEHEIMES|999999/,
+  'Free darf echte Grundbuchwerte auch dann nicht in den DOM übernehmen, wenn ein veralteter Zustand sie noch enthält.'
+);
 
 const freeSecretGuardHtml = renderSelection({
   buildings: [{

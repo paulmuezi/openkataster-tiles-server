@@ -134,9 +134,10 @@ export function createApi({ token = '', fresh = '', requestTokenRefresh = null }
   function addressSearchPath({ query = '', analyticsQuery = '', place = '', street = '', houseNumber = '', state = '', nearLon = null, nearLat = null, limit = 12 } = {}) {
     const base = viewerUrl('/api/v1/search/address');
     const normalizedQuery = String(query || '').trim();
+    const stateQuery = `&state=${encodeURIComponent(state)}`;
     const search = normalizedQuery
-      ? `&q=${encodeURIComponent(normalizedQuery)}`
-      : `&place=${encodeURIComponent(place)}&street=${encodeURIComponent(street)}&house_number=${encodeURIComponent(houseNumber)}&state=${encodeURIComponent(state)}`;
+      ? `&q=${encodeURIComponent(normalizedQuery)}${stateQuery}`
+      : `&place=${encodeURIComponent(place)}&street=${encodeURIComponent(street)}&house_number=${encodeURIComponent(houseNumber)}${stateQuery}`;
     const analyticsInput = String(analyticsQuery || '').trim();
     return `${base}${search}${analyticsInput ? `&analytics_query=${encodeURIComponent(analyticsInput)}` : ''}${nearbyQuery({ nearLon, nearLat })}&limit=${encodeURIComponent(limit)}`;
   }

@@ -88,6 +88,7 @@ export function createSourceController({
     const state = metadata?.states?.find((item) => item.slug === slug);
     onStateCapabilities(state || null);
     const detail = map.getZoom() >= Number(layerController.currentDetailZoom?.() || datasetProfile.detailZoom || 17);
+    const aerialDetail = map.getZoom() >= Number(layerController.currentAerialZoom?.() || datasetProfile.aerialZoom || datasetProfile.detailZoom || 17);
     const bkgVisible = layerController.isBasemapVisible();
     const visibleLayers = store.getState?.()?.layers || {};
     sourceList.replaceChildren();
@@ -127,8 +128,9 @@ export function createSourceController({
     }
     if (datasetProfile.unified && visibleLayers.alkis) {
       const zoom = map.getZoom();
+      const austriaDetailZoom = Number(datasetProfile.detailZoomByRegion?.oesterreich || 16);
       const austriaState = metadata?.states?.find((item) => item.slug === 'oesterreich');
-      if (zoom >= 14 && layerController.viewportIntersectsAustria?.()) {
+      if (zoom >= austriaDetailZoom && layerController.viewportIntersectsAustria?.()) {
         appendAttribution(
           austriaState?.rendering?.cadastre_vector?.attribution
           || austriaState?.quellenvermerk
@@ -140,7 +142,7 @@ export function createSourceController({
       }
     }
     const aerialCapability = state?.rendering?.aerial_raster;
-    if (detail && visibleLayers.aerial && aerialCapability?.tile_template) {
+    if (aerialDetail && visibleLayers.aerial && aerialCapability?.tile_template) {
       appendAttribution(aerialCapability.attribution || state?.quellenvermerk);
     }
     if (layerController.currentDataset?.() !== 'oesterreich') {

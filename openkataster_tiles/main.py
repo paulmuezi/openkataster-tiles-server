@@ -330,8 +330,8 @@ BEV_VECTOR_MAX_UNCOMPRESSED_BYTES = max(
     BEV_VECTOR_MAX_COMPRESSED_BYTES,
     int(os.environ.get("OPENKATASTER_BEV_VECTOR_MAX_UNCOMPRESSED_BYTES", str(16 * 1024 * 1024))),
 )
-BASEMAP_AT_GRAU_TEMPLATE = (
-    "https://mapsneu.wien.gv.at/basemap/bmapgrau/normal/google3857/{z}/{y}/{x}.png"
+BASEMAP_AT_STANDARD_TEMPLATE = (
+    "https://mapsneu.wien.gv.at/basemap/geolandbasemap/normal/google3857/{z}/{y}/{x}.png"
 )
 BASEMAP_AT_ORTHO_TEMPLATE = (
     "https://mapsneu.wien.gv.at/basemap/bmaporthofoto30cm/normal/google3857/{z}/{y}/{x}.jpeg"
@@ -13632,10 +13632,10 @@ def _austria_region_row() -> dict:
         "interactive": interactive,
         "rendering": {
             "basemap_raster": {
-                "profile": "basemap-at-grau-v1",
-                "tile_template": BASEMAP_AT_GRAU_TEMPLATE,
+                "profile": "basemap-at-standard-v1",
+                "tile_template": BASEMAP_AT_STANDARD_TEMPLATE,
                 "tile_size": 256,
-                "minzoom": 0,
+                "minzoom": 5.8,
                 "maxzoom": 19,
                 "attribution": "Grundkarte: basemap.at",
                 "presentation": "basemap",
@@ -13644,7 +13644,7 @@ def _austria_region_row() -> dict:
                 "profile": "basemap-at-ortho-v1",
                 "tile_template": BASEMAP_AT_ORTHO_TEMPLATE,
                 "tile_size": 256,
-                "minzoom": 0,
+                "minzoom": 14,
                 "maxzoom": 19,
                 "revision": "basemap-at-ortho-live-v1",
                 "attribution": "Luftbild: basemap.at",
@@ -13653,7 +13653,7 @@ def _austria_region_row() -> dict:
             "cadastre_vector": {
                 "profile": "bev-live-vector-v1",
                 "presentation": "full",
-                "minzoom": 14,
+                "minzoom": 16,
                 "maxzoom": 22,
                 "source_maxzoom": 16,
                 "attribution": BEV_ATTRIBUTION,

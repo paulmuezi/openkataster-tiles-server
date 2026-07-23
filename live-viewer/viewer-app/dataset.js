@@ -9,7 +9,8 @@ const DATASETS = Object.freeze({
     name: 'Deutschland und Österreich',
     defaultView: Object.freeze({ lng: 11.55, lat: 50.75, zoom: 4.3 }),
     detailZoom: 17,
-    detailZoomByRegion: Object.freeze({ deutschland: 17, oesterreich: 14 }),
+    detailZoomByRegion: Object.freeze({ deutschland: 17, oesterreich: 16 }),
+    aerialZoomByRegion: Object.freeze({ deutschland: 17, oesterreich: 14 }),
     nationalRegion: '',
     supportsPoi: true,
     unified: true,
@@ -27,7 +28,8 @@ const DATASETS = Object.freeze({
     countryCode: 'AT',
     name: 'Österreich',
     defaultView: Object.freeze({ lng: 14.20, lat: 47.60, zoom: 6.6 }),
-    detailZoom: 14,
+    detailZoom: 16,
+    aerialZoom: 14,
     nationalRegion: 'oesterreich',
     supportsPoi: false,
     terminology: Object.freeze({
@@ -301,7 +303,7 @@ export function austriaBasemapStyle() {
     sources: {
       'basemap-at': {
         type: 'raster',
-        tiles: ['https://mapsneu.wien.gv.at/basemap/bmapgrau/normal/google3857/{z}/{y}/{x}.png'],
+        tiles: ['https://mapsneu.wien.gv.at/basemap/geolandbasemap/normal/google3857/{z}/{y}/{x}.png'],
         tileSize: 256,
         minzoom: 0,
         maxzoom: 19,
@@ -309,8 +311,21 @@ export function austriaBasemapStyle() {
       }
     },
     layers: [
-      { id: 'background', type: 'background', paint: { 'background-color': '#f5f5f2' } },
-      { id: 'basemap-at-grau', type: 'raster', source: 'basemap-at', paint: { 'raster-fade-duration': 0 } }
+      { id: 'background', type: 'background', paint: { 'background-color': '#FFFDEE' } },
+      {
+        id: 'basemap-at-standard',
+        type: 'raster',
+        source: 'basemap-at',
+        minzoom: 5.8,
+        paint: {
+          'raster-opacity': .9,
+          'raster-saturation': -.08,
+          'raster-contrast': -.1,
+          'raster-brightness-min': .05,
+          'raster-brightness-max': .98,
+          'raster-fade-duration': 0
+        }
+      }
     ]
   };
 }

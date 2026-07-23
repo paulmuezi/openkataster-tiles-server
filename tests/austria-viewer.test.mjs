@@ -15,6 +15,11 @@ import {
 import { locationLabelFromFeatures } from '../live-viewer/viewer-app/export.js';
 import { readPersistedState } from '../live-viewer/viewer-app/persistence.js';
 import { parcelDisplayNumber } from '../live-viewer/viewer-app/selection.js';
+import {
+  AUSTRIA_USAGE_COLOR,
+  COUNTRY_OVERVIEW_LABELS,
+  COUNTRY_OVERVIEW_MAX_ZOOM
+} from '../live-viewer/viewer-app/layers.js';
 
 const appSource = readFileSync(new URL('../live-viewer/viewer-app/app.js', import.meta.url), 'utf8');
 const indexSource = readFileSync(new URL('../live-viewer/viewer-app/index.html', import.meta.url), 'utf8');
@@ -47,18 +52,39 @@ assert.deepEqual(austria.terminology, {
   parcelNumber: 'Grundstücksnummer',
   district: ''
 });
-assert.equal(austria.detailZoom, 14);
+assert.equal(austria.detailZoom, 16);
+assert.equal(austria.aerialZoom, 14);
 const unified = unifiedViewerProfile();
 assert.equal(unified.id, WORKSPACE_DATASET);
 assert.equal(unified.unified, true);
-assert.deepEqual(unified.detailZoomByRegion, { deutschland: 17, oesterreich: 14 });
+assert.deepEqual(unified.detailZoomByRegion, { deutschland: 17, oesterreich: 16 });
+assert.deepEqual(unified.aerialZoomByRegion, { deutschland: 17, oesterreich: 14 });
 
 const style = austriaBasemapStyle();
 assert.deepEqual(
   style.sources['basemap-at'].tiles,
-  ['https://mapsneu.wien.gv.at/basemap/bmapgrau/normal/google3857/{z}/{y}/{x}.png']
+  ['https://mapsneu.wien.gv.at/basemap/geolandbasemap/normal/google3857/{z}/{y}/{x}.png']
 );
 assert.equal(style.sources['basemap-at'].attribution, 'Grundkarte: basemap.at');
+assert.equal(style.layers.find((layer) => layer.id === 'basemap-at-standard')?.minzoom, COUNTRY_OVERVIEW_MAX_ZOOM);
+assert.equal(COUNTRY_OVERVIEW_MAX_ZOOM, 5.8);
+assert.deepEqual(
+  COUNTRY_OVERVIEW_LABELS.features.map((feature) => [feature.properties.name, feature.geometry.coordinates]),
+  [
+    ['Deutschland', [10.45, 51.16]],
+    ['Österreich', [14.12, 47.58]]
+  ]
+);
+
+const austriaPalette = new Map();
+for (let index = 2; index < AUSTRIA_USAGE_COLOR.length - 1; index += 2) {
+  austriaPalette.set(AUSTRIA_USAGE_COLOR[index], AUSTRIA_USAGE_COLOR[index + 1]);
+}
+for (const code of [59, 60, 64, 88]) assert.equal(austriaPalette.get(code), '#DCEFFF');
+assert.equal(austriaPalette.get(61), '#EAFFD3', 'Feuchtgebiete dürfen nicht als Gewässer erscheinen.');
+for (const code of [62, 87]) assert.equal(austriaPalette.get(code), '#F2F2EE');
+for (const code of [63, 84]) assert.equal(austriaPalette.get(code), '#EDEDED');
+assert.equal(AUSTRIA_USAGE_COLOR.at(-1), '#FFFDEE');
 
 function fakeElement({ dataset = {} } = {}) {
   const attributes = new Map();
@@ -154,6 +180,11 @@ assert.doesNotMatch(appSource, /openkataster:request-dataset/);
 
 assert.match(layerSource, /\/api\/v1\/bev\/tiles\/kataster\/\{z\}\/\{x\}\/\{y\}\.pbf/);
 assert.match(layerSource, /\/api\/v1\/bev\/tiles\/symbole\/\{z\}\/\{x\}\/\{y\}\.pbf/);
+assert.match(layerSource, /setLayerZoomRange\('Borders_States_Precise', COUNTRY_OVERVIEW_MAX_ZOOM, 22\)/);
+assert.match(layerSource, /setLayerZoomRange\('Labels_States_GeoJSON', COUNTRY_OVERVIEW_MAX_ZOOM, 24\)/);
+assert.match(layerSource, /const AT_AERIAL_ZOOM = Number\(datasetProfile\.aerialZoomByRegion\?\.oesterreich \|\| datasetProfile\.aerialZoom \|\| 14\)/);
+assert.match(layerSource, /updateAerial\(aerialDetail && layers\.aerial\)/);
+assert.match(layerSource, /layerMenu\.dataset\.detailUnavailable = detail \|\| aerialDetail \? 'false' : 'true'/);
 for (const sourceLayer of ['nfl', 'sli', 'gst', 'gnr', 'hnr', 'gp', 'ssb']) {
   assert.match(layerSource, new RegExp(`'source-layer': '${sourceLayer}'`));
 }

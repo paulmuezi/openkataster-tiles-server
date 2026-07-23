@@ -9,7 +9,7 @@ const stylesSource = readFileSync(new URL('../live-viewer/viewer-app/styles.css'
 assert.match(indexSource, /dataset\.preview = okParams\.get\('preview'\) === '1' \? 'true' : 'false'/);
 assert.match(indexSource, /dataset\.shellMode = okParams\.get\('welcome'\) === '1' \? 'welcome' : 'planner'/);
 assert.match(indexSource, /styles\.css\?v=20260723-unified1/);
-assert.match(indexSource, /app\.js\?v=20260723-unified3/);
+assert.match(indexSource, /app\.js\?v=20260723-unified4/);
 
 // The old preview contract remains isolated and non-persistent.
 assert.match(appSource, /const preview = params\.get\('preview'\) === '1'/);

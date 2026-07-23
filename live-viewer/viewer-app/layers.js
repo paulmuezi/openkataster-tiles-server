@@ -6,6 +6,45 @@ const AT_SYMBOL_SOURCE_ID = 'bev-symbole';
 const AT_LAYER_PREFIX = 'at-kataster-';
 const NO_STATE_MASK_FILTER = ['==', 'gen', '__openkataster_no_state__'];
 const GERMANY_BASEMAP_SOURCES = new Set(['smarttiles_de', 'germany_geojson', 'states_geojson', 'state_labels_source']);
+export const COUNTRY_OVERVIEW_MAX_ZOOM = 5.8;
+export const COUNTRY_OVERVIEW_LABELS = Object.freeze({
+  type: 'FeatureCollection',
+  features: [
+    { type: 'Feature', properties: { name: 'Deutschland' }, geometry: { type: 'Point', coordinates: [10.45, 51.16] } },
+    { type: 'Feature', properties: { name: 'Österreich' }, geometry: { type: 'Point', coordinates: [14.12, 47.58] } }
+  ]
+});
+export const AUSTRIA_USAGE_COLOR = Object.freeze([
+  'match', ['to-number', ['get', 'ns']],
+  40, '#FFF5BF',
+  42, '#FFFFFF',
+  48, '#FFF5BF',
+  52, '#EAFFD3',
+  53, '#FFF5BF',
+  54, '#EAFFD3',
+  55, '#DFF0B6',
+  56, '#DFF0B6',
+  57, '#EAFFD3',
+  58, '#FFFFFF',
+  59, '#DCEFFF',
+  60, '#DCEFFF',
+  61, '#EAFFD3',
+  62, '#F2F2EE',
+  63, '#EDEDED',
+  64, '#DCEFFF',
+  65, '#FFFFFF',
+  71, '#EDEDED',
+  72, '#E0FFD8',
+  76, '#E0FFD8',
+  83, '#FFEAF4',
+  84, '#EDEDED',
+  87, '#F2F2EE',
+  88, '#DCEFFF',
+  92, '#FFFFFF',
+  95, '#FFFFFF',
+  96, '#E0FFD8',
+  '#FFFDEE'
+]);
 
 const GROUPS = {
   surfaces: ['alkis-surface-fills', 'alkis-traffic-surface-fills', `${AT_LAYER_PREFIX}surface-fills`],
@@ -45,7 +84,9 @@ export function createLayerController({
 }) {
   const { layerButton, layerMenu, layerInputs, layerZoomNote, layerPresentationNote } = elements;
   const DE_DETAIL_ZOOM = Number(datasetProfile.detailZoomByRegion?.deutschland || datasetProfile.detailZoom || 17);
-  const AT_DETAIL_ZOOM = Number(datasetProfile.detailZoomByRegion?.oesterreich || 14);
+  const AT_DETAIL_ZOOM = Number(datasetProfile.detailZoomByRegion?.oesterreich || 16);
+  const DE_AERIAL_ZOOM = Number(datasetProfile.aerialZoomByRegion?.deutschland || DE_DETAIL_ZOOM);
+  const AT_AERIAL_ZOOM = Number(datasetProfile.aerialZoomByRegion?.oesterreich || datasetProfile.aerialZoom || 14);
   const layerControl = layerMenu?.closest('.layer-control');
   const baseVisibility = new Map();
   let stateFeatures = [];
@@ -100,6 +141,10 @@ export function createLayerController({
     return currentDataset() === 'oesterreich' ? AT_DETAIL_ZOOM : DE_DETAIL_ZOOM;
   }
 
+  function currentAerialZoom() {
+    return currentDataset() === 'oesterreich' ? AT_AERIAL_ZOOM : DE_AERIAL_ZOOM;
+  }
+
   function officialCadastreCapability(slug) {
     const state = sourceMetadata?.states?.find((candidate) => candidate?.slug === slug);
     const capability = state?.rendering?.cadastre_raster;
@@ -128,10 +173,25 @@ export function createLayerController({
   }
 
   function addAustriaBasemap() {
+    if (!map.getSource('openkataster-austria-overview')) {
+      map.addSource('openkataster-austria-overview', {
+        type: 'geojson',
+        data: '/viewer-assets/viewer-app/overlays/austria-boundary.json?v=20260723-country1'
+      });
+    }
+    if (!map.getLayer('openkataster-austria-overview-fill')) {
+      const before = map.getLayer('Germany_Fill_GeoJSON') ? 'Germany_Fill_GeoJSON' : undefined;
+      map.addLayer({
+        id: 'openkataster-austria-overview-fill',
+        type: 'fill',
+        source: 'openkataster-austria-overview',
+        paint: { 'fill-color': '#FFFDEE', 'fill-opacity': 1 }
+      }, before);
+    }
     if (!map.getSource('basemap-at')) {
       map.addSource('basemap-at', {
         type: 'raster',
-        tiles: ['https://mapsneu.wien.gv.at/basemap/bmapgrau/normal/google3857/{z}/{y}/{x}.png'],
+        tiles: ['https://mapsneu.wien.gv.at/basemap/geolandbasemap/normal/google3857/{z}/{y}/{x}.png'],
         tileSize: 256,
         minzoom: 0,
         maxzoom: 19,
@@ -139,14 +199,58 @@ export function createLayerController({
         attribution: 'Grundkarte: basemap.at'
       });
     }
-    if (!map.getLayer('basemap-at-grau')) {
+    if (!map.getLayer('basemap-at-standard')) {
       const before = map.getLayer('Germany_Fill_GeoJSON') ? 'Germany_Fill_GeoJSON' : undefined;
       map.addLayer({
-        id: 'basemap-at-grau',
+        id: 'basemap-at-standard',
         type: 'raster',
         source: 'basemap-at',
-        paint: { 'raster-fade-duration': 0 }
+        minzoom: COUNTRY_OVERVIEW_MAX_ZOOM,
+        paint: {
+          'raster-opacity': .9,
+          'raster-saturation': -.08,
+          'raster-contrast': -.1,
+          'raster-brightness-min': .05,
+          'raster-brightness-max': .98,
+          'raster-fade-duration': 0
+        }
       }, before);
+    }
+    if (!map.getSource('openkataster-country-overview-labels')) {
+      map.addSource('openkataster-country-overview-labels', {
+        type: 'geojson',
+        data: COUNTRY_OVERVIEW_LABELS
+      });
+    }
+    if (!map.getLayer('openkataster-country-overview-labels')) {
+      map.addLayer({
+        id: 'openkataster-country-overview-labels',
+        type: 'symbol',
+        source: 'openkataster-country-overview-labels',
+        minzoom: 0,
+        maxzoom: COUNTRY_OVERVIEW_MAX_ZOOM,
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-font': ['Noto Sans Bold'],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 3.2, 15, COUNTRY_OVERVIEW_MAX_ZOOM, 21],
+          'text-letter-spacing': .04,
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+          'symbol-placement': 'point'
+        },
+        paint: {
+          'text-color': '#333333',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 2,
+          'text-halo-blur': .5
+        }
+      });
+    }
+    if (map.getLayer('Borders_States_Precise')) {
+      map.setLayerZoomRange('Borders_States_Precise', COUNTRY_OVERVIEW_MAX_ZOOM, 22);
+    }
+    if (map.getLayer('Labels_States_GeoJSON')) {
+      map.setLayerZoomRange('Labels_States_GeoJSON', COUNTRY_OVERVIEW_MAX_ZOOM, 24);
     }
   }
 
@@ -263,26 +367,6 @@ export function createLayerController({
     });
     const before = firstToolLayer();
     const add = (layer) => map.addLayer(layer, before);
-    const usageColor = [
-      'match', ['to-number', ['get', 'ns']],
-      40, '#dff0b6',
-      42, '#ffffff',
-      48, '#dff0b6',
-      52, '#d6f3c2',
-      53, '#ead8b6',
-      54, '#f2e1c5',
-      55, '#c7ddbd',
-      56, '#b8d8ae',
-      57, '#c7ddbd',
-      58, '#ffffff',
-      61, '#dcefff',
-      62, '#dcefff',
-      63, '#dcefff',
-      71, '#ededed',
-      72, '#f7f7f4',
-      76, '#e0ffd8',
-      '#f2f2ee'
-    ];
     add({
       id: `${AT_LAYER_PREFIX}surface-fills`,
       type: 'fill',
@@ -290,7 +374,7 @@ export function createLayerController({
       'source-layer': 'nfl',
       minzoom: AT_DETAIL_ZOOM,
       filter: ['!=', ['to-number', ['get', 'ns']], 41],
-      paint: { 'fill-color': usageColor, 'fill-opacity': 1 }
+      paint: { 'fill-color': AUSTRIA_USAGE_COLOR, 'fill-opacity': 1 }
     });
     add({
       id: `${AT_LAYER_PREFIX}surface-lines`,
@@ -452,7 +536,7 @@ export function createLayerController({
 
   function updateAerial(show) {
     const slug = currentStateSlug();
-    const detailZoom = currentDetailZoom();
+    const aerialZoom = currentAerialZoom();
     const capability = aerialCapability(slug);
     if (!show || !capability) {
       for (const layer of map.getStyle().layers || []) if (String(layer.id).startsWith('aerial-') && map.getLayer(layer.id)) map.setLayoutProperty(layer.id, 'visibility', 'none');
@@ -476,7 +560,7 @@ export function createLayerController({
         id: sourceId,
         type: 'raster',
         source: sourceId,
-        minzoom: Number(capability.minzoom) || detailZoom,
+        minzoom: Math.max(Number(capability.minzoom) || 0, aerialZoom),
         paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 }
       }, currentDataset() === 'oesterreich' ? `${AT_LAYER_PREFIX}surface-fills` : 'alkis-surface-fills');
     }
@@ -556,7 +640,9 @@ export function createLayerController({
     const activeDataset = currentDataset();
     const austria = activeDataset === 'oesterreich';
     const detailZoom = currentDetailZoom();
+    const aerialZoom = currentAerialZoom();
     const detail = map.getZoom() >= detailZoom;
+    const aerialDetail = map.getZoom() >= aerialZoom;
     const germanyDetail = map.getZoom() >= DE_DETAIL_ZOOM;
     const austriaDetail = map.getZoom() >= AT_DETAIL_ZOOM;
     const layers = state.layers;
@@ -566,12 +652,19 @@ export function createLayerController({
     const fullPresentation = cadastreCapability?.presentation === 'full';
     document.body.dataset.detailLayers = detail ? 'enabled' : 'disabled';
     if (layerZoomNote) {
-      layerZoomNote.hidden = detail;
-      layerZoomNote.textContent = fullPresentation
-        ? 'Amtliche Gesamtdarstellung und Luftbild sind ab Zoom 17 verfügbar.'
-        : `${austria ? 'Kataster' : 'ALKIS'} und Luftbild sind ab Zoom ${detailZoom} verfügbar.`;
+      layerZoomNote.hidden = detail && (!aerial || aerialDetail);
+      if (fullPresentation) {
+        layerZoomNote.textContent = 'Amtliche Gesamtdarstellung und Luftbild sind ab Zoom 17 verfügbar.';
+      } else if (austria && aerial && aerialZoom !== detailZoom) {
+        const unavailable = [];
+        if (!aerialDetail) unavailable.push(`Luftbild ab Zoom ${aerialZoom}`);
+        if (!detail) unavailable.push(`Kataster ab Zoom ${detailZoom}`);
+        layerZoomNote.textContent = `${unavailable.join(' · ')}.`;
+      } else {
+        layerZoomNote.textContent = `${austria ? 'Kataster' : 'ALKIS'} und Luftbild sind ab Zoom ${detailZoom} verfügbar.`;
+      }
     }
-    if (layerMenu) layerMenu.dataset.detailUnavailable = detail ? 'false' : 'true';
+    if (layerMenu) layerMenu.dataset.detailUnavailable = detail || aerialDetail ? 'false' : 'true';
     if (layerMenu) layerMenu.dataset.cadastrePresentation = fullPresentation ? 'full' : 'individual';
     if (layerPresentationNote) layerPresentationNote.hidden = !fullPresentation;
     for (const [group, ids] of Object.entries(GROUPS)) {
@@ -601,20 +694,20 @@ export function createLayerController({
     if (map.getLayer(`${AT_LAYER_PREFIX}surface-fills`)) {
       map.setPaintProperty(`${AT_LAYER_PREFIX}surface-fills`, 'fill-opacity', austria && detail && layers.aerial ? .18 : 1);
     }
-    updateAerial(detail && layers.aerial);
+    updateAerial(aerialDetail && layers.aerial);
     updateOfficialCadastre(detail && layers.alkis, detail && layers.aerial);
     ensureRasterStack();
-    const detailBackground = detail && (
+    const detailBackground = (detail && (
       (layers.alkis && sourceReady(activeCadastre || (austria ? AT_KATASTER_SOURCE_ID : SOURCE_ID)))
-      || (layers.aerial && sourceReady(activeAerial))
-    );
+    )) || (aerialDetail && layers.aerial && sourceReady(activeAerial));
     setBasemapVisible('deutschland', !(!austria && detailBackground));
-    setBasemapVisible('oesterreich', !(austria && detail && layers.aerial && sourceReady(activeAerial)));
+    setBasemapVisible('oesterreich', !(austria && aerialDetail && layers.aerial && sourceReady(activeAerial)));
     for (const input of layerInputs) {
       input.checked = !!layers[input.dataset.layer];
       const isSublayer = !['alkis', 'aerial'].includes(input.dataset.layer);
       const unsupportedInAustria = austria && ['streetNames', 'buildingUsage', 'buildingLabels'].includes(input.dataset.layer);
-      input.disabled = unsupportedInAustria || !detail || (input.dataset.layer === 'aerial' && !aerial) || (fullPresentation && isSublayer);
+      const unavailableAtZoom = input.dataset.layer === 'aerial' ? !aerialDetail : !detail;
+      input.disabled = unsupportedInAustria || unavailableAtZoom || (input.dataset.layer === 'aerial' && !aerial) || (fullPresentation && isSublayer);
       const label = input.closest('label');
       if (label && unsupportedInAustria) label.hidden = true;
     }
@@ -644,7 +737,12 @@ export function createLayerController({
     store.setState({ layers }, 'layers');
   });
 
-  map.on('load', async () => { await loadStateFeatures(); addAlkisLayers(); apply(); });
+  map.on('load', async () => {
+    addAustriaBasemap();
+    await loadStateFeatures();
+    addAlkisLayers();
+    apply();
+  });
   map.on('zoom', () => apply());
   map.on('moveend', () => apply());
   map.on('sourcedata', (event) => {
@@ -656,6 +754,7 @@ export function createLayerController({
     currentStateSlug,
     currentDataset,
     currentDetailZoom,
+    currentAerialZoom,
     viewportIntersectsAustria: () => countryResolver?.intersectsAustria?.(map.getBounds()) === true,
     viewportInsideAustria: () => countryResolver?.containsAustria?.(map.getBounds()) === true,
     isBasemapVisible: () => basemapVisibility[currentDataset()],

@@ -581,6 +581,18 @@ class BevVectorProxyTests(unittest.TestCase):
             ],
         )
         catalog = main._austria_region_row()
+        self.assertEqual(
+            catalog["rendering"]["basemap_raster"]["profile"],
+            "basemap-at-standard-v1",
+        )
+        self.assertEqual(
+            catalog["rendering"]["basemap_raster"]["tile_template"],
+            "https://mapsneu.wien.gv.at/basemap/geolandbasemap/normal/"
+            "google3857/{z}/{y}/{x}.png",
+        )
+        self.assertEqual(catalog["rendering"]["basemap_raster"]["minzoom"], 5.8)
+        self.assertEqual(catalog["rendering"]["aerial_raster"]["minzoom"], 14)
+        self.assertEqual(catalog["rendering"]["cadastre_vector"]["minzoom"], 16)
         source_templates = {
             source["tile_template"]
             for source in catalog["rendering"]["cadastre_vector"]["sources"]

@@ -37,6 +37,7 @@ jobs:
           tests.test_search_analytics
           tests.test_search_runtime_fix
           tests.test_bev_vector_proxy
+          tests.test_austria_feature_normalization
           tests.test_cadastre_wms_proxy
           tests.test_luftbild_proxy
 

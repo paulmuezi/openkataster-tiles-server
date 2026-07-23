@@ -92,7 +92,7 @@ assert.doesNotMatch(hoverSection, /\bapi\./, 'Hover darf keine Serveranfrage aus
 assert.doesNotMatch(hoverSection, /\bfetch\(/, 'Hover darf keine Netzwerkanfrage auslösen.');
 
 assert.match(appSource, /\.\/layers\.js\?v=20260723-austria2/);
-assert.match(appSource, /\.\/selection\.js\?v=20260723-austria2/);
+assert.match(appSource, /\.\/selection\.js\?v=20260723-austria3/);
 assert.match(appSource, /isWelcomeMode: \(\) => shellMode === 'welcome'/);
 assert.match(appSource, /openkataster:welcome-pointer/);
 assert.match(appSource, /parentOrigin = window\.location\.origin/);

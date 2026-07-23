@@ -4448,6 +4448,33 @@ _SACHSEN_ANHALT_COMMON_FEATURE_FIELDS = frozenset(
     }
 )
 
+_AUSTRIA_FEATURE_SOURCE_KEYS = frozenset({AUSTRIA_DATASET, "austria-bev"})
+
+_AUSTRIA_BUILDING_FEATURE_FIELDS = _SACHSEN_ANHALT_COMMON_FEATURE_FIELDS | frozenset(
+    {
+        # The BEV source retains acquisition metadata, AGWR references and
+        # source timestamps in SQLite for auditability. The public object
+        # table only needs the actual building facts.
+        "gebaeudefunktion_text",
+        "geometrische_flaeche_m2",
+    }
+)
+
+_AUSTRIA_PARCEL_FEATURE_FIELDS = _SACHSEN_ANHALT_COMMON_FEATURE_FIELDS | frozenset(
+    {
+        "gemarkung",
+        "gemarkungsnummer",
+        "katastralgemeindenummer",
+        "flurstueck",
+        "grundstuecksnummer",
+        "zaehler",
+        "nenner",
+        "rechtsstatus_text",
+        "flaechenbestimmung",
+        "amtliche_flaeche_m2",
+    }
+)
+
 _SACHSEN_ANHALT_LOCATION_DISPLAY_MAX_LENGTH = 240
 
 _BAYERN_LOD2_BUILDING_FEATURE_FIELDS = _SACHSEN_ANHALT_COMMON_FEATURE_FIELDS | frozenset(
@@ -4637,26 +4664,38 @@ def normalize_feature_properties_for_response(state: str, kind: str, properties:
     intermediate data. Its JSON therefore contains renderer colors, duplicated
     aliases and a compact usage string. Keep that source untouched, but never
     leak those implementation fields into the object-information table. The
-    Bavarian LoD2 adapter similarly retains audit/provenance fields in SQLite
-    while exposing only meaningful building facts to the UI.
+    Bavarian LoD2 and Austrian BEV adapters similarly retain audit/provenance
+    fields in SQLite while exposing only meaningful object facts to the UI.
     """
     props = dict(properties or {})
     state_key = normalize_state_key(state)
     source_key = normalize_state_key(str(props.get("source_db") or ""))
     kind = str(kind or props.get("type") or "").strip().lower()
 
-    if state_key == AUSTRIA_DATASET or source_key == AUSTRIA_DATASET:
+    if state_key == AUSTRIA_DATASET or source_key in _AUSTRIA_FEATURE_SOURCE_KEYS:
         addresses = props.get("addresses")
         if isinstance(addresses, list):
+            normalized_addresses = []
             for address in addresses:
                 if isinstance(address, dict):
-                    address["country"] = "Österreich"
+                    address = {**address, "country": "Österreich"}
+                normalized_addresses.append(address)
+            props["addresses"] = normalized_addresses
         address = props.get("address")
         if isinstance(address, dict):
-            address["country"] = "Österreich"
-        props["country"] = "Österreich"
+            props["address"] = {**address, "country": "Österreich"}
         props.pop("flur", None)
-        return props
+        if kind == "building":
+            allowed = _AUSTRIA_BUILDING_FEATURE_FIELDS
+        elif kind == "parcel":
+            allowed = _AUSTRIA_PARCEL_FEATURE_FIELDS
+        else:
+            return props
+        return {
+            key: value
+            for key, value in props.items()
+            if key in allowed and value is not None and value != "" and value != [] and value != {}
+        }
 
     if source_key == "bayern-lod2" and kind == "building":
         return {

@@ -12,7 +12,9 @@ const HIDDEN_DYNAMIC_FIELDS = new Set([
 ]);
 
 const FIELD_LABELS = {
-  gemeindeteil: 'Gemeindeteil'
+  gemeindeteil: 'Gemeindeteil',
+  flaechenbestimmung: 'Flächenbestimmung',
+  rechtsstatus_text: 'Rechtsstatus'
 };
 
 const BUILDING_OFFICIAL_AREA_KEYS = ['amtliche_flaeche_m2', 'grundflaeche_m2'];

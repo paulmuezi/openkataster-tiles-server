@@ -16,6 +16,7 @@ import { parcelDisplayNumber } from '../live-viewer/viewer-app/selection.js';
 const appSource = readFileSync(new URL('../live-viewer/viewer-app/app.js', import.meta.url), 'utf8');
 const indexSource = readFileSync(new URL('../live-viewer/viewer-app/index.html', import.meta.url), 'utf8');
 const layerSource = readFileSync(new URL('../live-viewer/viewer-app/layers.js', import.meta.url), 'utf8');
+const selectionSource = readFileSync(new URL('../live-viewer/viewer-app/selection.js', import.meta.url), 'utf8');
 
 assert.equal(datasetIdFromLocation({ pathname: '/viewer/oesterreich', search: '' }), 'oesterreich');
 assert.equal(datasetIdFromLocation({ pathname: '/embed/deutschland', search: '?dataset=oesterreich' }), 'oesterreich');
@@ -158,5 +159,7 @@ assert.match(layerSource, /\/api\/v1\/bev\/tiles\/symbole\/\{z\}\/\{x\}\/\{y\}\.
 for (const sourceLayer of ['nfl', 'sli', 'gst', 'gnr', 'hnr', 'gp', 'ssb']) {
   assert.match(layerSource, new RegExp(`'source-layer': '${sourceLayer}'`));
 }
+assert.match(selectionSource, /flaechenbestimmung: 'Flächenbestimmung'/);
+assert.match(selectionSource, /rechtsstatus_text: 'Rechtsstatus'/);
 
 console.log('austria-viewer-tests=ok');

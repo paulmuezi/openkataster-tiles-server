@@ -819,6 +819,7 @@ export function createSelectionController({
     ], 'building', 'Gebäudeinfos sind im Pro-Plan verfügbar.'));
     if (parcels.length) {
       const copy = parcelSectionCopy(parcels);
+      const austriaOnly = parcelCollectionMode(parcels) === 'oesterreich';
       sections.push(lockedPreviewTable(copy.title, parcels, [
       ...parcelDistrictColumns(parcels),
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'] },
@@ -828,8 +829,8 @@ export function createSelectionController({
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'] },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'] },
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], compact: true },
-      { label: 'Rechtsstatus', keys: ['rechtsstatus_text'] },
-      { label: 'Flächenbestimmung', keys: ['flaechenbestimmung'] },
+      { label: 'Rechtsstatus', keys: ['rechtsstatus_text'], compact: austriaOnly },
+      { label: 'Flächenbestimmung', keys: ['flaechenbestimmung'], compact: austriaOnly },
       landRegisterColumn({ preview: true }),
       { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
       areaColumn([
@@ -1171,6 +1172,7 @@ export function createSelectionController({
 
   function parcelTable(parcels) {
     const copy = parcelSectionCopy(parcels);
+    const austriaOnly = parcelCollectionMode(parcels) === 'oesterreich';
     const columns = [
       ...parcelDistrictColumns(parcels),
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'], value: parcelUsage },
@@ -1180,8 +1182,8 @@ export function createSelectionController({
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'], format: 'boolean' },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'], format: 'boolean' },
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], format: 'date', compact: true },
-      { label: 'Rechtsstatus', keys: ['rechtsstatus_text'] },
-      { label: 'Flächenbestimmung', keys: ['flaechenbestimmung'] },
+      { label: 'Rechtsstatus', keys: ['rechtsstatus_text'], compact: austriaOnly },
+      { label: 'Flächenbestimmung', keys: ['flaechenbestimmung'], compact: austriaOnly },
       landRegisterColumn(),
       { label: 'Adressen', keys: ['addresses', 'address'], value: selectionAddressLabels, html: (item) => addressChips(item), alwaysVisible: true, slot: 'address' },
       areaColumn([

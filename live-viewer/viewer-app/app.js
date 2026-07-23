@@ -6,7 +6,7 @@ import { createPlannerMap } from './map.js?v=20260723-unified1';
 import { createMeasureController } from './measure.js?v=20260719-free-preview-controls1';
 import { createPersistence, readPersistedState } from './persistence.js?v=20260723-unified1';
 import { createSearchController } from './search.js?v=20260723-unified1';
-import { createSelectionController } from './selection.js?v=20260723-unified1';
+import { createSelectionController } from './selection.js?v=20260723-table2';
 import { createSourceController } from './sources.js?v=20260723-unified1';
 import { createStore } from './store.js';
 import {

@@ -127,8 +127,9 @@ class AustriaFeatureNormalizationTests(unittest.TestCase):
         self.assertEqual(normalized["gemarkung"], "St. Pölten")
         self.assertEqual(
             normalized["addresses"][0]["label"],
-            "Mühlweg 14, 3100 St.Pölten",
+            "Mühlweg 14, 3100 St. Pölten",
         )
+        self.assertEqual(normalized["addresses"][0]["city"], "St. Pölten")
         self.assertNotIn("bundesland", normalized)
 
     def test_search_variants_keep_current_and_legacy_kg_spellings(self) -> None:

@@ -495,8 +495,8 @@ assert.deepEqual(
 );
 assert.match(austriaParcelSection, />St\. Pölten \(19544\)<\/td>/);
 assert.match(austriaParcelSection, />1543\/14<\/td>/);
-assert.match(austriaParcelSection, />Grenzkataster<\/td>/);
-assert.match(austriaParcelSection, />aus Maßzahlen berechnet<\/td>/);
+assert.match(austriaParcelSection, /<td class="compact">Grenzkataster<\/td>/);
+assert.match(austriaParcelSection, /<td class="[^"]*\bcompact\b[^"]*">aus Maßzahlen berechnet<\/td>/);
 assert.match(austriaParcelSection, />409 m²</);
 assert.doesNotMatch(
   austriaParcelSection,

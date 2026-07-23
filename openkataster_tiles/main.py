@@ -4483,6 +4483,20 @@ def utf8_as_cp1252_search_variant(value: str | None) -> str:
         return ""
 
 
+def normalize_austria_address_text(value):
+    """Restore conventional spacing in compact BEV locality spellings."""
+    if isinstance(value, dict):
+        return {
+            key: normalize_austria_address_text(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [normalize_austria_address_text(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    return re.sub(r"\bSt\.(?=[^\W\d_])", "St. ", value)
+
+
 _SACHSEN_ANHALT_COMMON_FEATURE_FIELDS = frozenset(
     {
         # Stable references and trusted runtime geometry. These fields are not
@@ -4732,13 +4746,17 @@ def normalize_feature_properties_for_response(state: str, kind: str, properties:
         if isinstance(addresses, list):
             normalized_addresses = []
             for address in addresses:
+                address = normalize_austria_address_text(address)
                 if isinstance(address, dict):
                     address = {**address, "country": "Österreich"}
                 normalized_addresses.append(address)
             props["addresses"] = normalized_addresses
         address = props.get("address")
+        address = normalize_austria_address_text(address)
         if isinstance(address, dict):
             props["address"] = {**address, "country": "Österreich"}
+        elif address:
+            props["address"] = address
         props.pop("flur", None)
         if kind == "building":
             allowed = _AUSTRIA_BUILDING_FEATURE_FIELDS

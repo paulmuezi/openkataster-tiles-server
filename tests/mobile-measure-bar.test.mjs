@@ -108,7 +108,7 @@ assert.equal(
 );
 assert.equal(
   appVersion,
-  '20260723-unified4',
+  '20260723-unified5',
   'Der App-Einstieg muss den Österreich-Viewer-Stand invalidieren.'
 );
 console.log('mobile-measure-bar-tests=ok');

@@ -66,7 +66,28 @@ assert.deepEqual(
   ['https://mapsneu.wien.gv.at/basemap/geolandbasemap/normal/google3857/{z}/{y}/{x}.png']
 );
 assert.equal(style.sources['basemap-at'].attribution, 'Grundkarte: basemap.at');
+assert.deepEqual(
+  style.sources['basemap-at-overlay'].tiles,
+  ['https://mapsneu.wien.gv.at/basemap/bmapoverlay/normal/google3857/{z}/{y}/{x}.png']
+);
+assert.equal(style.sources['basemap-at-overlay'].maxzoom, 20);
+assert.equal(style.sources['basemap-at-overlay'].attribution, 'Datenquelle: basemap.at');
 assert.equal(style.layers.find((layer) => layer.id === 'basemap-at-standard')?.minzoom, COUNTRY_OVERVIEW_MAX_ZOOM);
+assert.deepEqual(
+  style.layers.find((layer) => layer.id === 'basemap-at-standard')?.paint?.['raster-opacity'],
+  ['interpolate', ['linear'], ['zoom'], 5.8, .84, 15.7, .84, 16.2, .62, 17.2, .18]
+);
+assert.match(layerSource, /id: AT_STREET_OVERLAY_LAYER_ID,[\s\S]*source: AT_STREET_OVERLAY_SOURCE_ID/);
+assert.match(layerSource, /bmapoverlay\/normal\/google3857/);
+assert.match(layerSource, /id: AT_STREET_LABEL_LAYER_ID,[\s\S]*\['get', 'text'\][\s\S]*\['get', 'rot_nr'\]/);
+assert.match(
+  layerSource,
+  /id: `\$\{AT_LAYER_PREFIX\}symbols`[\s\S]*filter: \['!=', \['to-number', \['get', 'typ'\]\], 200\]/
+);
+assert.doesNotMatch(
+  layerSource,
+  /\['streetNames', 'buildingUsage', 'buildingLabels'\]\.includes\(input\.dataset\.layer\)/
+);
 assert.equal(COUNTRY_OVERVIEW_MAX_ZOOM, 5.8);
 assert.deepEqual(
   COUNTRY_OVERVIEW_LABELS.features.map((feature) => [feature.properties.name, feature.geometry.coordinates]),

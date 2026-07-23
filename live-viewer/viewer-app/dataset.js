@@ -308,6 +308,14 @@ export function austriaBasemapStyle() {
         minzoom: 0,
         maxzoom: 19,
         attribution: 'Grundkarte: basemap.at'
+      },
+      'basemap-at-overlay': {
+        type: 'raster',
+        tiles: ['https://mapsneu.wien.gv.at/basemap/bmapoverlay/normal/google3857/{z}/{y}/{x}.png'],
+        tileSize: 256,
+        minzoom: 0,
+        maxzoom: 20,
+        attribution: 'Datenquelle: basemap.at'
       }
     },
     layers: [
@@ -318,11 +326,17 @@ export function austriaBasemapStyle() {
         source: 'basemap-at',
         minzoom: 5.8,
         paint: {
-          'raster-opacity': .9,
-          'raster-saturation': -.08,
-          'raster-contrast': -.1,
-          'raster-brightness-min': .05,
-          'raster-brightness-max': .98,
+          'raster-opacity': [
+            'interpolate', ['linear'], ['zoom'],
+            5.8, .84,
+            15.7, .84,
+            16.2, .62,
+            17.2, .18
+          ],
+          'raster-saturation': -.22,
+          'raster-contrast': -.14,
+          'raster-brightness-min': .07,
+          'raster-brightness-max': .99,
           'raster-fade-duration': 0
         }
       }

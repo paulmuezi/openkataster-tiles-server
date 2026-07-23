@@ -1,6 +1,6 @@
 import { createUnifiedApi } from './api.js?v=20260723-unified1';
 import { createExportController } from './export.js?v=20260723-unified1';
-import { createLayerController } from './layers.js?v=20260723-country1';
+import { createLayerController } from './layers.js?v=20260723-country2';
 import { createLayout } from './layout.js?v=20260719-table-autofit1';
 import { createPlannerMap } from './map.js?v=20260723-unified1';
 import { createMeasureController } from './measure.js?v=20260719-free-preview-controls1';
@@ -15,7 +15,7 @@ import {
   datasetIdFromLocation,
   unifiedViewerProfile,
   WORKSPACE_DATASET
-} from './dataset.js?v=20260723-country1';
+} from './dataset.js?v=20260723-country2';
 import {
   WORKSPACE_VERSION,
   normalizeLayerVisibility,

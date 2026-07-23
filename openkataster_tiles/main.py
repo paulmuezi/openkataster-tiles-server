@@ -333,6 +333,9 @@ BEV_VECTOR_MAX_UNCOMPRESSED_BYTES = max(
 BASEMAP_AT_STANDARD_TEMPLATE = (
     "https://mapsneu.wien.gv.at/basemap/geolandbasemap/normal/google3857/{z}/{y}/{x}.png"
 )
+BASEMAP_AT_OVERLAY_TEMPLATE = (
+    "https://mapsneu.wien.gv.at/basemap/bmapoverlay/normal/google3857/{z}/{y}/{x}.png"
+)
 BASEMAP_AT_ORTHO_TEMPLATE = (
     "https://mapsneu.wien.gv.at/basemap/bmaporthofoto30cm/normal/google3857/{z}/{y}/{x}.jpeg"
 )
@@ -13639,6 +13642,15 @@ def _austria_region_row() -> dict:
                 "maxzoom": 19,
                 "attribution": "Grundkarte: basemap.at",
                 "presentation": "basemap",
+            },
+            "label_overlay_raster": {
+                "profile": "basemap-at-overlay-v1",
+                "tile_template": BASEMAP_AT_OVERLAY_TEMPLATE,
+                "tile_size": 256,
+                "minzoom": 14,
+                "maxzoom": 20,
+                "attribution": "Datenquelle: basemap.at",
+                "presentation": "labels",
             },
             "aerial_raster": {
                 "profile": "basemap-at-ortho-v1",

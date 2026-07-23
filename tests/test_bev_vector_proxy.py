@@ -591,6 +591,17 @@ class BevVectorProxyTests(unittest.TestCase):
             "google3857/{z}/{y}/{x}.png",
         )
         self.assertEqual(catalog["rendering"]["basemap_raster"]["minzoom"], 5.8)
+        self.assertEqual(
+            catalog["rendering"]["label_overlay_raster"]["profile"],
+            "basemap-at-overlay-v1",
+        )
+        self.assertEqual(
+            catalog["rendering"]["label_overlay_raster"]["tile_template"],
+            "https://mapsneu.wien.gv.at/basemap/bmapoverlay/normal/"
+            "google3857/{z}/{y}/{x}.png",
+        )
+        self.assertEqual(catalog["rendering"]["label_overlay_raster"]["minzoom"], 14)
+        self.assertEqual(catalog["rendering"]["label_overlay_raster"]["maxzoom"], 20)
         self.assertEqual(catalog["rendering"]["aerial_raster"]["minzoom"], 14)
         self.assertEqual(catalog["rendering"]["cadastre_vector"]["minzoom"], 16)
         source_templates = {

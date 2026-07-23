@@ -449,10 +449,50 @@ class BevVectorProxyTests(unittest.TestCase):
                     address_hint=address,
                 )
 
+            con = sqlite3.connect(path)
+            con.execute("DELETE FROM feature_addresses")
+            con.commit()
+            con.close()
+            with patch.object(
+                main,
+                "enrich_addresses_with_postcode",
+                side_effect=lambda addresses, *_args, **_kwargs: addresses,
+            ):
+                without_building_relation = main.query_features_in_index(
+                    path,
+                    address_point.x,
+                    address_point.y,
+                    address_hint=address,
+                )
+            with (
+                patch.object(
+                    main,
+                    "enrich_addresses_with_postcode",
+                    side_effect=lambda addresses, *_args, **_kwargs: addresses,
+                ),
+                patch.object(
+                    main,
+                    "building_label_points_for_parcel",
+                    return_value=[trusted_building.representative_point()],
+                ),
+            ):
+                with_building_label = main.query_features_in_index(
+                    path,
+                    address_point.x,
+                    address_point.y,
+                    address_hint=address,
+                )
+
         self.assertEqual(len(without_hint[0]), 1)
         self.assertEqual(without_hint[1], [])
         self.assertEqual(
             [building["gml_id"] for building in with_hint[1]],
+            ["AT.BEV.BLD.TRUSTED"],
+        )
+        self.assertEqual(len(without_building_relation[0]), 1)
+        self.assertEqual(without_building_relation[1], [])
+        self.assertEqual(
+            [building["gml_id"] for building in with_building_label[1]],
             ["AT.BEV.BLD.TRUSTED"],
         )
 

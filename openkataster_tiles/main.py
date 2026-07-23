@@ -6292,17 +6292,30 @@ def building_for_parcel_address(
     except (GEOSException, TypeError, ValueError):
         return None
 
-    label_points = [(address_properties, point) for point in building_label_points_for_parcel(parcel_row, address_properties, parcel_geom)]
-    address_points = label_points or matching_address_points(con, parcel_row["source_db"], address_properties)
+    label_geometries = building_label_points_for_parcel(
+        parcel_row,
+        address_properties,
+        parcel_geom,
+    )
+    label_points = [
+        (address_properties, point)
+        for point in label_geometries
+    ]
+    address_points = label_points or matching_address_points(
+        con,
+        parcel_row["source_db"],
+        address_properties,
+    )
 
     min_lon, min_lat, max_lon, max_lat = parcel_geom.bounds
     building_rows = con.execute(
         """
         SELECT f.*
         FROM feature_index i
-        JOIN features f ON f.id = i.id
+        CROSS JOIN features f
         WHERE f.source_db = ?
           AND f.kind = 'building'
+          AND f.id = i.id
           AND i.min_lon <= ? AND i.max_lon >= ?
           AND i.min_lat <= ? AND i.max_lat >= ?
         LIMIT 300
@@ -6336,8 +6349,6 @@ def building_for_parcel_address(
                 for _, address_geom in address_points
             )
         else:
-            # Live fallback for indexes that only have parcel relation addresses:
-            # choose the building with the largest footprint inside the addressed parcel.
             distance = -float(building_geom.intersection(parcel_geom).area or building_geom.area or 0.0)
         candidates.append((relation_score, distance, building_row, building_geom))
 
@@ -6348,6 +6359,14 @@ def building_for_parcel_address(
         for candidate in candidates
         if candidate[0] >= 4
     ]
+    # A regular address point identifies the parcel, but it does not by itself
+    # establish which of several buildings on that parcel belongs to the
+    # address.  Only an explicit feature-address relation or an ALKIS building
+    # house-number label is strong enough to infer a building outside the
+    # clicked footprint.  Returning no building is preferable to silently
+    # selecting a nearby building with a different address.
+    if not trusted and not label_points:
+        return None
     best = min(
         trusted or candidates,
         key=lambda candidate: (-candidate[0], candidate[1], str(candidate[2]["gml_id"] or "")),

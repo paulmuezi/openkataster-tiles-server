@@ -1,16 +1,21 @@
-import { createApi } from './api.js?v=20260722-schwerin-selection1';
-import { createExportController } from './export.js?v=20260719-onoffice-workspace2';
-import { createLayerController } from './layers.js?v=20260722-hybrid-layers1';
+import { createApi } from './api.js?v=20260723-austria1';
+import { createExportController } from './export.js?v=20260723-austria1';
+import { createLayerController } from './layers.js?v=20260723-austria1';
 import { createLayout } from './layout.js?v=20260719-table-autofit1';
-import { createPlannerMap } from './map.js?v=20260717-middle-mouse-pan1';
+import { createPlannerMap } from './map.js?v=20260723-austria1';
 import { createMeasureController } from './measure.js?v=20260719-free-preview-controls1';
-import { createPersistence, readPersistedState } from './persistence.js';
-import { createSearchController } from './search.js?v=20260722-schwerin-selection1';
-import { createSelectionController } from './selection.js?v=20260722-land-register-table1';
-import { createSourceController } from './sources.js?v=20260722-hybrid-layers1';
+import { createPersistence, readPersistedState } from './persistence.js?v=20260723-austria1';
+import { createSearchController } from './search.js?v=20260723-austria1';
+import { createSelectionController } from './selection.js?v=20260723-austria1';
+import { createSourceController } from './sources.js?v=20260723-austria1';
 import { createStore } from './store.js';
 import {
-  WORKSPACE_DATASET,
+  applyDatasetTerminology,
+  datasetViewerUrl,
+  datasetIdFromLocation,
+  viewerDatasetProfile
+} from './dataset.js?v=20260723-austria1';
+import {
   WORKSPACE_VERSION,
   normalizeLayerVisibility,
   normalizeWorkspaceLayers,
@@ -18,6 +23,9 @@ import {
 } from './workspace.js?v=20260722-land-register-table1';
 
 const params = new URLSearchParams(window.location.search);
+const workspaceDataset = datasetIdFromLocation(window.location);
+const WORKSPACE_DATASET = workspaceDataset;
+const datasetProfile = viewerDatasetProfile(workspaceDataset);
 const surface = params.get('surface') === 'planner' ? 'planner' : 'embed';
 const preview = params.get('preview') === '1';
 const onOfficeMode = params.get('onoffice') === '1';
@@ -32,16 +40,18 @@ if (requestedParentOrigin) {
     // Invalid embed origins fall back to the current, same-origin parent contract.
   }
 }
-const saved = preview || onOfficeMode ? null : readPersistedState();
+const saved = preview || onOfficeMode ? null : readPersistedState(workspaceDataset);
 const mobileBoot = window.matchMedia('(max-width: 760px)').matches;
 const restoreOpenLayout = !preview && !onOfficeMode && shellMode !== 'welcome' && surface !== 'planner';
 const app = document.getElementById('plannerApp');
+applyDatasetTerminology(datasetProfile);
 app.dataset.shellTransitioning = 'false';
 const headerAccountLink = document.getElementById('headerAccountLink');
 const welcomeDefaultView = { lng: 9.84841, lat: 52.32984, zoom: 16.5 };
 const map = createPlannerMap({
   container: document.getElementById('map'),
-  savedView: saved?.view || (shellMode === 'welcome' ? welcomeDefaultView : null)
+  savedView: saved?.view || (shellMode === 'welcome' && workspaceDataset === 'deutschland' ? welcomeDefaultView : null),
+  datasetProfile
 });
 window.__openKatasterPlannerMap = map;
 window.__okMap = map;
@@ -78,6 +88,7 @@ const store = createStore({
 const api = createApi({
   token: params.get('token') || '',
   fresh: params.get('fresh') || '',
+  dataset: workspaceDataset,
   requestTokenRefresh: () => postToParent('openkataster:request-viewer-token')
 });
 
@@ -89,6 +100,7 @@ const elements = Object.fromEntries([
   'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge','exportProBadge','exportLocked'
 ].map((id) => [id, document.getElementById(id)]));
 elements.layerInputs = [...document.querySelectorAll('[data-layer]')];
+elements.datasetSwitches = [...document.querySelectorAll('[data-dataset-switch]')];
 if (onOfficeMode) {
   for (const option of [...elements.exportOutput.options]) {
     if (option.value === 'dxf') option.remove();
@@ -96,7 +108,7 @@ if (onOfficeMode) {
 }
 
 const layout = createLayout({ app, map, store, elements });
-const layers = createLayerController({ map, store, elements });
+const layers = createLayerController({ map, store, elements, datasetProfile });
 function applyStateExportCapabilities(state) {
   const dxfOption = [...elements.exportOutput.options].find((option) => option.value === 'dxf');
   if (!dxfOption) return;
@@ -114,6 +126,7 @@ const sources = createSourceController({
   store,
   elements,
   layerController: layers,
+  datasetProfile,
   onStateCapabilities: applyStateExportCapabilities,
   showCompactAttribution: () => false
 });
@@ -123,6 +136,7 @@ const selection = createSelectionController({
   store,
   layout,
   elements,
+  datasetProfile,
   isWelcomeMode: () => shellMode === 'welcome',
   onWelcomePointer: (point) => postToParent('openkataster:welcome-pointer', { point })
 });
@@ -133,6 +147,7 @@ const search = createSearchController({
   layout,
   elements,
   selection,
+  datasetProfile,
   onOsmUse: sources.revealCompactAttribution
 });
 const measure = createMeasureController({ map, store, elements, finish: () => layout.setTool('measure') });
@@ -141,10 +156,11 @@ const exportController = createExportController({
   api,
   store,
   elements,
+  datasetProfile,
   onOfficeMode,
   onWorkspaceChange: scheduleWorkspaceChanged
 });
-if (!preview && !onOfficeMode) createPersistence({ map, store });
+if (!preview && !onOfficeMode) createPersistence({ map, store, dataset: workspaceDataset });
 
 function canExport(state = store.getState()) {
   return state.access.pro;
@@ -162,6 +178,17 @@ elements.mobileExportBackdrop.addEventListener('click', layout.closeMobileExport
 elements.selectionClose.addEventListener('click', selection.clear);
 elements.selectionResize.addEventListener('pointerdown', layout.beginTableResize);
 elements.noticeClose.addEventListener('click', () => store.setState({ notice: null }, 'notice'));
+for (const button of elements.datasetSwitches) {
+  button.addEventListener('click', () => {
+    const target = button.dataset.datasetSwitch;
+    if (!target || target === workspaceDataset) return;
+    if (window.parent && window.parent !== window) {
+      postToParent('openkataster:request-dataset', { source: workspaceDataset, target });
+      return;
+    }
+    window.location.assign(datasetViewerUrl(window.location, target));
+  });
+}
 
 store.subscribe((state, reason) => {
   elements.selectTool.setAttribute('aria-pressed', state.activeTool === 'select' ? 'true' : 'false');

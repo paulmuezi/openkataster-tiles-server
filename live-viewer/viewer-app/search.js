@@ -114,8 +114,10 @@ export function createSearchController({
   api,
   elements,
   selection,
+  datasetProfile = { terminology: { cadastralDistrict: 'Gemarkung', parcel: 'Flurstück', district: 'Flur' } },
   onOsmUse = () => {}
 }) {
+  const terms = datasetProfile.terminology;
   const {
     searchControl, searchPanel, searchModeButton, parcelFields,
     addressInput, gemarkungInput, flurInput, parcelInput,
@@ -152,7 +154,7 @@ export function createSearchController({
     searchModeButton.setAttribute('aria-expanded', advancedOpen ? 'true' : 'false');
     searchModeButton.setAttribute(
       'aria-label',
-      advancedOpen ? 'Flurstückssuche mit Feldern schließen' : 'Flurstückssuche mit Feldern öffnen'
+      advancedOpen ? `${terms.parcel}suche mit Feldern schließen` : `${terms.parcel}suche mit Feldern öffnen`
     );
     hideSuggestions();
     clearResults();
@@ -199,7 +201,7 @@ export function createSearchController({
     const primaryNormalized = primary.toLocaleLowerCase('de-DE');
     for (const value of parts) {
       const part = String(value || '').trim();
-      if (!part || ['Adresse', 'Straße', 'Ort', 'Flurstück', 'POI'].includes(part)) continue;
+      if (!part || ['Adresse', 'Straße', 'Ort', 'Flurstück', 'Grundstück', 'POI'].includes(part)) continue;
       const normalized = part.toLocaleLowerCase('de-DE');
       if (primaryNormalized.includes(normalized)) continue;
       if (accepted.some((previous) => previous.toLocaleLowerCase('de-DE').includes(normalized))) continue;
@@ -231,7 +233,7 @@ export function createSearchController({
     return {
       primary,
       secondary: secondaryParts.filter(Boolean).join(' · '),
-      scopeLabel: searchResultTypeLabel(result)
+      scopeLabel: searchResultScope(result) === 'parcel' ? terms.parcel : searchResultTypeLabel(result)
     };
   }
 
@@ -367,7 +369,7 @@ export function createSearchController({
     }
     if (missingFields.length) {
       missingFields[0].focus();
-      setBusy(false, 'Bitte Gemarkung und Flurstück eingeben.');
+      setBusy(false, `Bitte ${terms.cadastralDistrict} und ${terms.parcel} eingeben.`);
       return;
     }
     setBusy(true);
@@ -378,10 +380,10 @@ export function createSearchController({
         createAnalyticsMarker('parcel')
       )).results || [];
       renderResults(results);
-      const resultMessage = !flur && results.length > 1
+      const resultMessage = terms.district && !flur && results.length > 1
         ? (results.length >= 12
-          ? 'Viele Treffer – bitte Flur zur Eingrenzung eingeben.'
-          : 'Mehrere Treffer – Flur zur Eingrenzung eingeben.')
+          ? `Viele Treffer – bitte ${terms.district} zur Eingrenzung eingeben.`
+          : `Mehrere Treffer – ${terms.district} zur Eingrenzung eingeben.`)
         : '';
       setBusy(false, results.length ? resultMessage : 'Keine Treffer');
     } catch (error) {
@@ -405,7 +407,7 @@ export function createSearchController({
       let resolved;
       if (scope === 'parcel') {
         const parcelSearch = result?.parcel_search || {};
-        if (!parcelSearch.gemarkung || !parcelSearch.flurstueck) throw new Error('Flurstück konnte nicht aufgelöst werden.');
+        if (!parcelSearch.gemarkung || !parcelSearch.flurstueck) throw new Error(`${terms.parcel} konnte nicht aufgelöst werden.`);
         const data = await api.searchParcel(
           { ...parcelSearch, analyticsQuery: typedQuery },
           searchRequest.signal,
@@ -486,7 +488,7 @@ export function createSearchController({
       }, searchRequest?.signal);
       return selectionCenterForPoiAddress(result, data.results || [], fallbackCenter);
     } catch (error) {
-      if (error?.name !== 'AbortError') console.warn('POI-Adresse konnte nicht mit ALKIS verknüpft werden', error);
+      if (error?.name !== 'AbortError') console.warn(`POI-Adresse konnte nicht mit ${terms.cadastre || 'dem Kataster'} verknüpft werden`, error);
       return fallbackCenter;
     }
   }

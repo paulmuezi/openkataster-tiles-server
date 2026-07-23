@@ -32,8 +32,9 @@ export function withAnalytics(path, marker) {
   return `${path}${separator}analytics_id=${encodeURIComponent(analyticsId)}&analytics_scope=${encodeURIComponent(analyticsScope)}`;
 }
 
-export function createApi({ token = '', fresh = '', requestTokenRefresh = null } = {}) {
+export function createApi({ token = '', fresh = '', dataset = 'deutschland', requestTokenRefresh = null } = {}) {
   let viewerToken = String(token || '').trim();
+  const viewerDataset = /^[a-z0-9_-]+$/.test(String(dataset || '')) ? String(dataset) : 'deutschland';
   let pendingTokenRefresh = null;
   let resolveTokenRefresh = null;
   let rejectTokenRefresh = null;
@@ -95,6 +96,7 @@ export function createApi({ token = '', fresh = '', requestTokenRefresh = null }
   function viewerUrl(path) {
     const url = new URL(path, window.location.origin);
     url.searchParams.set('client', 'viewer');
+    url.searchParams.set('dataset', viewerDataset);
     if (fresh) url.searchParams.set('fresh', fresh);
     return `${url.pathname}${url.search}`;
   }

@@ -103,12 +103,12 @@ const appVersion = assetVersion(indexSource, 'app.js');
 assetVersion(appSource, 'measure.js');
 assert.equal(
   stylesVersion,
-  '20260722-land-register-table1',
-  'Die Grundbuch-Tabellenstile müssen den deployten CSS-Cache-Key behalten.'
+  '20260723-austria1',
+  'Die Österreich-Viewer-Stile müssen mit dem deployten CSS-Cache-Key geladen werden.'
 );
 assert.equal(
   appVersion,
-  '20260722-schwerin-selection1',
-  'Der App-Einstieg muss den neueren Schwerin-Suchfix invalidieren.'
+  '20260723-austria1',
+  'Der App-Einstieg muss den Österreich-Viewer-Stand invalidieren.'
 );
 console.log('mobile-measure-bar-tests=ok');

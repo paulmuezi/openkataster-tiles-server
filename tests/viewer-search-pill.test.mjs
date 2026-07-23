@@ -25,7 +25,7 @@ assert.match(searchSource, /searchPanel\.dataset\.advanced = advancedOpen \? 'tr
 assert.match(searchSource, /searchPanel\.dataset\.suggestionsOpen = 'false'/);
 assert.match(searchSource, /searchPanel\.dataset\.suggestionsOpen = results\.length \? 'true' : 'false'/);
 assert.match(searchSource, /searchModeButton\.setAttribute\('aria-expanded', advancedOpen \? 'true' : 'false'\)/);
-assert.match(searchSource, /advancedOpen \? 'Flurstückssuche mit Feldern schließen' : 'Flurstückssuche mit Feldern öffnen'/);
+assert.match(searchSource, /advancedOpen \? `\$\{terms\.parcel\}suche mit Feldern schließen` : `\$\{terms\.parcel\}suche mit Feldern öffnen`/);
 assert.match(searchSource, /searchModeButton\.addEventListener\('click', \(\) => setAdvanced\(!advancedOpen\)\)/);
 assert.match(searchSource, /suggestedResults\[activeSuggestion >= 0 \? activeSuggestion : 0\]/);
 assert.match(searchSource, /else requestSuggestions\(addressInput\.value\.trim\(\), \{ pickFirst: true \}\)/, 'Enter also chooses the first result while autocomplete is still loading');
@@ -52,10 +52,10 @@ assert.match(stylesSource, /html\[data-shell-mode="welcome"\] \.search-control/)
 
 assert.match(appSource, /'searchControl','searchPanel','searchModeButton','addressFields','parcelFields'/);
 assert.doesNotMatch(appSource, /'searchButton'|'searchClose'|'searchMode'|'parcelModeLabel'/);
-assert.match(appSource, /\.\/search\.js\?v=20260722-schwerin-selection1/);
-assert.match(appSource, /\.\/sources\.js\?v=20260722-hybrid-layers1/);
-assert.match(indexSource, /styles\.css\?v=20260722-land-register-table1/);
-assert.match(indexSource, /app\.js\?v=20260722-schwerin-selection1/);
+assert.match(appSource, /\.\/search\.js\?v=20260723-austria1/);
+assert.match(appSource, /\.\/sources\.js\?v=20260723-austria1/);
+assert.match(indexSource, /styles\.css\?v=20260723-austria1/);
+assert.match(indexSource, /app\.js\?v=20260723-austria1/);
 assert.match(indexSource, /id="osmAttribution"[^>]+openstreetmap\.org\/copyright[^>]+hidden/);
 assert.match(appSource, /showCompactAttribution: \(\) => false/, 'the production viewer must never reveal compact OSM attribution');
 assert.match(sourcesSource, /showCompactAttribution = \(\) => false/, 'future source-controller instances default to hidden attribution');

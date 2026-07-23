@@ -13,21 +13,33 @@ function usableLocationLabel(value) {
   return LOCATION_PLACEHOLDERS.has(label.toLocaleLowerCase('de-DE')) ? '' : label;
 }
 
-function parcelLocationLabel(parcel) {
+function parcelLocationLabel(parcel, terminology = {}) {
   if (!parcel || typeof parcel !== 'object') return '';
-  const gemarkung = usableLocationLabel(parcel.gemarkung || parcel.gemarkungsname || parcel.gemarkungsnummer);
+  const cadastralDistrict = usableLocationLabel(
+    parcel.gemarkung
+      || parcel.gemarkungsname
+      || parcel.katastralgemeinde
+      || parcel.gemarkungsnummer
+      || parcel.katastralgemeindenummer
+  );
   const flur = usableLocationLabel(parcel.flur);
   const parcelNumber = usableLocationLabel(
-    parcel.flurstueck || [parcel.zaehler, parcel.nenner].filter((value) => value !== undefined && value !== null && value !== '').join('/')
+    parcel.flurstueck
+      || parcel.grundstueck
+      || parcel.grundstuecksnummer
+      || [parcel.zaehler, parcel.nenner].filter((value) => value !== undefined && value !== null && value !== '').join('/')
   );
+  const cadastralDistrictTerm = terminology.cadastralDistrict || 'Gemarkung';
+  const districtTerm = terminology.district || '';
+  const parcelTerm = terminology.parcel || 'Flurstück';
   return [
-    gemarkung && `Gemarkung ${gemarkung}`,
-    flur && `Flur ${flur}`,
-    parcelNumber && `Flurstück ${parcelNumber}`
+    cadastralDistrict && `${cadastralDistrictTerm} ${cadastralDistrict}`,
+    districtTerm && flur && `${districtTerm} ${flur}`,
+    parcelNumber && `${parcelTerm} ${parcelNumber}`
   ].filter(Boolean).join(', ');
 }
 
-export function locationLabelFromFeatures(features) {
+export function locationLabelFromFeatures(features, terminology) {
   const buildings = Array.isArray(features?.buildings) ? features.buildings : [];
   const parcels = Array.isArray(features?.parcels) ? features.parcels : [];
   for (const feature of [...buildings, ...parcels]) {
@@ -35,7 +47,7 @@ export function locationLabelFromFeatures(features) {
     if (label) return label;
   }
   for (const parcel of parcels) {
-    const label = parcelLocationLabel(parcel);
+    const label = parcelLocationLabel(parcel, terminology);
     if (label) return label;
   }
   return '';
@@ -98,6 +110,7 @@ export function createExportController({
   api,
   store,
   elements,
+  datasetProfile = { terminology: {} },
   onOfficeMode = false,
   onWorkspaceChange = () => {}
 }) {
@@ -606,7 +619,7 @@ export function createExportController({
   async function resolveExportLocation(value) {
     try {
       const features = await api.featureAt(value.lng, value.lat);
-      const centerLabel = locationLabelFromFeatures(features);
+      const centerLabel = locationLabelFromFeatures(features, datasetProfile.terminology);
       return centerLabel || coordinateLocationLabel(value);
     } catch (error) {
       console.warn('[export] Standort am Exportzentrum konnte nicht aufgelöst werden.', error);
@@ -616,7 +629,7 @@ export function createExportController({
     const selectionLabel = locationLabelFromFeatures({
       buildings: selection.buildings,
       parcels: selection.parcels
-    });
+    }, datasetProfile.terminology);
     return selectionLabel || coordinateLocationLabel(value);
   }
 

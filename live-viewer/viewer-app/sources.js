@@ -4,6 +4,7 @@ export function createSourceController({
   store,
   elements,
   layerController,
+  datasetProfile = { detailZoom: 17 },
   onStateCapabilities = () => {},
   showCompactAttribution = () => false,
   compactAttributionDurationMs = 5000
@@ -86,7 +87,7 @@ export function createSourceController({
     const slug = layerController.currentStateSlug();
     const state = metadata?.states?.find((item) => item.slug === slug);
     onStateCapabilities(state || null);
-    const detail = map.getZoom() >= 17;
+    const detail = map.getZoom() >= Number(datasetProfile.detailZoom || 17);
     const bkgVisible = layerController.isBasemapVisible();
     const visibleLayers = store.getState?.()?.layers || {};
     sourceList.replaceChildren();
@@ -103,26 +104,33 @@ export function createSourceController({
       appendSource([{ text: value }]);
     };
     if (bkgVisible) {
-      appendSource([
-        { text: '© GeoBasis-DE / ' },
-        { text: 'BKG', href: 'https://www.bkg.bund.de/' },
-        { text: ' 2026 ' },
-        { text: 'CC BY 4.0', href: 'https://creativecommons.org/licenses/by/4.0/' }
-      ]);
+      const basemapAttribution = state?.rendering?.basemap_raster?.attribution;
+      if (basemapAttribution) appendAttribution(basemapAttribution);
+      else {
+        appendSource([
+          { text: '© GeoBasis-DE / ' },
+          { text: 'BKG', href: 'https://www.bkg.bund.de/' },
+          { text: ' 2026 ' },
+          { text: 'CC BY 4.0', href: 'https://creativecommons.org/licenses/by/4.0/' }
+        ]);
+      }
     }
     const cadastreAttribution = state?.rendering?.cadastre_raster?.attribution;
+    const cadastreVectorAttribution = state?.rendering?.cadastre_vector?.attribution;
     if (detail && visibleLayers.alkis) {
-      appendAttribution(cadastreAttribution || state?.quellenvermerk);
+      appendAttribution(cadastreAttribution || cadastreVectorAttribution || state?.quellenvermerk);
     }
     const aerialCapability = state?.rendering?.aerial_raster;
     if (detail && visibleLayers.aerial && aerialCapability?.tile_template) {
       appendAttribution(aerialCapability.attribution || state?.quellenvermerk);
     }
-    appendSource([
-      { text: '© OpenPLZ', href: 'https://www.openplzapi.org/' },
-      { text: ', ' },
-      { text: 'ODbL 1.0', href: 'https://opendatacommons.org/licenses/odbl/1-0/' }
-    ]);
+    if (metadata?.dataset === 'deutschland') {
+      appendSource([
+        { text: '© OpenPLZ', href: 'https://www.openplzapi.org/' },
+        { text: ', ' },
+        { text: 'ODbL 1.0', href: 'https://opendatacommons.org/licenses/odbl/1-0/' }
+      ]);
+    }
     for (const attribution of metadata?.attributions || []) {
       if (!attribution?.text || !attribution?.href) continue;
       appendSource([{ text: attribution.text, href: attribution.href }]);

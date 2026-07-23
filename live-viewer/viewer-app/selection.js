@@ -42,6 +42,15 @@ function normalizedDisplayText(value) {
   return String(value).replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/gi, '').trim();
 }
 
+export function parcelDisplayNumber(item) {
+  return normalizedDisplayText(
+    item?.flurstueck
+      || item?.grundstueck
+      || item?.grundstuecksnummer
+      || [item?.zaehler, item?.nenner].filter(hasValue).join('/')
+  );
+}
+
 function buildingName(item) {
   return normalizedDisplayText(item?.name);
 }
@@ -347,10 +356,48 @@ export function createSelectionController({
   store,
   layout,
   elements,
+  datasetProfile = {
+    id: 'deutschland',
+    terminology: {
+      cadastralDistrict: 'Gemarkung',
+      parcel: 'Flurstück',
+      parcelPlural: 'Flurstücke',
+      parcelNumber: 'Flurstücksnummer',
+      district: 'Flur'
+    }
+  },
   isWelcomeMode = () => false,
   onWelcomePointer = () => {}
 }) {
   const { selectionContent, selectionCount, selectTool, selectionDock } = elements;
+  const terms = datasetProfile.terminology;
+  const parcelDistrictColumns = () => [
+    {
+      label: datasetProfile.id === 'oesterreich' ? 'KG-Nr.' : 'Gem.-Schl.',
+      title: datasetProfile.id === 'oesterreich' ? 'Katastralgemeindenummer' : 'Gemarkungsschlüssel',
+      keys: ['gemarkungsschluessel', 'gemarkung_key', 'katastralgemeindenummer', 'kg_nummer'],
+      compact: true
+    },
+    {
+      label: terms.cadastralDistrict,
+      keys: ['gemarkung', 'gemarkungsname', 'gemarkungsnummer', 'katastralgemeinde', 'katastralgemeindenummer'],
+      value: (item) => {
+        const name = item.gemarkung || item.gemarkungsname || item.katastralgemeinde;
+        const number = item.gemarkungsnummer || item.katastralgemeindenummer;
+        return name && number ? `${name} (${number})` : name || number;
+      },
+      compact: true
+    },
+    terms.district
+      ? { label: terms.district, keys: ['flur'], compact: true }
+      : null,
+    {
+      label: terms.parcel,
+      keys: ['flurstueck', 'grundstueck', 'grundstuecksnummer', 'zaehler', 'nenner'],
+      value: parcelDisplayNumber,
+      compact: true
+    }
+  ].filter(Boolean);
   let request = null;
   let restoreRequest = null;
   let geometryRequest = null;
@@ -721,11 +768,8 @@ export function createSelectionController({
         { kind: 'geometric', label: 'Geometrische Fläche', keys: BUILDING_GEOMETRIC_AREA_KEYS, visible: buildingAreas.showGeometric }
       ])
     ], 'building', 'Gebäudeinfos sind im Pro-Plan verfügbar.'));
-    if (parcels.length) sections.push(lockedPreviewTable('Flurstücke', parcels, [
-      { label: 'Gem.-Schl.', title: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'], compact: true },
-      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], compact: true },
-      { label: 'Flur', keys: ['flur'], compact: true },
-      { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], compact: true },
+    if (parcels.length) sections.push(lockedPreviewTable(terms.parcelPlural, parcels, [
+      ...parcelDistrictColumns(),
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'] },
       { label: 'Lage', keys: ['lage'] },
       { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
@@ -738,7 +782,9 @@ export function createSelectionController({
       areaColumn([
         { kind: 'official', label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
       ])
-    ], 'parcel', 'Flurstücksinfos sind im Pro-Plan verfügbar.'));
+    ], 'parcel', datasetProfile.id === 'deutschland'
+      ? 'Flurstücksinfos sind im Pro-Plan verfügbar.'
+      : `${terms.parcel}sinformationen sind im Pro-Plan verfügbar.`));
     return sections.join('');
   }
 
@@ -782,9 +828,9 @@ export function createSelectionController({
     const sampleIndex = (rowIndex * 3 + columnIndex) % 3;
     if (column.slot === 'address') return ['Musterstraße 12', 'Beispielweg 8', 'Am Markt 4'][sampleIndex];
     if (/Gebäudefunktion/i.test(label)) return ['Wohngebäude', 'Nebengebäude', 'Garage'][sampleIndex];
-    if (/Gemarkungsschlüssel|Gem\.-Schl\./i.test(label)) return ['032410', '051230', '160510'][sampleIndex];
-    if (/Gemarkung/i.test(label)) return ['Musterfeld', 'Innenstadt', 'Nord'][sampleIndex];
-    if (/Flurstück/i.test(label)) return ['123/4', '77/9', '4752'][sampleIndex];
+    if (/Gemarkungsschlüssel|Gem\.-Schl\.|Katastralgemeindenummer|KG-Nr\./i.test(label)) return ['032410', '051230', '160510'][sampleIndex];
+    if (/Gemarkung|Katastralgemeinde/i.test(label)) return ['Musterfeld', 'Innenstadt', 'Nord'][sampleIndex];
+    if (/Flurstück|Grundstück/i.test(label)) return ['123/4', '77/9', '4752'][sampleIndex];
     if (/Flur\b/i.test(label)) return ['7', '15', '0'][sampleIndex];
     if (/Baujahr|Entstehung/i.test(label)) return ['1998', '2012', '2021'][sampleIndex];
     if (column.compact) return ['2', '4', '7'][sampleIndex];
@@ -796,14 +842,14 @@ export function createSelectionController({
   }
 
   function selectionActionCell(item, kind) {
-    const noun = kind === 'parcel' ? 'Flurstück' : 'Gebäude';
+    const noun = kind === 'parcel' ? terms.parcel : 'Gebäude';
     return `<td class="selection-action-column compact"><button class="selection-item-remove" type="button" data-selection-remove-kind="${kind}" data-selection-remove-key="${escapeHtml(featureKey(item))}" aria-label="${noun} aus Auswahl entfernen" title="Aus Auswahl entfernen">×</button></td>`;
   }
 
   function previewSelectionActionCell(item, kind) {
     const key = typeof item?.preview_id === 'string' ? item.preview_id.trim() : '';
     if (!key) return '<td class="selection-action-column compact"></td>';
-    const noun = kind === 'parcel' ? 'Flurstück' : 'Gebäude';
+    const noun = kind === 'parcel' ? terms.parcel : 'Gebäude';
     return `<td class="selection-action-column compact"><button class="selection-item-remove" type="button" data-selection-remove-kind="${kind}" data-selection-remove-key="${escapeHtml(key)}" aria-label="${noun} aus Auswahl entfernen" title="Aus Auswahl entfernen">×</button></td>`;
   }
 
@@ -1073,10 +1119,7 @@ export function createSelectionController({
 
   function parcelTable(parcels) {
     const columns = [
-      { label: 'Gem.-Schl.', title: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'], compact: true },
-      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], value: (item) => item.gemarkung && item.gemarkungsnummer ? `${item.gemarkung} (${item.gemarkungsnummer})` : item.gemarkung || item.gemarkungsnummer, compact: true },
-      { label: 'Flur', keys: ['flur'], compact: true },
-      { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], value: (item) => item.flurstueck || [item.zaehler, item.nenner].filter(Boolean).join('/'), compact: true },
+      ...parcelDistrictColumns(),
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'], value: parcelUsage },
       { label: 'Lage', keys: ['lage'], value: parcelDisplayLocation },
       { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
@@ -1090,7 +1133,7 @@ export function createSelectionController({
         { kind: 'official', label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
       ])
     ];
-    return dynamicTable('Flurstücke', parcels, columns, 'parcel');
+    return dynamicTable(terms.parcelPlural, parcels, columns, 'parcel');
   }
 
   async function selectAt(lngLat, additive = false, preferredKind = null) {

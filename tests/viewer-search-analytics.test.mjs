@@ -280,7 +280,7 @@ assert.match(selectionSource, /selectAt\(event\.lngLat, true\)/);
 assert.match(searchSource, /\{ gemarkung, flur, flurstueck, state: selectedGemarkungState \}/);
 assert.match(searchSource, /gemarkungInput\.value = label;/, 'selected Gemarkung code must stay visible');
 assert.doesNotMatch(searchSource, /!gemarkung \|\| !flur \|\| !flurstueck/);
-assert.match(searchSource, /Viele Treffer – bitte Flur zur Eingrenzung eingeben\./);
+assert.match(searchSource, /Viele Treffer – bitte \$\{terms\.district\} zur Eingrenzung eingeben\./);
 assert.match(viewerHtml, /id="addressInput"[^>]*placeholder="Adresse, Flurstück oder POI suchen"/);
 assert.match(viewerHtml, /id="addressInput"[^>]*role="combobox"[^>]*aria-controls="searchSuggestions"/);
 assert.match(viewerHtml, /id="searchSuggestions"[^>]*role="listbox"/);

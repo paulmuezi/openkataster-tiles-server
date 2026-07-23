@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import hmac
 import http.client
+import io
 import json
 import math
 import os
@@ -113,6 +114,50 @@ ALLOWED_ASSETS = {
     "states.json",
 }
 VIRTUAL_GERMANY_DATASET = os.environ.get("OPENKATASTER_TILE_GERMANY_DATASET", "deutschland")
+GERMANY_BOUNDS = [5.5, 47.0, 15.6, 55.2]
+AUSTRIA_DATASET = os.environ.get("OPENKATASTER_TILE_AUSTRIA_DATASET", "oesterreich")
+AUSTRIA_BOUNDS = [9.35, 46.30, 17.20, 49.10]
+NATIONAL_HYBRID_DATASETS = {AUSTRIA_DATASET}
+DATASET_PROFILES = {
+    VIRTUAL_GERMANY_DATASET: {
+        "id": VIRTUAL_GERMANY_DATASET,
+        "country": {"code": "DE", "slug": "deutschland", "name": "Deutschland"},
+        "name": "Deutschland",
+        "runtime_kind": "federated-pmtiles",
+        "bounds": GERMANY_BOUNDS,
+        "center": {"lon": 10.45, "lat": 51.16, "zoom": 4.05},
+        "terminology": {
+            "cadastre": "ALKIS",
+            "cadastral_district": "Gemarkung",
+            "parcel": "Flurstück",
+            "parcel_plural": "Flurstücke",
+            "parcel_number": "Flurstücksnummer",
+            "district": "Flur",
+            "district_required": False,
+        },
+        "required_runtime_files": ("alkis.pmtiles", "features.sqlite", "search.sqlite"),
+    },
+    AUSTRIA_DATASET: {
+        "id": AUSTRIA_DATASET,
+        "country": {"code": "AT", "slug": "oesterreich", "name": "Österreich"},
+        "name": "Österreich",
+        "runtime_kind": "national-live-vector-hybrid",
+        "bounds": AUSTRIA_BOUNDS,
+        "center": {"lon": 14.20, "lat": 47.60, "zoom": 6.6},
+        "terminology": {
+            "cadastre": "Kataster",
+            "cadastral_district": "Katastralgemeinde",
+            "parcel": "Grundstück",
+            "parcel_plural": "Grundstücke",
+            "parcel_number": "Grundstücksnummer",
+            "district": "",
+            "district_required": False,
+        },
+        # The official BEV vector tiles are the presentation source. The local
+        # runtime intentionally contains only trusted hit-test and search data.
+        "required_runtime_files": ("features.sqlite", "search.sqlite"),
+    },
+}
 OVERVIEW_MAX_ZOOM = int(os.environ.get("OPENKATASTER_TILE_OVERVIEW_MAX_ZOOM", "11"))
 SOURCE_MAX_ZOOM = int(os.environ.get("OPENKATASTER_TILE_SOURCE_MAX_ZOOM", "17"))
 MOSAIC_CACHE_SIZE = int(os.environ.get("OPENKATASTER_TILE_MOSAIC_CACHE_SIZE", "2048"))
@@ -238,6 +283,59 @@ KATASTER_WMS_CONFIGS = {
         "cache_control": "public, max-age=86400, stale-while-revalidate=3600",
     },
 }
+
+BEV_VECTOR_TILE_CONFIGS = {
+    "kataster": {
+        "url": "https://kataster.bev.gv.at/tiles/kataster/{z}/{x}/{y}.pbf",
+        "minzoom": 0,
+        "maxzoom": 16,
+        "attribution": "© BEV",
+        "revision": "bev-kataster-live-v1",
+    },
+    "symbole": {
+        "url": "https://kataster.bev.gv.at/tiles/symbole/{z}/{x}/{y}.pbf",
+        "minzoom": 13,
+        "maxzoom": 16,
+        "attribution": "© BEV",
+        "revision": "bev-symbole-live-v1",
+    },
+}
+BEV_ATTRIBUTION = "© BEV"
+BEV_LICENSE_NAME = "Creative Commons Namensnennung 4.0 International (CC BY 4.0)"
+BEV_LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/"
+AUSTRIA_OBJECT_DATA_STATUS = (
+    "Kataster und Adressen: 01.04.2026 · "
+    "Bauwerke: 23.03.2026 · "
+    "Katastralgemeinden: 26.03.2026"
+)
+BEV_VECTOR_CACHE_DIR = Path(
+    os.environ.get(
+        "OPENKATASTER_BEV_VECTOR_CACHE_DIR",
+        str(DATA_DIR / "external_tile_cache" / "bev"),
+    )
+)
+BEV_VECTOR_CACHE_TTL_SECONDS = max(
+    60,
+    int(os.environ.get("OPENKATASTER_BEV_VECTOR_CACHE_TTL_SECONDS", "86400")),
+)
+BEV_VECTOR_CACHE_STALE_SECONDS = max(
+    BEV_VECTOR_CACHE_TTL_SECONDS,
+    int(os.environ.get("OPENKATASTER_BEV_VECTOR_CACHE_STALE_SECONDS", str(30 * 86400))),
+)
+BEV_VECTOR_MAX_COMPRESSED_BYTES = max(
+    64 * 1024,
+    int(os.environ.get("OPENKATASTER_BEV_VECTOR_MAX_COMPRESSED_BYTES", str(8 * 1024 * 1024))),
+)
+BEV_VECTOR_MAX_UNCOMPRESSED_BYTES = max(
+    BEV_VECTOR_MAX_COMPRESSED_BYTES,
+    int(os.environ.get("OPENKATASTER_BEV_VECTOR_MAX_UNCOMPRESSED_BYTES", str(16 * 1024 * 1024))),
+)
+BASEMAP_AT_GRAU_TEMPLATE = (
+    "https://mapsneu.wien.gv.at/basemap/bmapgrau/normal/google3857/{z}/{y}/{x}.png"
+)
+BASEMAP_AT_ORTHO_TEMPLATE = (
+    "https://mapsneu.wien.gv.at/basemap/bmaporthofoto30cm/normal/google3857/{z}/{y}/{x}.jpeg"
+)
 
 
 def _tile_lonlat_bounds(z: int, x: int, y: int) -> tuple[float, float, float, float]:
@@ -487,7 +585,6 @@ ACTIVE_BUCKET_CACHE_SECONDS = int(os.environ.get("OPENKATASTER_TILE_ACTIVE_BUCKE
 STATE_METADATA_CACHE_SECONDS = int(os.environ.get("OPENKATASTER_TILE_STATE_METADATA_CACHE_SECONDS", "900"))
 STATE_METADATA_ENDPOINT = os.environ.get("OPENKATASTER_TILE_STATE_METADATA_ENDPOINT", "http://openkataster-api:8000/v1/metadata").rstrip("/")
 WEB_MIN_ZOOM = float(os.environ.get("OPENKATASTER_TILE_WEB_MIN_ZOOM", "4.0"))
-GERMANY_BOUNDS = [5.5, 47.0, 15.6, 55.2]
 GLYPHS_URL = os.environ.get(
     "OPENKATASTER_TILE_GLYPHS_URL",
     "/glyphs/{fontstack}/{range}.pbf",
@@ -538,6 +635,10 @@ STATE_LABEL_POINTS = {
     "schleswig-holstein": ("Schleswig-Holstein", 9.75, 54.2),
     "thueringen": ("Thüringen", 11.0, 50.9),
 }
+REGION_LABEL_POINTS = {
+    **STATE_LABEL_POINTS,
+    AUSTRIA_DATASET: ("Österreich", 14.20, 47.60),
+}
 
 _STATE_METADATA_CACHE: dict[str, object] = {"expires_at": 0.0, "states": []}
 LOCAL_STATE_METADATA = {
@@ -557,6 +658,17 @@ LOCAL_STATE_METADATA = {
         "bundesland": "Sachsen-Anhalt",
         "quellenvermerk": "© GeoBasis-DE / LVermGeo ST",
         "lizenz": "dl-de/by-2-0",
+    },
+    AUSTRIA_DATASET: {
+        "bundesland": "Österreich",
+        "land": "Österreich",
+        "country_code": "AT",
+        "datenstand": "Darstellung tagesaktuell",
+        "objektdatenstand": AUSTRIA_OBJECT_DATA_STATUS,
+        "quellenvermerk": "© BEV",
+        "lizenz": BEV_LICENSE_NAME,
+        "lizenz_url": BEV_LICENSE_URL,
+        "source_url": "https://kataster.bev.gv.at/",
     },
 }
 
@@ -1466,6 +1578,42 @@ def is_virtual_germany_dataset(dataset: str) -> bool:
     return dataset == VIRTUAL_GERMANY_DATASET
 
 
+def dataset_profile(dataset: str) -> dict | None:
+    return DATASET_PROFILES.get(normalize_state_key(dataset))
+
+
+def is_known_dataset(dataset: str) -> bool:
+    return dataset_profile(dataset) is not None
+
+
+def is_national_hybrid_dataset(dataset: str) -> bool:
+    return normalize_state_key(dataset) in NATIONAL_HYBRID_DATASETS
+
+
+def runtime_required_files(state_slug: str) -> set[str]:
+    profile = dataset_profile(state_slug)
+    configured = profile.get("required_runtime_files") if profile else None
+    return set(configured or VOLUME_REQUIRED_FILES)
+
+
+def ensure_dataset_available(dataset: str) -> str:
+    dataset_key = normalize_state_key(dataset)
+    if is_known_dataset(dataset_key):
+        return dataset_key
+    get_dataset(dataset_key)
+    return dataset_key
+
+
+def dataset_region_keys(dataset: str) -> set[str]:
+    dataset_key = normalize_state_key(dataset)
+    if dataset_key == VIRTUAL_GERMANY_DATASET:
+        return set(active_bucket_state_keys()).intersection(STATE_LABEL_POINTS)
+    if dataset_key in NATIONAL_HYBRID_DATASETS:
+        return {dataset_key}
+    state_key, _, _ = _mosaic_state_key(DATA_DIR / f"{dataset_key}.pmtiles")
+    return {state_key}
+
+
 def tile_bounds(z: int, x: int, y: int) -> tuple[float, float, float, float]:
     n = 2.0**z
     west = x / n * 360.0 - 180.0
@@ -1688,10 +1836,19 @@ def _feature_db_scan_signature() -> tuple[tuple[str, int, int], ...]:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     active_state_key = ",".join(active_bucket_state_keys())
     active_marker = ("__bucket_active__", int(hashlib.sha1(active_state_key.encode("utf-8")).hexdigest()[:15], 16), len(active_state_key))
+    volume_paths = [
+        (state_key, version_dir / "features.sqlite")
+        for state_key, version_dir in active_volume_version_dirs()
+        if (version_dir / "features.sqlite").is_file()
+    ]
     return tuple(
         sorted(
             (path.name, path.stat().st_mtime_ns, path.stat().st_size)
             for path in DATA_DIR.glob(f"*{FEATURE_DB_SUFFIX}")
+        )
+        + sorted(
+            (f"volume:{state_key}:{path}", path.stat().st_mtime_ns, path.stat().st_size)
+            for state_key, path in volume_paths
         )
         + [active_marker]
     )
@@ -1709,6 +1866,11 @@ def discover_feature_db_entries(signature: tuple[tuple[str, int, int], ...]) -> 
         current = selected.get(state_key)
         if current is None or rank > current[1]:
             selected[state_key] = (path, rank)
+    for state_key, version_dir in active_volume_version_dirs():
+        path = version_dir / "features.sqlite"
+        if state_key not in active_states or not path.is_file():
+            continue
+        selected[state_key] = (path, (2, str(path)))
     return tuple(FeatureDbEntry(name=name, path=path) for name, (path, _) in sorted(selected.items()))
 
 
@@ -1721,6 +1883,10 @@ def discover_all_local_feature_db_entries(signature: tuple[tuple[str, int, int],
         current = selected.get(state_key)
         if current is None or rank > current[1]:
             selected[state_key] = (path, rank)
+    for state_key, version_dir in active_volume_version_dirs():
+        path = version_dir / "features.sqlite"
+        if path.is_file():
+            selected[state_key] = (path, (2, str(path)))
     return tuple(FeatureDbEntry(name=name, path=path) for name, (path, _) in sorted(selected.items()))
 
 
@@ -1735,8 +1901,16 @@ def all_local_feature_db_entries() -> tuple[FeatureDbEntry, ...]:
 def feature_db_entries_for_dataset(dataset: str) -> tuple[FeatureDbEntry, ...]:
     entries = feature_db_entries()
     if is_virtual_germany_dataset(dataset):
-        selected = {entry.name: entry for entry in all_local_feature_db_entries()}
-        selected.update({entry.name: entry for entry in entries})
+        selected = {
+            entry.name: entry
+            for entry in all_local_feature_db_entries()
+            if entry.name not in NATIONAL_HYBRID_DATASETS
+        }
+        selected.update({
+            entry.name: entry
+            for entry in entries
+            if entry.name not in NATIONAL_HYBRID_DATASETS
+        })
         return tuple(entry for _, entry in sorted(selected.items()))
     state_key, _, _ = _mosaic_state_key(DATA_DIR / f"{dataset}.pmtiles")
     matched = tuple(entry for entry in entries if entry.name == state_key)
@@ -1765,10 +1939,19 @@ def _search_db_scan_signature() -> tuple[tuple[str, int, int], ...]:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     active_state_key = ",".join(active_bucket_state_keys())
     active_marker = ("__bucket_active__", int(hashlib.sha1(active_state_key.encode("utf-8")).hexdigest()[:15], 16), len(active_state_key))
+    volume_paths = [
+        (state_key, version_dir / "search.sqlite")
+        for state_key, version_dir in active_volume_version_dirs()
+        if (version_dir / "search.sqlite").is_file()
+    ]
     return tuple(
         sorted(
             (path.name, path.stat().st_mtime_ns, path.stat().st_size)
             for path in DATA_DIR.glob(f"*{SEARCH_DB_SUFFIX}")
+        )
+        + sorted(
+            (f"volume:{state_key}:{path}", path.stat().st_mtime_ns, path.stat().st_size)
+            for state_key, path in volume_paths
         )
         + [active_marker]
     )
@@ -1786,6 +1969,11 @@ def discover_search_db_entries(signature: tuple[tuple[str, int, int], ...]) -> t
         current = selected.get(state_key)
         if current is None or rank > current[1]:
             selected[state_key] = (path, rank)
+    for state_key, version_dir in active_volume_version_dirs():
+        path = version_dir / "search.sqlite"
+        if state_key not in active_states or not path.is_file():
+            continue
+        selected[state_key] = (path, (2, str(path)))
     return tuple(FeatureDbEntry(name=name, path=path) for name, (path, _) in sorted(selected.items()))
 
 
@@ -1798,6 +1986,10 @@ def discover_all_local_search_db_entries(signature: tuple[tuple[str, int, int], 
         current = selected.get(state_key)
         if current is None or rank > current[1]:
             selected[state_key] = (path, rank)
+    for state_key, version_dir in active_volume_version_dirs():
+        path = version_dir / "search.sqlite"
+        if path.is_file():
+            selected[state_key] = (path, (2, str(path)))
     return tuple(FeatureDbEntry(name=name, path=path) for name, (path, _) in sorted(selected.items()))
 
 
@@ -1812,8 +2004,16 @@ def all_local_search_db_entries() -> tuple[FeatureDbEntry, ...]:
 def search_db_entries_for_dataset(dataset: str) -> tuple[FeatureDbEntry, ...]:
     entries = search_db_entries()
     if is_virtual_germany_dataset(dataset):
-        selected = {entry.name: entry for entry in all_local_search_db_entries()}
-        selected.update({entry.name: entry for entry in entries})
+        selected = {
+            entry.name: entry
+            for entry in all_local_search_db_entries()
+            if entry.name not in NATIONAL_HYBRID_DATASETS
+        }
+        selected.update({
+            entry.name: entry
+            for entry in entries
+            if entry.name not in NATIONAL_HYBRID_DATASETS
+        })
         return tuple(entry for _, entry in sorted(selected.items()))
     state_key, _, _ = _mosaic_state_key(DATA_DIR / f"{dataset}.pmtiles")
     matched = tuple(entry for entry in entries if entry.name == state_key)
@@ -2014,13 +2214,16 @@ def local_active_state_keys() -> tuple[str, ...]:
             state_key, _, _ = _mosaic_state_key(path)
             if state_key in STATE_LABEL_POINTS:
                 states.add(state_key)
+        for dataset_key in NATIONAL_HYBRID_DATASETS:
+            if all((DATA_DIR / f"{dataset_key}.{filename}").is_file() for filename in ("features.sqlite", "search.sqlite")):
+                states.add(dataset_key)
     except Exception:
         return tuple()
     return tuple(sorted(states))
 
 
-def active_volume_pmtiles_paths() -> tuple[tuple[str, Path], ...]:
-    """Active tile-volume versions store alkis.pmtiles below ACTIVE_VOLUME_ROOT/versions."""
+def active_volume_version_dirs() -> tuple[tuple[str, Path], ...]:
+    """Return validated active runtime folders, including PMTiles-free hybrids."""
     active_dir = ACTIVE_VOLUME_ROOT / "active"
     versions_root = (ACTIVE_VOLUME_ROOT / "versions").resolve()
     result: list[tuple[str, Path]] = []
@@ -2033,8 +2236,8 @@ def active_volume_pmtiles_paths() -> tuple[tuple[str, Path], ...]:
             manifest = json.loads(manifest_path.read_text())
         except Exception:
             continue
-        state_slug = str(manifest.get("state_slug") or manifest_path.stem).strip()
-        if state_slug not in STATE_LABEL_POINTS:
+        state_slug = normalize_state_key(str(manifest.get("state_slug") or manifest_path.stem))
+        if state_slug not in REGION_LABEL_POINTS:
             continue
         raw_version_path = str(manifest.get("remote_version_path") or "").strip()
         if not raw_version_path:
@@ -2044,6 +2247,15 @@ def active_volume_pmtiles_paths() -> tuple[tuple[str, Path], ...]:
             version_dir.relative_to(versions_root)
         except Exception:
             continue
+        if all((version_dir / filename).is_file() for filename in runtime_required_files(state_slug)):
+            result.append((state_slug, version_dir))
+    return tuple(result)
+
+
+def active_volume_pmtiles_paths() -> tuple[tuple[str, Path], ...]:
+    """Active tile-volume versions store alkis.pmtiles below ACTIVE_VOLUME_ROOT/versions."""
+    result: list[tuple[str, Path]] = []
+    for state_slug, version_dir in active_volume_version_dirs():
         pmtiles_path = version_dir / "alkis.pmtiles"
         if pmtiles_path.is_file():
             result.append((state_slug, pmtiles_path))
@@ -2051,7 +2263,7 @@ def active_volume_pmtiles_paths() -> tuple[tuple[str, Path], ...]:
 
 
 def active_volume_state_keys() -> tuple[str, ...]:
-    return tuple(sorted({state_key for state_key, _ in active_volume_pmtiles_paths()}))
+    return tuple(sorted({state_key for state_key, _ in active_volume_version_dirs()}))
 
 
 def active_bucket_state_keys() -> tuple[str, ...]:
@@ -4433,6 +4645,19 @@ def normalize_feature_properties_for_response(state: str, kind: str, properties:
     source_key = normalize_state_key(str(props.get("source_db") or ""))
     kind = str(kind or props.get("type") or "").strip().lower()
 
+    if state_key == AUSTRIA_DATASET or source_key == AUSTRIA_DATASET:
+        addresses = props.get("addresses")
+        if isinstance(addresses, list):
+            for address in addresses:
+                if isinstance(address, dict):
+                    address["country"] = "Österreich"
+        address = props.get("address")
+        if isinstance(address, dict):
+            address["country"] = "Österreich"
+        props["country"] = "Österreich"
+        props.pop("flur", None)
+        return props
+
     if source_key == "bayern-lod2" and kind == "building":
         return {
             key: value
@@ -4549,7 +4774,11 @@ def query_parcel_number(query: str) -> str:
 
 
 def state_display_name(state_slug: str) -> str:
-    return STATE_LABEL_POINTS.get(state_slug, (state_slug.replace("-", " ").title(), 0, 0))[0]
+    return REGION_LABEL_POINTS.get(state_slug, (state_slug.replace("-", " ").title(), 0, 0))[0]
+
+
+def country_name_for_state(state_slug: str | None) -> str:
+    return "Österreich" if normalize_state_key(state_slug) == AUSTRIA_DATASET else "Deutschland"
 
 
 def normalize_state_key(value: str | None) -> str:
@@ -4562,6 +4791,8 @@ def normalize_state_key(value: str | None) -> str:
         "schleswig-holstein": "schleswig-holstein",
         "mecklenburg-vorpommern": "mecklenburg-vorpommern",
         "thuringen": "thueringen",
+        "austria": AUSTRIA_DATASET,
+        "österreich": AUSTRIA_DATASET,
     }.get(key, key)
 
 
@@ -4775,18 +5006,22 @@ def postcode_area_lookup(lon: float, lat: float, signature: tuple[int, int]) -> 
 
 
 
-def enrich_address_postcode(address: dict, lon: float, lat: float) -> None:
+def enrich_address_postcode(
+    address: dict,
+    lon: float,
+    lat: float,
+    state: str = "",
+) -> None:
     # Do not infer postal codes at request time. Postal codes must come from
     # the built features/search SQLite data so display and search stay
     # consistent for states that have not been rebuilt with PLZ data yet.
-    address.setdefault("country", "Deutschland")
+    address.setdefault("country", country_name_for_state(state))
 
 
 def allowed_place_states(dataset: str) -> set[str]:
     if is_virtual_germany_dataset(dataset):
-        return set(active_bucket_state_keys()) or set(STATE_LABEL_POINTS)
-    state_key, _, _ = _mosaic_state_key(DATA_DIR / f"{dataset}.pmtiles")
-    return {state_key}
+        return dataset_region_keys(dataset) or set(STATE_LABEL_POINTS)
+    return dataset_region_keys(dataset)
 
 
 def search_suggestion_states_for_dataset(dataset: str, state: str = "") -> set[str]:
@@ -4794,7 +5029,11 @@ def search_suggestion_states_for_dataset(dataset: str, state: str = "") -> set[s
     if state_key:
         return {state_key}
     if is_virtual_germany_dataset(dataset):
-        local_states = {entry.name for entry in all_local_search_db_entries()}
+        local_states = {
+            entry.name
+            for entry in all_local_search_db_entries()
+            if entry.name not in NATIONAL_HYBRID_DATASETS
+        }
         return local_states or allowed_place_states(dataset)
     return allowed_place_states(dataset)
 
@@ -6252,7 +6491,7 @@ def enrich_addresses_with_postcode(addresses: list[dict], lon: float | None = No
                 address["house_number"] = house_number
             enriched.append(address)
             continue
-        enrich_address_postcode(address, address_lon, address_lat)
+        enrich_address_postcode(address, address_lon, address_lat, state)
         if state and not str(address.get("city") or "").strip():
             municipality = municipality_at(state, address_lon, address_lat) or nearest_municipality(state, address_lon, address_lat)
             if municipality:
@@ -7212,11 +7451,13 @@ def fast_parcel_number_norm(value: str | None) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
+    has_leading_dot = text.startswith(".")
     text = text.replace("ß", "ss").replace("ẞ", "ss")
     text = text.replace("⁄", "/").replace("∕", "/").replace("／", "/")
     text = unicodedata.normalize("NFKD", text)
     text = "".join(character for character in text if not unicodedata.combining(character)).casefold()
-    return "".join(character for character in text if character.isalnum() or character == "/")
+    normalized = "".join(character for character in text if character.isalnum() or character == "/")
+    return f".{normalized}" if has_leading_dot and normalized else normalized
 
 
 def openplz_street_norm_variants(value: str | None) -> tuple[str, ...]:
@@ -7675,7 +7916,7 @@ def search_address_result_from_row(row: sqlite3.Row, state: str, city_fallback: 
         "street": street_label,
         "house_number": house_label,
         "city": city_label,
-        "country": "Deutschland",
+        "country": country_name_for_state(state),
     }
     if post_code:
         address["post_code"] = post_code
@@ -7732,7 +7973,7 @@ def search_street_result_from_row(row: sqlite3.Row, state: str, street_fallback:
             "street": street_label,
             "municipality": city_label,
             "address_count": int(row["address_count"] or 0),
-            "country": "Deutschland",
+            "country": country_name_for_state(state),
         },
     }
 
@@ -7803,7 +8044,7 @@ def search_clustered_street_results_from_address_rows(
             "street": street_label,
             "municipality": city_label,
             "address_count": count,
-            "country": "Deutschland",
+            "country": country_name_for_state(state),
         }
         if post_code:
             feature["post_code"] = post_code
@@ -7833,11 +8074,14 @@ def search_parcel_result_from_row(row: sqlite3.Row, state: str) -> dict:
     flur = str(row["flur_label"] or "")
     flurstueck = str(row["flurstueck_label"] or "")
     gemarkung = str(row["gemarkung_label"] or "")
+    terminology = (dataset_profile(state) or {}).get("terminology") or {}
+    parcel_term = str(terminology.get("parcel") or "Flurstück")
+    district_term = str(terminology.get("district") or "Flur")
     label = ", ".join(
         part
         for part in (
-            f"Flur {flur}" if flur else "",
-            f"Flurstück {flurstueck}" if flurstueck else "",
+            f"{district_term} {flur}" if district_term and flur else "",
+            f"{parcel_term} {flurstueck}" if flurstueck else "",
             gemarkung,
         )
         if part
@@ -7865,8 +8109,8 @@ def search_parcel_result_from_row(row: sqlite3.Row, state: str) -> dict:
         "kind": "parcel",
         "result_type": "feature",
         "cadastre": cadastre,
-        "label": label or "Flurstück",
-        "subtitle": "Flurstück",
+        "label": label or parcel_term,
+        "subtitle": parcel_term,
         "state": state,
         "state_label": state_display_name(state),
         "center": [lon, lat],
@@ -8379,6 +8623,116 @@ def gn250_storage_state_key(value: str | None) -> str:
     }.get(state, state.replace("-", "_"))
 
 
+def _search_local_place_suggestions(
+    query: str,
+    allowed_states: set[str],
+    limit: int,
+) -> list[dict]:
+    postcode = str(query or "").strip() if re.fullmatch(r"\d{4}", str(query or "").strip()) else ""
+    city_norms = normalize_geocoder_text_variants(query)
+    if not postcode and not city_norms:
+        return []
+    if postcode:
+        where_sql = "post_code = ?"
+        parameters: list[object] = [postcode]
+    else:
+        where_sql = " OR ".join(
+            "(city_norm >= ? AND city_norm < ?)"
+            for _ in city_norms
+        )
+        parameters = [
+            bound
+            for city_norm in city_norms
+            for bound in (city_norm, f"{city_norm}\uffff")
+        ]
+    candidates: list[tuple[tuple[int, int, str], dict]] = []
+    seen: set[tuple[str, str, str]] = set()
+    row_limit = max(64, min(int(limit) * 16, 512))
+    query_norm = normalize_place_search_text(query)
+    for entry in search_db_entries_for_states(tuple(sorted(allowed_states))):
+        rows = search_db_fetchall(
+            entry.path,
+            f"""
+            SELECT
+              city_norm,
+              MIN(city_label) AS city_label,
+              MIN(post_code) AS post_code,
+              COUNT(DISTINCT post_code) AS post_code_count,
+              SUM(address_count) AS address_count,
+              AVG(lon) AS lon,
+              AVG(lat) AS lat,
+              MIN(min_lon) AS min_lon,
+              MIN(min_lat) AS min_lat,
+              MAX(max_lon) AS max_lon,
+              MAX(max_lat) AS max_lat
+            FROM street_lookup
+            WHERE ({where_sql})
+              AND city_norm <> ''
+            GROUP BY city_norm
+            ORDER BY address_count DESC, city_label
+            LIMIT ?
+            """,
+            [*parameters, row_limit],
+        )
+        for row in rows:
+            city = str(row["city_label"] or "").strip()
+            city_norm = str(row["city_norm"] or "").strip()
+            row_postcode = str(row["post_code"] or "").strip()
+            display_postcode = row_postcode if postcode or int(row["post_code_count"] or 0) == 1 else ""
+            key = (entry.name, city_norm, display_postcode)
+            if not city or key in seen:
+                continue
+            seen.add(key)
+            state_label = state_display_name(entry.name)
+            locality = " ".join(part for part in (display_postcode, city) if part)
+            secondary = " · ".join(part for part in (display_postcode, state_label) if part)
+            payload = {
+                "label": locality or city,
+                "value": locality or city,
+                "primary_label": city,
+                "secondary_label": secondary,
+                "subtitle": secondary or state_label,
+                "state": entry.name,
+                "state_label": state_label,
+                "municipality": city,
+                "post_code": display_postcode,
+                "center": (
+                    [float(row["lon"]), float(row["lat"])]
+                    if row["lon"] is not None and row["lat"] is not None
+                    else None
+                ),
+                "bbox": (
+                    [
+                        float(row["min_lon"]),
+                        float(row["min_lat"]),
+                        float(row["max_lon"]),
+                        float(row["max_lat"]),
+                    ]
+                    if all(
+                        row[column] is not None
+                        for column in ("min_lon", "min_lat", "max_lon", "max_lat")
+                    )
+                    else None
+                ),
+                "zoom": 12.5,
+                "result_type": "place",
+                "kind": "place",
+            }
+            match_rank = 0 if query_norm and normalize_place_search_text(city) == query_norm else 1
+            candidates.append(
+                (
+                    (
+                        match_rank,
+                        -int(row["address_count"] or 0),
+                        city.casefold(),
+                    ),
+                    payload,
+                )
+            )
+    candidates.sort(key=lambda item: item[0])
+    return [payload for _rank, payload in candidates[:int(limit)]]
+
+
 def _search_place_suggestions_from_sqlite(query: str, allowed_states: set[str], limit: int) -> dict | None:
     fts_query = _place_fts_query(query)
     if not fts_query or not GN250_PLACES_DB.exists():
@@ -8463,6 +8817,10 @@ def search_place_suggestions_for_dataset(dataset: str, q: str, limit: int, state
     if len(query) < 2:
         return {"results": []}
     allowed_states = search_suggestion_states_for_dataset(dataset, state)
+    if allowed_states.intersection(NATIONAL_HYBRID_DATASETS):
+        local_results = _search_local_place_suggestions(query, allowed_states, limit)
+        if local_results:
+            return {"results": local_results}
     indexed_results = _search_place_suggestions_from_sqlite(query, allowed_states, limit)
     if indexed_results is not None:
         return indexed_results
@@ -8853,8 +9211,7 @@ def search_street_suggestions_unique_postcode(
 
 
 def search_street_suggestions_for_dataset(dataset: str, place: str, q: str, limit: int, state: str = "") -> dict:
-    if not is_virtual_germany_dataset(dataset):
-        get_dataset(dataset)
+    ensure_dataset_available(dataset)
     states = search_suggestion_states_for_dataset(dataset, state)
     results = list(search_street_suggestions_cached(
         place,
@@ -9044,8 +9401,7 @@ def search_gemarkung_suggestions_cached(
 
 
 def search_gemarkung_suggestions_for_dataset(dataset: str, q: str, limit: int, state: str = "") -> dict:
-    if not is_virtual_germany_dataset(dataset):
-        get_dataset(dataset)
+    ensure_dataset_available(dataset)
     states = search_suggestion_states_for_dataset(dataset, state)
     results = search_gemarkung_suggestions_cached(
         q,
@@ -9202,6 +9558,85 @@ def structured_geocoder_candidates(
     return ((mode, street_value, house_value, city_value),)
 
 
+@lru_cache(maxsize=4096)
+def _local_place_contexts_cached(
+    phrase: str,
+    states_key: tuple[str, ...],
+    signature: tuple[tuple[str, str, int, int], ...],
+) -> tuple[dict, ...]:
+    city_norms = normalize_geocoder_text_variants(phrase)
+    if not city_norms:
+        return tuple()
+    placeholders = ",".join("?" for _ in city_norms)
+    contexts: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for state, raw_path, _mtime_ns, _size in signature:
+        rows = search_db_fetchall(
+            Path(raw_path),
+            f"""
+            SELECT
+              city_norm,
+              MIN(city_label) AS city_label,
+              AVG(lon) AS lon,
+              AVG(lat) AS lat,
+              MIN(min_lon) AS min_lon,
+              MIN(min_lat) AS min_lat,
+              MAX(max_lon) AS max_lon,
+              MAX(max_lat) AS max_lat
+            FROM street_lookup
+            WHERE city_norm IN ({placeholders})
+              AND city_norm <> ''
+            GROUP BY city_norm
+            ORDER BY city_label
+            LIMIT 32
+            """,
+            city_norms,
+        )
+        for row in rows:
+            name = str(row["city_label"] or "").strip()
+            key = (state, normalize_place_search_text(name))
+            if not name or key in seen:
+                continue
+            seen.add(key)
+            bbox = (
+                [
+                    float(row["min_lon"]),
+                    float(row["min_lat"]),
+                    float(row["max_lon"]),
+                    float(row["max_lat"]),
+                ]
+                if all(row[column] is not None for column in ("min_lon", "min_lat", "max_lon", "max_lat"))
+                else None
+            )
+            contexts.append(
+                {
+                    "state": state,
+                    "name": name,
+                    "folded": normalize_place_search_text(name),
+                    "bbox": bbox,
+                    "municipality": name,
+                }
+            )
+    return tuple(contexts)
+
+
+def local_place_contexts(
+    phrase: str,
+    allowed_states: set[str],
+) -> tuple[dict, ...]:
+    states_key = tuple(sorted(allowed_states))
+    if not states_key:
+        return tuple()
+    return tuple(
+        dict(context)
+        for context in _local_place_contexts_cached(
+            phrase,
+            states_key,
+            search_db_signature_for_states(states_key),
+        )
+    )
+
+
 
 
 def _unified_exact_place_span(
@@ -9241,6 +9676,18 @@ def _unified_exact_place_span(
                         continue
                     seen.add(dedupe_key)
                     matches.append(dict(context))
+            if allowed_states.intersection(NATIONAL_HYBRID_DATASETS):
+                for context in local_place_contexts(phrase, allowed_states):
+                    state = normalize_state_key(str(context.get("state") or ""))
+                    dedupe_key = (
+                        state,
+                        normalize_place_search_text(str(context.get("name") or "")),
+                        normalize_place_search_text(str(context.get("municipality") or "")),
+                    )
+                    if state not in allowed_states or dedupe_key in seen:
+                        continue
+                    seen.add(dedupe_key)
+                    matches.append(dict(context))
             if matches:
                 candidates.append((end - start, 1 if end == token_count else 0, start, phrase, tuple(matches)))
     if not candidates:
@@ -9254,9 +9701,11 @@ def _unified_exact_place_span(
 def parse_unified_address_query(query: str, allowed_states: set[str]) -> dict:
     """Parse place, postcode, street and house number from one input line."""
     raw_query = re.sub(r"\s+", " ", str(query or "").replace(",", " ")).strip()
-    postcode_match = re.search(r"(?<!\d)(\d{5})(?!\d)", raw_query)
+    postcode_digits = 4 if allowed_states == {AUSTRIA_DATASET} else 5
+    postcode_re = rf"(?<!\d)(\d{{{postcode_digits}}})(?!\d)"
+    postcode_match = re.search(postcode_re, raw_query)
     postcode = postcode_match.group(1) if postcode_match else ""
-    without_postcode = re.sub(r"(?<!\d)\d{5}(?!\d)", " ", raw_query, count=1)
+    without_postcode = re.sub(postcode_re, " ", raw_query, count=1)
     without_postcode = re.sub(r"\s+", " ", without_postcode).strip()
     place, place_contexts, remainder = _unified_exact_place_span(without_postcode, allowed_states)
 
@@ -9492,7 +9941,12 @@ def _unified_address_results(
     per_state_limit = max(24, min(int(limit) * 8, 128))
     street_placeholders = ",".join("?" for _ in street_norms)
     for entry in search_db_entries_for_states(tuple(sorted(search_states))):
-        clauses = [f"street_norm IN ({street_placeholders})", "feature_kind = 'building'"]
+        feature_kind_clause = (
+            "feature_kind IN ('address', 'building')"
+            if entry.name in NATIONAL_HYBRID_DATASETS
+            else "feature_kind = 'building'"
+        )
+        clauses = [f"street_norm IN ({street_placeholders})", feature_kind_clause]
         where_params: list[object] = [*street_norms]
         if exact_house_number:
             clauses.append("house_number_norm = ?")
@@ -9847,14 +10301,18 @@ def search_unified_address_suggestions_for_dataset(
     query = re.sub(r"\s+", " ", str(q or "")).strip()
     if len(query) < 2:
         return {"query": query, "count": 0, "results": []}
-    if not is_virtual_germany_dataset(dataset):
-        get_dataset(dataset)
+    ensure_dataset_available(dataset)
     allowed_states = search_suggestion_states_for_dataset(dataset, state)
-    if re.fullmatch(r"\d{5}", query):
-        postcode_results = openplz_postcode_place_suggestions(
-            query,
-            allowed_states,
-            int(limit),
+    postcode_digits = 4 if normalize_state_key(dataset) == AUSTRIA_DATASET else 5
+    if re.fullmatch(rf"\d{{{postcode_digits}}}", query):
+        postcode_results = (
+            _search_local_place_suggestions(query, allowed_states, int(limit))
+            if postcode_digits == 4
+            else openplz_postcode_place_suggestions(
+                query,
+                allowed_states,
+                int(limit),
+            )
         )
         return {
             "query": query,
@@ -9910,10 +10368,23 @@ def search_unified_address_suggestions_for_dataset(
 
     place_query = str(parsed.get("place") or "").strip()
     if not parsed.get("street"):
-        place_query = place_query or re.sub(r"(?<!\d)\d{5}(?!\d)", " ", query).strip()
+        place_query = place_query or re.sub(
+            rf"(?<!\d)\d{{{postcode_digits}}}(?!\d)",
+            " ",
+            query,
+        ).strip()
     if not has_address_results and place_query and len(place_query) >= 2:
         place_results = search_place_suggestions_for_dataset(dataset, place_query, max(int(limit), 8), state=state).get("results") or []
         results.extend(_format_unified_place_result(dict(item)) for item in place_results)
+    if not results and allowed_states.intersection(NATIONAL_HYBRID_DATASETS):
+        local_place_query = place_query or query
+        results.extend(
+            _search_local_place_suggestions(
+                local_place_query,
+                allowed_states,
+                max(int(limit), 8),
+            )
+        )
 
     ranked = rank_unified_search_results(results, parsed, near_lon, near_lat)[:int(limit)]
     payload = {"query": query, "count": len(ranked), "results": ranked}
@@ -9923,11 +10394,11 @@ def search_unified_address_suggestions_for_dataset(
 
 
 _FREE_TEXT_PARCEL_NUMBER_RE = re.compile(
-    r"(?<![\w/])(\d{1,9}(?:\s*/\s*\d{1,9})?)(?![\w/])"
+    r"(?<![\w/.])(\.?\d{1,9}(?:\s*/\s*\d{1,9})?)(?![\w/])"
 )
 _FREE_TEXT_PARCEL_MARKER_RE = re.compile(
-    r"\b(?:flur(?:stueck|stück)|flst\.?)(?:\s*nr\.?)?\s*"
-    r"(\d{1,9}(?:\s*/\s*\d{1,9})?)\b",
+    r"\b(?:flur(?:stueck|stück)|flst\.?|grundst(?:ueck|ück)|gst\.?)(?:\s*nr\.?)?\s*"
+    r"(\.?\d{1,9}(?:\s*/\s*\d{1,9})?)\b",
     re.IGNORECASE,
 )
 _FREE_TEXT_FLUR_MARKER_RE = re.compile(
@@ -9942,7 +10413,7 @@ def _free_text_parcel_number(value: str) -> str:
 
 def _free_text_parcel_clean_words(value: str) -> str:
     cleaned = re.sub(
-        r"\b(?:gemarkung|flur(?:stueck|stück)|flst\.?)\b",
+        r"\b(?:gemarkung|katastralgemeinde|flur(?:stueck|stück)|flst\.?|grundst(?:ueck|ück)|gst\.?)\b",
         " ",
         str(value or ""),
         flags=re.IGNORECASE,
@@ -10058,7 +10529,7 @@ def _free_text_parcel_number_options(query: str) -> tuple[list[dict], list[tuple
     explicit_signal = bool(
         explicit_parcel
         or explicit_flur
-        or re.search(r"\bgemarkung\b", raw, re.IGNORECASE)
+        or re.search(r"\b(?:gemarkung|katastralgemeinde)\b", raw, re.IGNORECASE)
         or code_spans
     )
     options: list[dict] = []
@@ -10071,7 +10542,7 @@ def _free_text_parcel_number_options(query: str) -> tuple[list[dict], list[tuple
         gemarkung_code: str = "",
     ) -> None:
         parcel = _free_text_parcel_number(flurstueck)
-        if not parcel or not re.fullmatch(r"\d{1,9}(?:/\d{1,9})?", parcel):
+        if not parcel or not re.fullmatch(r"\.?\d{1,9}(?:/\d{1,9})?", parcel):
             return
         option = {
             "flur": str(flur or "").strip(),
@@ -10137,7 +10608,7 @@ def parse_free_text_parcel_query(
     strong_intent = bool(
         _FREE_TEXT_PARCEL_MARKER_RE.search(raw_query)
         or _FREE_TEXT_FLUR_MARKER_RE.search(raw_query)
-        or re.search(r"\bgemarkung\b", raw_query, re.IGNORECASE)
+        or re.search(r"\b(?:gemarkung|katastralgemeinde)\b", raw_query, re.IGNORECASE)
     )
     if len(raw_query) < 2 or not any(character.isalpha() for character in raw_query):
         return {
@@ -10157,7 +10628,7 @@ def parse_free_text_parcel_query(
     strong_explicit_signal = bool(
         _FREE_TEXT_PARCEL_MARKER_RE.search(raw_query)
         or _FREE_TEXT_FLUR_MARKER_RE.search(raw_query)
-        or re.search(r"\bgemarkung\b", raw_query, re.IGNORECASE)
+        or re.search(r"\b(?:gemarkung|katastralgemeinde)\b", raw_query, re.IGNORECASE)
         or re.search(
             r"\(\s*(?=[0-9A-Za-z]*[0-9])[0-9A-Za-z]+\s*\)",
             raw_query,
@@ -10211,7 +10682,7 @@ def parse_free_text_parcel_query(
     if in_match:
         for length in range(min(6, len(tokens)), 0, -1):
             add_phrase(0, length, 0)
-    if re.search(r"\bgemarkung\b", raw_query, re.IGNORECASE):
+    if re.search(r"\b(?:gemarkung|katastralgemeinde)\b", raw_query, re.IGNORECASE):
         for length in range(min(6, len(tokens)), 0, -1):
             add_phrase(0, length, 0)
     if has_parenthesized_code:
@@ -10223,7 +10694,7 @@ def parse_free_text_parcel_query(
         not strong_explicit_signal
         and len(tokens) >= 2
         and any("/" in str(option.get("flurstueck") or "") for option in options)
-        and re.search(r"\d{1,9}\s*/\s*\d{1,9}\s*[.,;:]?\s*$", raw_query)
+        and re.search(r"\.?\d{1,9}\s*/\s*\d{1,9}\s*[.,;:]?\s*$", raw_query)
     )
     if compact_slash_tail:
         # Compact one-box searches often use ``Gemarkung Gemeinde 100/1``
@@ -11422,10 +11893,14 @@ def _format_free_text_parcel_result(item: dict, candidate: dict) -> dict:
         municipality = str((place or {}).get("name") or "").strip()
     context = candidate.get("municipality_context") if isinstance(candidate.get("municipality_context"), dict) else {}
     context_name = str(context.get("name") or "").strip()
-    primary = f"Flurstück {flurstueck}" if flurstueck else "Flurstück"
+    terminology = (dataset_profile(state) or {}).get("terminology") or {}
+    parcel_term = str(terminology.get("parcel") or "Flurstück")
+    cadastral_district_term = str(terminology.get("cadastral_district") or "Gemarkung")
+    district_term = str(terminology.get("district") or "Flur")
+    primary = f"{parcel_term} {flurstueck}" if flurstueck else parcel_term
     secondary = " · ".join(part for part in (
-        f"Gemarkung {gemarkung_payload}" if gemarkung_payload else "",
-        f"Flur {flur}" if flur else "",
+        f"{cadastral_district_term} {gemarkung_payload}" if gemarkung_payload else "",
+        f"{district_term} {flur}" if district_term and flur else "",
         municipality,
         state_display_name(state),
     ) if part)
@@ -11436,11 +11911,11 @@ def _format_free_text_parcel_result(item: dict, candidate: dict) -> dict:
         "primary_label": primary,
         "secondary_label": secondary,
         "label": ", ".join(part for part in (primary, gemarkung_payload) if part),
-        "subtitle": secondary or "Flurstück",
+        "subtitle": secondary or parcel_term,
         "query": " ".join(part for part in (
             primary,
-            f"Gemarkung {gemarkung_payload}" if gemarkung_payload else "",
-            f"Flur {flur}" if flur else "",
+            f"{cadastral_district_term} {gemarkung_payload}" if gemarkung_payload else "",
+            f"{district_term} {flur}" if district_term and flur else "",
         ) if part),
         "state": state,
         "state_label": state_display_name(state),
@@ -11472,8 +11947,7 @@ def search_free_text_parcel_suggestions_for_dataset(
     near_lon: float | None = None,
     near_lat: float | None = None,
 ) -> dict:
-    if not is_virtual_germany_dataset(dataset):
-        get_dataset(dataset)
+    ensure_dataset_available(dataset)
     allowed_states = search_suggestion_states_for_dataset(dataset, state)
     parsed = parse_free_text_parcel_query(q, allowed_states)
     contextual_results = search_contextual_parcel_suggestions(
@@ -11627,7 +12101,11 @@ def search_unified_suggestions_for_dataset(
         if isinstance(parsed_address_metadata, dict)
         else {}
     )
-    query_is_postcode_only = bool(re.fullmatch(r"\s*\d{5}\s*", str(q or "")))
+    postcode_digits = 4 if normalize_state_key(dataset) == AUSTRIA_DATASET else 5
+    postcode_re = rf"(?<!\d)\d{{{postcode_digits}}}(?!\d)"
+    query_is_postcode_only = bool(
+        re.fullmatch(rf"\s*\d{{{postcode_digits}}}\s*", str(q or ""))
+    )
     parsed_place_only = (
         bool(parsed_address_for_gating.get("place"))
         and not str(parsed_address_for_gating.get("street") or "").strip()
@@ -11636,7 +12114,7 @@ def search_unified_suggestions_for_dataset(
         ).strip()
     )
     place_prefix_query = normalize_place_search_text(
-        re.sub(r"(?<!\d)\d{5}(?!\d)", " ", str(q or ""))
+        re.sub(postcode_re, " ", str(q or ""))
     )
     only_place_suggestions = bool(address_results) and all(
         str(item.get("result_type") or item.get("kind") or "") == "place"
@@ -12136,12 +12614,18 @@ def _prune_stale_volume_upload_sessions(
     return {"sessions": removed_sessions, "bytes_total": removed_bytes}
 
 
-def _validate_volume_filenames(files: list[dict], *, allow_subset: bool = False) -> list[dict]:
+def _validate_volume_filenames(
+    files: list[dict],
+    *,
+    allow_subset: bool = False,
+    state_slug: str = VIRTUAL_GERMANY_DATASET,
+) -> list[dict]:
     if not isinstance(files, list):
         raise HTTPException(status_code=400, detail="files must be a list")
     if not files:
         raise HTTPException(status_code=400, detail="at least one tile file is required")
     names = []
+    required_files = runtime_required_files(state_slug)
     for item in files:
         if not isinstance(item, dict):
             raise HTTPException(status_code=400, detail="invalid tile file declaration")
@@ -12151,16 +12635,16 @@ def _validate_volume_filenames(files: list[dict], *, allow_subset: bool = False)
             raise HTTPException(status_code=400, detail=f"invalid tile filename: {raw_filename}")
         names.append(filename)
     incoming = set(names)
-    missing = sorted(VOLUME_REQUIRED_FILES - incoming)
-    unexpected = sorted(incoming - VOLUME_REQUIRED_FILES)
+    missing = sorted(required_files - incoming)
+    unexpected = sorted(incoming - required_files)
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if unexpected or duplicates or (missing and not allow_subset):
-        contract = "One or more of these standard tile state files are allowed" if allow_subset else "Exactly these 3 standard tile state files are required"
+        contract = "One or more runtime files are allowed" if allow_subset else "Exactly the dataset runtime files are required"
         raise HTTPException(
             status_code=400,
             detail=(
                 f"{contract}: "
-                f"{', '.join(sorted(VOLUME_REQUIRED_FILES))}. "
+                f"{', '.join(sorted(required_files))}. "
                 f"missing: {', '.join(missing)} unexpected: {', '.join(unexpected)} duplicates: {', '.join(duplicates)}"
             ),
         )
@@ -12212,7 +12696,12 @@ def _read_volume_upload_session_manifest(
     base_version = manifest.get("base_version")
     if base_version is not None:
         base_version = _safe_version_name(str(base_version))
-    files = _validate_volume_filenames(list(manifest.get("files") or []), allow_subset=base_version is not None)
+    manifest_state_slug = _canonical_volume_state_slug(str(manifest.get("state_slug") or state_slug or ""))
+    files = _validate_volume_filenames(
+        list(manifest.get("files") or []),
+        allow_subset=base_version is not None,
+        state_slug=manifest_state_slug,
+    )
     mode = "partial" if base_version is not None else "full"
     if manifest.get("mode") != mode:
         raise HTTPException(status_code=409, detail="invalid upload session mode")
@@ -12259,7 +12748,7 @@ def _validated_volume_base_dir(state_slug: str, base_version: str) -> Path:
     if not base_dir.is_dir():
         raise HTTPException(status_code=400, detail=f"base tile version not found: {base_version}; use a full upload")
     try:
-        _validate_volume_state_dir(base_dir)
+        _validate_volume_state_dir(base_dir, state_slug=state_slug)
     except HTTPException as exc:
         raise HTTPException(
             status_code=400,
@@ -12320,7 +12809,7 @@ def _volume_upload_sessions(state_slug: str) -> list[dict]:
         }
         files = []
         uploaded_total = 0
-        for filename in sorted(VOLUME_REQUIRED_FILES):
+        for filename in sorted(runtime_required_files(state_slug)):
             partial_path = upload_dir / f"{filename}.partial"
             final_path = upload_dir / filename
             partial_bytes = partial_path.stat().st_size if partial_path.is_file() else 0
@@ -12361,20 +12850,27 @@ def _volume_upload_sessions(state_slug: str) -> list[dict]:
     return sessions
 
 
-def _validate_volume_state_dir(path: Path) -> dict:
-    for filename in VOLUME_REQUIRED_FILES:
+def _validate_volume_state_dir(path: Path, *, state_slug: str = VIRTUAL_GERMANY_DATASET) -> dict:
+    required_files = runtime_required_files(state_slug)
+    for filename in required_files:
         if not (path / filename).is_file():
             raise HTTPException(status_code=400, detail=f"missing uploaded file: {filename}")
     for sqlite_name in ("features.sqlite", "search.sqlite"):
         with (path / sqlite_name).open("rb") as handle:
             if handle.read(16) != b"SQLite format 3\x00":
                 raise HTTPException(status_code=400, detail=f"{sqlite_name} is not a SQLite database")
-    pmtiles_path = path / "alkis.pmtiles"
-    with pmtiles_path.open("rb") as handle:
-        if pmtiles_path.stat().st_size < 127 or handle.read(7) != b"PMTiles":
-            raise HTTPException(status_code=400, detail="alkis.pmtiles is not a PMTiles file")
-    total = sum((path / filename).stat().st_size for filename in VOLUME_REQUIRED_FILES)
-    return {"files": len(VOLUME_REQUIRED_FILES), "bytes_total": total}
+    if "alkis.pmtiles" in required_files:
+        pmtiles_path = path / "alkis.pmtiles"
+        with pmtiles_path.open("rb") as handle:
+            if pmtiles_path.stat().st_size < 127 or handle.read(7) != b"PMTiles":
+                raise HTTPException(status_code=400, detail="alkis.pmtiles is not a PMTiles file")
+    total = sum((path / filename).stat().st_size for filename in required_files)
+    return {
+        "files": len(required_files),
+        "bytes_total": total,
+        "runtime_kind": str((dataset_profile(state_slug) or {}).get("runtime_kind") or "pmtiles"),
+        "required_files": sorted(required_files),
+    }
 
 
 def _inherit_volume_file(source: Path, destination: Path) -> str:
@@ -12404,8 +12900,9 @@ def _write_volume_upload_manifest(
     inherited_storage: dict[str, str],
 ) -> None:
     uploaded_names = {item["filename"] for item in uploaded_files}
+    required_files = runtime_required_files(state_slug)
     file_details = []
-    for filename in sorted(VOLUME_REQUIRED_FILES):
+    for filename in sorted(required_files):
         file_path = path / filename
         inherited = filename not in uploaded_names
         file_details.append({
@@ -12427,8 +12924,12 @@ def _write_volume_upload_manifest(
         "bytes_total": sum(int(item["size_bytes"]) for item in file_details),
         "file_details": file_details,
         "uploaded_files": sorted(uploaded_names),
-        "inherited_files": sorted(VOLUME_REQUIRED_FILES - uploaded_names),
-        "upload_contract": "standard-maplibre-pmtiles-features-search-v1",
+        "inherited_files": sorted(required_files - uploaded_names),
+        "upload_contract": (
+            "national-live-vector-features-search-v1"
+            if is_national_hybrid_dataset(state_slug)
+            else "standard-maplibre-pmtiles-features-search-v1"
+        ),
         "provenance_contract": "openkataster-tile-version-provenance-v1",
     }
     _write_json_atomic(path / "state_upload_manifest.json", manifest)
@@ -12639,7 +13140,7 @@ def dataset_features_at_point(
     lat: Annotated[float, Query(ge=-90, le=90)],
 ) -> dict:
     del key_value
-    if not is_virtual_germany_dataset(dataset):
+    if not is_known_dataset(dataset):
         try:
             get_dataset(dataset)
         except HTTPException:
@@ -12685,8 +13186,7 @@ def dataset_search(
     flurstueck: str = "",
 ) -> dict:
     del key_value
-    if not is_virtual_germany_dataset(dataset):
-        get_dataset(dataset)
+    ensure_dataset_available(dataset)
     return cached_search_features_for_dataset(
         dataset,
         q,
@@ -12724,8 +13224,7 @@ def dataset_cadastre_gemarkungen(
     state: str = "",
 ) -> dict:
     del key_value
-    if not is_virtual_germany_dataset(dataset):
-        get_dataset(dataset)
+    ensure_dataset_available(dataset)
     return search_cadastre_gemarkungen_for_dataset(dataset, q, limit, state=state)
 
 
@@ -12738,8 +13237,7 @@ def dataset_place_suggestions(
     state: str = "",
 ) -> dict:
     del key_value
-    if not is_virtual_germany_dataset(dataset):
-        get_dataset(dataset)
+    ensure_dataset_available(dataset)
     return search_place_suggestions_for_dataset(dataset, q, limit, state=state)
 
 
@@ -12842,6 +13340,15 @@ def _aerial_rendering_capability(state_slug: str, *, attribution: str = "") -> d
 
 
 def _export_capability(state_slug: str) -> dict | None:
+    if state_slug == AUSTRIA_DATASET:
+        return {
+            "profile": "national-live-vector-raster-export-v1",
+            "pdf": "raster",
+            "png": "raster",
+            "dxf": False,
+            "vector_pdf": False,
+            "fine_grained_layers": True,
+        }
     if state_slug not in KATASTER_WMS_CONFIGS:
         return None
     return {
@@ -12854,13 +13361,82 @@ def _export_capability(state_slug: str) -> dict | None:
     }
 
 
-def _api_v1_state_rows() -> list[dict]:
+def _austria_region_row() -> dict:
+    feature_entries = feature_db_entries_for_dataset(AUSTRIA_DATASET)
+    search_entries = search_db_entries_for_dataset(AUSTRIA_DATASET)
+    interactive = bool(feature_entries and search_entries)
+    return {
+        "slug": AUSTRIA_DATASET,
+        "name": "Österreich",
+        "country_code": "AT",
+        "region_type": "national",
+        "center": {"lon": 14.20, "lat": 47.60},
+        "bounds": AUSTRIA_BOUNDS,
+        "datenstand": "Darstellung tagesaktuell",
+        "presentation_status": "tagesaktuell",
+        "object_data_status": AUSTRIA_OBJECT_DATA_STATUS,
+        "quellenvermerk": BEV_ATTRIBUTION,
+        "lizenz": BEV_LICENSE_NAME,
+        "lizenz_url": BEV_LICENSE_URL,
+        "active": interactive,
+        "visual_active": True,
+        "interactive": interactive,
+        "rendering": {
+            "basemap_raster": {
+                "profile": "basemap-at-grau-v1",
+                "tile_template": BASEMAP_AT_GRAU_TEMPLATE,
+                "tile_size": 256,
+                "minzoom": 0,
+                "maxzoom": 19,
+                "attribution": "Grundkarte: basemap.at",
+                "presentation": "basemap",
+            },
+            "aerial_raster": {
+                "profile": "basemap-at-ortho-v1",
+                "tile_template": BASEMAP_AT_ORTHO_TEMPLATE,
+                "tile_size": 256,
+                "minzoom": 0,
+                "maxzoom": 19,
+                "revision": "basemap-at-ortho-live-v1",
+                "attribution": "Luftbild: basemap.at",
+                "presentation": "aerial",
+            },
+            "cadastre_vector": {
+                "profile": "bev-live-vector-v1",
+                "presentation": "full",
+                "minzoom": 14,
+                "maxzoom": 22,
+                "source_maxzoom": 16,
+                "attribution": BEV_ATTRIBUTION,
+                "data_status": "tagesaktuell",
+                "sources": [
+                    {
+                        "id": layer,
+                        "tile_template": f"/bev/tiles/{layer}/{{z}}/{{x}}/{{y}}.pbf",
+                        "minzoom": int(config["minzoom"]),
+                        "maxzoom": int(config["maxzoom"]),
+                        "revision": str(config["revision"]),
+                    }
+                    for layer, config in BEV_VECTOR_TILE_CONFIGS.items()
+                ],
+            },
+        },
+        "export": _export_capability(AUSTRIA_DATASET),
+    }
+
+
+def _api_v1_state_rows(dataset: str = VIRTUAL_GERMANY_DATASET) -> list[dict]:
+    dataset = normalize_state_key(dataset)
+    if dataset == AUSTRIA_DATASET:
+        return [_austria_region_row()]
+    if dataset != VIRTUAL_GERMANY_DATASET:
+        ensure_dataset_available(dataset)
     metadata_by_slug = {
         _state_metadata_slug(str(row.get("bundesland") or row.get("state") or row.get("name") or "")): row
         for row in _state_metadata_cache()
         if isinstance(row, dict)
     }
-    active_states = set(active_bucket_state_keys())
+    active_states = set(active_bucket_state_keys()).intersection(STATE_LABEL_POINTS)
     # Official raster-only states are valid visual coverage even before a
     # local feature/search package is available. Keep `active` reserved for
     # interactive local data so API consumers can distinguish both modes.
@@ -12899,6 +13475,29 @@ def _api_v1_state_rows() -> list[dict]:
             row["export"] = export_capability
         rows.append(row)
     return rows
+
+
+def _dataset_catalog_payload(dataset: str) -> dict:
+    dataset_key = ensure_dataset_available(dataset)
+    profile = dataset_profile(dataset_key)
+    if not profile:
+        return {
+            "id": dataset_key,
+            "name": dataset_key.replace("-", " ").title(),
+            "country": None,
+            "runtime_kind": "pmtiles",
+            "bounds": None,
+            "center": None,
+            "terminology": {},
+        }
+    return {
+        key: value
+        for key, value in profile.items()
+        if key != "required_runtime_files"
+    } | {
+        "required_runtime_files": list(profile["required_runtime_files"]),
+        "regions": _api_v1_state_rows(dataset_key),
+    }
 
 
 def _api_v1_search_query_from_parts(*parts: str) -> str:
@@ -13009,8 +13608,10 @@ def api_v1_create_embed_session(
         raise HTTPException(status_code=403, detail="Origin header does not match requested origin")
 
     dataset = normalize_state_key(payload.dataset)
-    if not dataset or (dataset != VIRTUAL_GERMANY_DATASET and dataset not in set(active_bucket_state_keys())):
-        raise HTTPException(status_code=404, detail="dataset not found")
+    try:
+        dataset = ensure_dataset_available(dataset)
+    except HTTPException as exc:
+        raise HTTPException(status_code=404, detail="dataset not found") from exc
 
     now = int(time.time())
     claims = {
@@ -13082,21 +13683,30 @@ def api_v1_search_analytics_dashboard(
 
 
 @app.api_route("/api/v1/states", methods=["GET", "HEAD"])
-def api_v1_states() -> dict:
-    states = _api_v1_state_rows()
+def api_v1_states(dataset: str = VIRTUAL_GERMANY_DATASET) -> dict:
+    dataset = ensure_dataset_available(dataset)
+    states = _api_v1_state_rows(dataset)
     return {
-        "dataset": VIRTUAL_GERMANY_DATASET,
+        "dataset": dataset,
         "states": states,
         "count": len(states),
     }
 
 
 @app.api_route("/api/v1/sources", methods=["GET", "HEAD"])
-def api_v1_sources() -> dict:
-    states = _api_v1_state_rows()
+def api_v1_sources(dataset: str = VIRTUAL_GERMANY_DATASET) -> dict:
+    dataset = ensure_dataset_available(dataset)
+    states = _api_v1_state_rows(dataset)
+    profile = _dataset_catalog_payload(dataset)
     payload = {
-        "dataset": VIRTUAL_GERMANY_DATASET,
+        "dataset": dataset,
+        "country": profile.get("country"),
+        "runtime_kind": profile.get("runtime_kind"),
+        "bounds": profile.get("bounds"),
+        "center": profile.get("center"),
+        "terminology": profile.get("terminology") or {},
         "states": states,
+        "regions": states,
         "sources": [
             {
                 "state": row["slug"],
@@ -13104,11 +13714,14 @@ def api_v1_sources() -> dict:
                 "datenstand": row.get("datenstand"),
                 "quellenvermerk": row.get("quellenvermerk"),
                 "lizenz": row.get("lizenz"),
+                "lizenz_url": row.get("lizenz_url"),
+                "presentation_status": row.get("presentation_status"),
+                "object_data_status": row.get("object_data_status"),
             }
             for row in states
         ],
     }
-    if poi_index_available():
+    if dataset == VIRTUAL_GERMANY_DATASET and poi_index_available():
         metadata = poi_index_metadata()
         payload["poi"] = {
             "source": "OpenStreetMap",
@@ -13127,10 +13740,19 @@ def api_v1_sources() -> dict:
     return payload
 
 
+@app.api_route("/api/v1/catalog/{dataset}", methods=["GET", "HEAD"])
+def api_v1_dataset_catalog(dataset: str) -> dict:
+    return _dataset_catalog_payload(dataset)
+
+
 @app.api_route("/api/v1/datasets", methods=["GET", "HEAD"])
 def api_v1_datasets() -> dict:
     payload = datasets("api-v1")
     payload["api_version"] = "v1"
+    payload["catalog"] = [
+        _dataset_catalog_payload(dataset)
+        for dataset in (VIRTUAL_GERMANY_DATASET, AUSTRIA_DATASET)
+    ]
     return payload
 
 
@@ -13138,6 +13760,25 @@ def api_v1_datasets() -> dict:
 @app.get("/api/v1/tilejson/{state}.json")
 async def api_v1_tilejson(state: str, request: Request):
     state_key = normalize_state_key(state)
+    if state_key == AUSTRIA_DATASET:
+        base_url = public_base_url(request)
+        return {
+            "tilejson": "3.0.0",
+            "name": "BEV Kataster Österreich",
+            "version": "1.0.0",
+            "scheme": "xyz",
+            "tiles": [f"{base_url}/bev/tiles/kataster/{{z}}/{{x}}/{{y}}.pbf"],
+            "minzoom": 0,
+            "maxzoom": 16,
+            "bounds": AUSTRIA_BOUNDS,
+            "vector_layers": [
+                {"id": "gst", "fields": {"gnr": "String", "kg": "String", "rstatus": "String"}},
+                {"id": "gnr", "fields": {"gnr": "String", "rstatus": "String"}},
+                {"id": "nfl", "fields": {"ns": "Number"}},
+                {"id": "kg", "fields": {"kg": "String", "kg_nr": "String"}},
+            ],
+            "attribution": "© BEV",
+        }
     base_url = public_base_url(request)
     maxzoom = style_source_maxzoom(20)
     return {
@@ -13165,8 +13806,13 @@ async def api_v1_tilejson(state: str, request: Request):
 
 @app.api_route("/api/v1/tiles/{state}/{z}/{x}/{y}.mvt", methods=["GET", "HEAD"])
 def api_v1_tile_mvt(state: str, z: int, x: int, y: int) -> Response:
-    dataset = state.strip().lower()
-    if dataset != VIRTUAL_GERMANY_DATASET and dataset in active_bucket_state_keys() and not (DATA_DIR / f"{dataset}.pmtiles").exists():
+    dataset = normalize_state_key(state)
+    if (
+        dataset != VIRTUAL_GERMANY_DATASET
+        and dataset not in NATIONAL_HYBRID_DATASETS
+        and dataset in active_bucket_state_keys()
+        and not (DATA_DIR / f"{dataset}.pmtiles").exists()
+    ):
         dataset = VIRTUAL_GERMANY_DATASET
     return tile_response(dataset, z, x, y)
 
@@ -13186,7 +13832,9 @@ def api_v1_search_address(
     analytics_query: str = "",
     analytics_id: str | None = None,
     analytics_scope: str | None = None,
+    dataset: str = VIRTUAL_GERMANY_DATASET,
 ) -> dict:
+    dataset = ensure_dataset_available(dataset)
     analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"address"})
     query = q.strip() or _api_v1_search_query_from_parts(street, house_number, place)
 
@@ -13204,7 +13852,7 @@ def api_v1_search_address(
         return done({"query": query, "results": []})
     state_key = state
     if not state_key.strip() and place.strip():
-        inferred_states = states_for_place_context(place, set(active_bucket_state_keys()))
+        inferred_states = states_for_place_context(place, dataset_region_keys(dataset))
         if len(inferred_states) == 1:
             state_key = inferred_states[0]
     mode = "street" if street.strip() and not house_number.strip() else "address"
@@ -13215,7 +13863,7 @@ def api_v1_search_address(
     )
     if q.strip():
         result = search_unified_address_suggestions_for_dataset(
-            VIRTUAL_GERMANY_DATASET,
+            dataset,
             query,
             limit,
             state=state_key,
@@ -13224,7 +13872,7 @@ def api_v1_search_address(
             exact_house_number=True,
         )
     elif candidate_override:
-        active_states = set(active_bucket_state_keys())
+        active_states = dataset_region_keys(dataset)
         structured_state = requested_state_context(state_key, active_states)
         search_states = {structured_state} if structured_state else active_states
         direct_results = search_direct_geocoder_for_dataset(
@@ -13241,7 +13889,7 @@ def api_v1_search_address(
         }
     else:
         result = cached_search_features_for_dataset(
-            VIRTUAL_GERMANY_DATASET,
+            dataset,
             query,
             limit,
             mode,
@@ -13249,7 +13897,7 @@ def api_v1_search_address(
         )
     if result.get("results") or q.strip() or not place.strip() or not street.strip():
         return done(result)
-    place_suggestions = search_place_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, place, 8, state=state).get("results") or []
+    place_suggestions = search_place_suggestions_for_dataset(dataset, place, 8, state=state).get("results") or []
     for suggestion in place_suggestions:
         suggested_place = str(suggestion.get("value") or suggestion.get("label") or "").strip()
         suggested_state = normalize_state_key(str(suggestion.get("state") or ""))
@@ -13261,8 +13909,8 @@ def api_v1_search_address(
             house_number,
             suggested_place,
         )
-        fallback_state = suggested_state or requested_state_context(state_key, set(active_bucket_state_keys()))
-        fallback_states = {fallback_state} if fallback_state else set(active_bucket_state_keys())
+        fallback_state = suggested_state or requested_state_context(state_key, dataset_region_keys(dataset))
+        fallback_states = {fallback_state} if fallback_state else dataset_region_keys(dataset)
         fallback_results = search_direct_geocoder_for_dataset(
             fallback_query,
             limit,
@@ -13293,14 +13941,16 @@ def api_v1_search_parcel(
     analytics_query: str = "",
     analytics_id: str | None = None,
     analytics_scope: str | None = None,
+    dataset: str = VIRTUAL_GERMANY_DATASET,
 ) -> dict:
+    dataset = ensure_dataset_available(dataset)
     analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"parcel"})
     query = _api_v1_search_query_from_parts(gemarkung, flur, flurstueck)
     if len(gemarkung.strip()) < 2 or not flurstueck.strip():
         payload = {"query": query, "results": []}
     else:
         payload = cached_search_features_for_dataset(
-            VIRTUAL_GERMANY_DATASET,
+            dataset,
             gemarkung.strip(),
             limit,
             "parcel",
@@ -13328,7 +13978,9 @@ def api_v1_search_poi(
     analytics_query: str = "",
     analytics_id: str | None = None,
     analytics_scope: str | None = None,
+    dataset: str = VIRTUAL_GERMANY_DATASET,
 ) -> dict:
+    dataset = ensure_dataset_available(dataset)
     # ``poi_id`` is a stable technical identifier, not a user's conscious
     # search input.  Never fall back to it for analytics: direct API calls
     # without the original text remain deliberately untracked.
@@ -13352,7 +14004,7 @@ def api_v1_search_poi(
         if analytics_query_text
         else None
     )
-    active_states = set(active_bucket_state_keys())
+    active_states = dataset_region_keys(dataset)
     requested_state = normalize_state_key(state)
     allowed_states = (
         {requested_state}
@@ -13396,8 +14048,7 @@ def api_v1_dataset_search(
     analytics_scope: str | None = None,
 ) -> dict:
     analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"address", "parcel"})
-    if not is_virtual_germany_dataset(dataset):
-        get_dataset(dataset)
+    ensure_dataset_available(dataset)
     query = q.strip() or gemarkung.strip() or flurstueck.strip()
     if len(query) < 2:
         payload = {"query": query, "results": []}
@@ -13430,11 +14081,12 @@ def api_v1_suggest_addresses(
     state: str = "",
     near_lon: Annotated[float | None, Query(ge=-180, le=180)] = None,
     near_lat: Annotated[float | None, Query(ge=-90, le=90)] = None,
+    dataset: str = VIRTUAL_GERMANY_DATASET,
 ) -> dict:
     # Autocomplete is deliberately untracked.  Only a conscious submit or a
     # selected suggestion reaches /search/address with an analytics marker.
     return search_unified_address_suggestions_for_dataset(
-        VIRTUAL_GERMANY_DATASET,
+        ensure_dataset_available(dataset),
         q,
         limit,
         state=state,
@@ -13451,11 +14103,12 @@ def api_v1_suggest_search(
     state: str = "",
     near_lon: Annotated[float | None, Query(ge=-180, le=180)] = None,
     near_lat: Annotated[float | None, Query(ge=-90, le=90)] = None,
+    dataset: str = VIRTUAL_GERMANY_DATASET,
 ) -> dict:
     # This endpoint is intentionally untracked.  A selected result is recorded
     # exactly once by /search/address or /search/parcel.
     return search_unified_suggestions_for_dataset(
-        VIRTUAL_GERMANY_DATASET,
+        ensure_dataset_available(dataset),
         q,
         limit,
         state=state,
@@ -13473,9 +14126,10 @@ def api_v1_suggest_places(
     state: str = "",
     analytics_id: str | None = None,
     analytics_scope: str | None = None,
+    dataset: str = VIRTUAL_GERMANY_DATASET,
 ) -> dict:
     analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"place"})
-    payload = search_place_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, q, limit, state=state)
+    payload = search_place_suggestions_for_dataset(ensure_dataset_available(dataset), q, limit, state=state)
     return _record_search_analytics(
         started_at=analytics_started,
         scope=analytics_scope,
@@ -13496,9 +14150,10 @@ def api_v1_suggest_streets(
     state: str = "",
     analytics_id: str | None = None,
     analytics_scope: str | None = None,
+    dataset: str = VIRTUAL_GERMANY_DATASET,
 ) -> dict:
     analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"street"})
-    payload = search_street_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, place, q, limit, state=state)
+    payload = search_street_suggestions_for_dataset(ensure_dataset_available(dataset), place, q, limit, state=state)
     return _record_search_analytics(
         started_at=analytics_started,
         scope=analytics_scope,
@@ -13515,8 +14170,9 @@ def api_v1_suggest_gemarkungen(
     q: Annotated[str, Query(min_length=2, max_length=80)],
     limit: Annotated[int, Query(ge=1, le=50)] = 10,
     state: str = "",
+    dataset: str = VIRTUAL_GERMANY_DATASET,
 ) -> dict:
-    return search_gemarkung_suggestions_for_dataset(VIRTUAL_GERMANY_DATASET, q, limit, state=state)
+    return search_gemarkung_suggestions_for_dataset(ensure_dataset_available(dataset), q, limit, state=state)
 
 
 
@@ -14843,7 +15499,7 @@ def api_v1_features_at_point(
     analytics_scope: str | None = None,
 ) -> dict:
     analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"map_selection"})
-    if not is_virtual_germany_dataset(dataset):
+    if not is_known_dataset(dataset):
         try:
             get_dataset(dataset)
         except HTTPException:
@@ -14872,7 +15528,7 @@ def api_v1_features_at_point_preview(
     analytics_scope: str | None = None,
 ) -> dict:
     analytics_started = _search_analytics_started(request, analytics_id, analytics_scope, {"map_selection"})
-    if not is_virtual_germany_dataset(dataset):
+    if not is_known_dataset(dataset):
         try:
             get_dataset(dataset)
         except HTTPException:
@@ -14930,6 +15586,168 @@ def bootstrap_backdrop(state: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail="Bootstrap backdrop not found")
     return FileResponse(path, media_type="image/webp")
+
+
+def _bev_vector_cache_path(layer: str, z: int, x: int, y: int) -> Path:
+    config = BEV_VECTOR_TILE_CONFIGS.get(layer) or {}
+    revision = re.sub(
+        r"[^a-zA-Z0-9_.-]+",
+        "-",
+        str(config.get("revision") or "bev-live-v1"),
+    ).strip(".-")
+    return BEV_VECTOR_CACHE_DIR / layer / revision / str(z) / str(x) / f"{y}.pbf"
+
+
+def _bounded_gzip_decompress(data: bytes, max_bytes: int) -> bytes:
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as archive:
+            decoded = archive.read(max_bytes + 1)
+    except (EOFError, gzip.BadGzipFile, OSError) as exc:
+        raise ValueError("BEV vector tile has invalid gzip encoding") from exc
+    if len(decoded) > max_bytes:
+        raise ValueError("BEV vector tile expands beyond the configured limit")
+    return decoded
+
+
+def _validate_bev_vector_tile(data: bytes, content_type: str = "") -> None:
+    normalized_type = content_type.partition(";")[0].strip().lower()
+    allowed_types = {
+        "",
+        "application/octet-stream",
+        "application/protobuf",
+        "application/vnd.google.protobuf",
+        "application/vnd.mapbox-vector-tile",
+        "application/x-protobuf",
+        "binary/octet-stream",
+    }
+    if normalized_type not in allowed_types:
+        raise ValueError("BEV vector tile has an unexpected content type")
+    if not data or len(data) > BEV_VECTOR_MAX_UNCOMPRESSED_BYTES:
+        raise ValueError("BEV vector tile is empty or oversized")
+    if data.lstrip()[:1] in {b"<", b"{", b"["}:
+        raise ValueError("BEV vector tile contains a text error document")
+    try:
+        decoded = mapbox_vector_tile.decode(data)
+    except Exception as exc:
+        raise ValueError("BEV vector tile payload is not valid MVT") from exc
+    if not isinstance(decoded, dict):
+        raise ValueError("BEV vector tile payload has an invalid structure")
+
+
+def _bev_vector_tile(layer: str, z: int, x: int, y: int) -> Response:
+    config = BEV_VECTOR_TILE_CONFIGS.get(layer)
+    if not config:
+        raise HTTPException(status_code=404, detail="BEV vector layer not found")
+    if z < 0 or z > 22 or x < 0 or y < 0 or x >= 2**z or y >= 2**z:
+        raise HTTPException(status_code=400, detail="Invalid tile coordinate")
+    if z < int(config["minzoom"]) or z > int(config["maxzoom"]):
+        raise HTTPException(status_code=404, detail="BEV vector layer unavailable at this zoom")
+    cache_path = _bev_vector_cache_path(layer, z, x, y)
+    now = time.time()
+    if cache_path.is_file():
+        try:
+            age = now - cache_path.stat().st_mtime
+            if age <= BEV_VECTOR_CACHE_TTL_SECONDS:
+                return FileResponse(
+                    cache_path,
+                    media_type="application/vnd.mapbox-vector-tile",
+                    headers={
+                        "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
+                        "X-OpenKataster-Cache": "HIT",
+                    },
+                )
+        except OSError:
+            pass
+
+    cache_key = f"bev:{layer}:{z}:{x}:{y}"
+    with _wms_render_lock(cache_key):
+        now = time.time()
+        if cache_path.is_file():
+            try:
+                age = now - cache_path.stat().st_mtime
+                if age <= BEV_VECTOR_CACHE_TTL_SECONDS:
+                    return FileResponse(
+                        cache_path,
+                        media_type="application/vnd.mapbox-vector-tile",
+                        headers={
+                            "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
+                            "X-OpenKataster-Cache": "HIT",
+                        },
+                    )
+            except OSError:
+                pass
+        upstream = str(config["url"]).format(z=z, x=x, y=y)
+        request = urllib.request.Request(
+            upstream,
+            headers={
+                "Accept": "application/vnd.mapbox-vector-tile,application/x-protobuf",
+                # Cache one canonical uncompressed representation. This avoids
+                # persisting an encoding sidecar and works identically in every
+                # browser and reverse proxy.
+                "Accept-Encoding": "identity",
+                "User-Agent": "OpenKataster/1.0 (BEV vector tile proxy)",
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=15) as upstream_response:
+                status = int(getattr(upstream_response, "status", 200) or 200)
+                data = upstream_response.read(BEV_VECTOR_MAX_COMPRESSED_BYTES + 1)
+                content_encoding = str(upstream_response.headers.get("Content-Encoding") or "").lower()
+                content_type = str(upstream_response.headers.get("Content-Type") or "")
+            if status == 204 or not data:
+                return Response(
+                    status_code=204,
+                    headers={"Cache-Control": "public, max-age=3600"},
+                )
+            if len(data) > BEV_VECTOR_MAX_COMPRESSED_BYTES:
+                raise ValueError("BEV vector tile is oversized")
+            if "gzip" in content_encoding or data[:2] == b"\x1f\x8b":
+                data = _bounded_gzip_decompress(data, BEV_VECTOR_MAX_UNCOMPRESSED_BYTES)
+            _validate_bev_vector_tile(data, content_type)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = cache_path.with_name(
+                f".{cache_path.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(4)}.tmp"
+            )
+            try:
+                tmp_path.write_bytes(data)
+                os.replace(tmp_path, cache_path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+            return Response(
+                content=data,
+                media_type="application/vnd.mapbox-vector-tile",
+                headers={
+                    "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
+                    "X-OpenKataster-Cache": "MISS",
+                },
+            )
+        except (OSError, ValueError, urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+            if cache_path.is_file():
+                try:
+                    age = time.time() - cache_path.stat().st_mtime
+                    if age <= BEV_VECTOR_CACHE_STALE_SECONDS:
+                        return FileResponse(
+                            cache_path,
+                            media_type="application/vnd.mapbox-vector-tile",
+                            headers={
+                                "Cache-Control": "public, max-age=300",
+                                "Warning": '110 - "Response is stale"',
+                                "X-OpenKataster-Cache": "STALE",
+                            },
+                        )
+                except OSError:
+                    pass
+            raise HTTPException(
+                status_code=502,
+                detail="BEV vector tile upstream unavailable",
+                headers={"Cache-Control": "no-store"},
+            ) from exc
+
+
+@app.api_route("/bev/tiles/{layer}/{z:int}/{x:int}/{y:int}.pbf", methods=["GET", "HEAD"])
+def bev_vector_tile(layer: str, z: int, x: int, y: int) -> Response:
+    return _bev_vector_tile(layer, z, x, y)
 
 
 def _buffered_wms_frame(
@@ -15428,8 +16246,7 @@ def viewer(
     request: Request,
     dataset: str,
 ):
-    if not is_virtual_germany_dataset(dataset):
-        get_dataset(dataset)
+    ensure_dataset_available(dataset)
     query = urllib.parse.urlencode(dict(request.query_params), doseq=True)
     target = f"/embed/{dataset}" + (f"?{query}" if query else "")
     return RedirectResponse(url=target, status_code=308)
@@ -15494,8 +16311,7 @@ def embed_viewer(
     token: Annotated[str | None, Query()] = None,
     session: Annotated[str | None, Query()] = None,
 ):
-    if not is_virtual_germany_dataset(dataset):
-        get_dataset(dataset)
+    dataset = ensure_dataset_available(dataset)
     supplied = session or token
     claims = _verify_embed_session(supplied) if supplied else None
     if supplied and not claims:
@@ -15550,6 +16366,7 @@ async def create_volume_upload_session(
     files = _validate_volume_filenames(
         list(payload.get("files") or []),
         allow_subset=selected_base_version is not None,
+        state_slug=state_slug,
     )
     _volume_destination_must_be_available(state_slug, version_name)
     if selected_base_version is not None:
@@ -15620,7 +16437,7 @@ def list_volume_version_files(
     if not version_dir.is_dir():
         raise HTTPException(status_code=404, detail="tile version not found")
     files = []
-    for filename in sorted(VOLUME_REQUIRED_FILES):
+    for filename in sorted(runtime_required_files(state_slug)):
         file_path = version_dir / filename
         present = file_path.is_file()
         stat = file_path.stat() if present else None
@@ -15635,7 +16452,7 @@ def list_volume_version_files(
             ),
         })
     try:
-        _validate_volume_state_dir(version_dir)
+        _validate_volume_state_dir(version_dir, state_slug=state_slug)
         complete = True
     except HTTPException:
         complete = False
@@ -15690,7 +16507,7 @@ async def upload_volume_part(
     state_slug = _canonical_volume_state_slug(state_slug)
     version_name = _safe_version_name(version)
     safe_filename = os.path.basename(filename)
-    if safe_filename != filename or safe_filename not in VOLUME_REQUIRED_FILES:
+    if safe_filename != filename or safe_filename not in runtime_required_files(state_slug):
         raise HTTPException(status_code=400, detail=f"unexpected tile file: {filename}")
     if end <= start or end > total_size:
         raise HTTPException(status_code=400, detail="invalid upload byte range")
@@ -15835,6 +16652,7 @@ async def complete_volume_upload(
     files = _validate_volume_filenames(
         list(payload.get("files") or []),
         allow_subset=selected_base_version is not None,
+        state_slug=state_slug,
     )
     version_dir = _volume_destination_must_be_available(state_slug, version_name)
     upload_dir = _volume_upload_dir(state_slug, version_name)
@@ -15869,13 +16687,14 @@ async def complete_volume_upload(
 
         uploaded_names = {item["filename"] for item in files}
         inherited_storage = {}
-        for filename in sorted(VOLUME_REQUIRED_FILES - uploaded_names):
+        required_files = runtime_required_files(state_slug)
+        for filename in sorted(required_files - uploaded_names):
             if base_dir is None:
                 raise HTTPException(status_code=400, detail=f"missing uploaded file: {filename}")
             (upload_dir / f"{filename}.partial").unlink(missing_ok=True)
             inherited_storage[filename] = _inherit_volume_file(base_dir / filename, upload_dir / filename)
 
-        validation = _validate_volume_state_dir(upload_dir)
+        validation = _validate_volume_state_dir(upload_dir, state_slug=state_slug)
         display_name = bundesland or manifest.get("bundesland") or state_slug.replace("-", " ").title()
         _write_volume_upload_manifest(
             upload_dir,
@@ -15914,7 +16733,7 @@ async def complete_volume_upload(
         "mode": manifest["mode"],
         "base_version": selected_base_version,
         "uploaded_files": sorted(uploaded_names),
-        "inherited_files": sorted(VOLUME_REQUIRED_FILES - uploaded_names),
+        "inherited_files": sorted(runtime_required_files(state_slug) - uploaded_names),
         "active": False,
         "validation": validation,
         "remote_version_path": str(version_dir),
@@ -15931,6 +16750,8 @@ def sync_bucket_state(
 
 
 def tile_response(dataset: str, z: int, x: int, y: int) -> Response:
+    if normalize_state_key(dataset) == AUSTRIA_DATASET:
+        return _bev_vector_tile("kataster", z, x, y)
     if is_virtual_germany_dataset(dataset):
         data = mosaic_tile(z, x, y)
         if data is None:
@@ -16135,6 +16956,7 @@ PUBLIC_OPENAPI_PATHS = {
     "/api/v1",
     "/api/v1/states",
     "/api/v1/sources",
+    "/api/v1/catalog/{dataset}",
     "/api/v1/datasets",
     "/api/v1/tilejson/{state}.json",
     "/api/v1/tiles/{state}/{z}/{x}/{y}.mvt",
@@ -16154,6 +16976,7 @@ PUBLIC_OPENAPI_PATHS = {
     "/api/v1/embed/sessions",
     "/api/v1/integrations/onoffice/selection-payload",
     "/embed/{dataset}",
+    "/bev/tiles/{layer}/{z}/{x}/{y}.pbf",
 }
 
 

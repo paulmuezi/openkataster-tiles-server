@@ -1,12 +1,12 @@
-import { createApi } from './api.js?v=20260719-onoffice-workspace2';
+import { createApi } from './api.js?v=20260722-schwerin-selection1';
 import { createExportController } from './export.js?v=20260719-onoffice-workspace2';
 import { createLayerController } from './layers.js?v=20260722-hybrid-layers1';
 import { createLayout } from './layout.js?v=20260719-table-autofit1';
 import { createPlannerMap } from './map.js?v=20260717-middle-mouse-pan1';
 import { createMeasureController } from './measure.js?v=20260719-free-preview-controls1';
 import { createPersistence, readPersistedState } from './persistence.js';
-import { createSearchController } from './search.js?v=20260717-poi-selection-attribution2';
-import { createSelectionController } from './selection.js?v=20260722-bayern-height1';
+import { createSearchController } from './search.js?v=20260722-schwerin-selection1';
+import { createSelectionController } from './selection.js?v=20260722-land-register-table1';
 import { createSourceController } from './sources.js?v=20260722-hybrid-layers1';
 import { createStore } from './store.js';
 import {
@@ -15,7 +15,7 @@ import {
   normalizeLayerVisibility,
   normalizeWorkspaceLayers,
   normalizeWorkspaceV1
-} from './workspace.js?v=20260719-onoffice-workspace2';
+} from './workspace.js?v=20260722-land-register-table1';
 
 const params = new URLSearchParams(window.location.search);
 const surface = params.get('surface') === 'planner' ? 'planner' : 'embed';

@@ -1,5 +1,5 @@
 import { addressLabel, escapeHtml, featureKey, formatArea, polygonAreaMeters } from './utils.js';
-import { normalizeSelectionReferences, selectionFromPayload } from './workspace.js?v=20260719-onoffice-workspace2';
+import { normalizeSelectionReferences, selectionFromPayload } from './workspace.js?v=20260722-land-register-table1';
 
 const HIDDEN_DYNAMIC_FIELDS = new Set([
   'source_db', 'gml_id', 'id', 'geometry', 'bbox', 'center', 'addresses', 'address',
@@ -7,6 +7,7 @@ const HIDDEN_DYNAMIC_FIELDS = new Set([
   'flurstueckskennzeichen',
   'gebaeudekennzeichen',
   'zaehler', 'nenner', 'flurstuecksfolge', 'nutzungen', 'nutzung_haupt',
+  'formal_land_register_entries', 'land_register_office_authority',
   'gemeinde', 'gemeindenummer', 'kreis', 'kreisnummer', 'land', 'landnummer', 'regierungsbezirk'
 ]);
 
@@ -17,6 +18,7 @@ const FIELD_LABELS = {
 const BUILDING_OFFICIAL_AREA_KEYS = ['amtliche_flaeche_m2', 'grundflaeche_m2'];
 const BUILDING_GEOMETRIC_AREA_KEYS = ['geometrische_flaeche_m2'];
 const PARCEL_LOCATION_DISPLAY_MAX_LENGTH = 240;
+const LAND_REGISTER_INLINE_SHEET_LIMIT = 5;
 const WELCOME_HOVER_HIT_LAYERS = ['welcome-hover-building-hit', 'welcome-hover-parcel-hit'];
 const WELCOME_HOVER_LAYERS = [
   'welcome-hover-parcel-hit', 'welcome-hover-parcel-line',
@@ -141,6 +143,77 @@ export function parcelDisplayLocation(item = {}) {
     addressKeys.add(compactDisplayKey([address.street, address.house_number].filter(Boolean).join(' ')));
   }
   return addressKeys.has(locationKey) ? '' : location;
+}
+
+function landRegisterLabel(entry, nameKey, codeKey) {
+  const label = normalizedDisplayText(entry?.[nameKey]);
+  const code = normalizedDisplayText(entry?.[codeKey]);
+  return { label: label || code, code };
+}
+
+/**
+ * Keep the formal office/district/sheet relationship intact while grouping
+ * sheets that belong to the same office and district.  An authority-only
+ * relation may identify an Amtsgericht, but deliberately leaves Grundbuch and
+ * Grundbuchblatt empty instead of inventing either value.
+ */
+export function landRegisterGroups(item = {}) {
+  const groups = [];
+  const byKey = new Map();
+  const entries = Array.isArray(item?.formal_land_register_entries)
+    ? item.formal_land_register_entries
+    : [];
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const office = landRegisterLabel(entry, 'land_register_office_name', 'land_register_office_code');
+    const district = landRegisterLabel(entry, 'district_name', 'district_code');
+    const sheet = normalizedDisplayText(entry.sheet_number);
+    if (!office.label && !district.label && !sheet) continue;
+    const key = [office.code, office.label, district.code, district.label].join('\u0000');
+    let group = byKey.get(key);
+    if (!group) {
+      group = {
+        office: office.label,
+        officeCode: office.code,
+        district: district.label,
+        districtCode: district.code,
+        sheets: [],
+        authorityOnly: false
+      };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    if (sheet && !group.sheets.includes(sheet)) group.sheets.push(sheet);
+  }
+
+  const authority = item?.land_register_office_authority;
+  const authorityEntries = Array.isArray(authority?.offices) && authority.offices.length
+    ? authority.offices
+    : authority && typeof authority === 'object' ? [{
+      name: authority.office_name,
+      code: authority.office_code
+    }] : [];
+  for (const entry of authorityEntries) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const office = landRegisterLabel(entry, 'name', 'code');
+    if (!office.label) continue;
+    const alreadyFormal = groups.some((group) => (
+      (office.code && group.officeCode === office.code)
+      || group.office === office.label
+    ));
+    if (alreadyFormal) continue;
+    groups.push({
+      office: office.label,
+      officeCode: office.code,
+      district: '',
+      districtCode: '',
+      sheets: [],
+      authorityOnly: true
+    });
+  }
+
+  return groups;
 }
 
 export function previewNoticeScrollOffset({ scrollLeft, scrollWidth, clientWidth }) {
@@ -660,6 +733,7 @@ export function createSelectionController({
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'] },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'] },
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], compact: true },
+      landRegisterColumn({ preview: true }),
       { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
       areaColumn([
         { kind: 'official', label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
@@ -822,6 +896,63 @@ export function createSelectionController({
     }).sort((a, b) => humanizeField(a).localeCompare(humanizeField(b), 'de')).map((key) => ({ label: humanizeField(key), keys: [key] }));
   }
 
+  function landRegisterValueHtml(value, code = '') {
+    if (!value) return '–';
+    const title = code && code !== value
+      ? ` title="Kennziffer ${escapeHtml(code)}"`
+      : '';
+    return `<span${title}>${escapeHtml(value)}</span>`;
+  }
+
+  function landRegisterSheetListHtml(sheets = []) {
+    if (!sheets.length) return '–';
+    const initial = sheets.slice(0, LAND_REGISTER_INLINE_SHEET_LIMIT)
+      .map((sheet) => `<span>${escapeHtml(sheet)}</span>`)
+      .join('');
+    const remaining = sheets.slice(LAND_REGISTER_INLINE_SHEET_LIMIT);
+    if (!remaining.length) return `<div class="selection-land-register-sheet-list">${initial}</div>`;
+    const more = remaining.map((sheet) => `<span>${escapeHtml(sheet)}</span>`).join('');
+    return `<div class="selection-land-register-sheet-list">${initial}<details class="selection-land-register-more"><summary>Weitere ${escapeHtml(remaining.length.toLocaleString('de-DE'))} anzeigen</summary><div class="selection-land-register-more-list">${more}</div></details></div>`;
+  }
+
+  function landRegisterGrid(groups, { header = false, preview = false } = {}) {
+    if (header) {
+      return '<span class="selection-land-register-grid selection-land-register-header"><span>Amtsgericht</span><span>Grundbuch</span><span>Grundbuchblatt</span></span>';
+    }
+    if (!groups.length) return '–';
+    if (preview) {
+      const group = groups[0];
+      return `<span class="selection-land-register-grid selection-land-register-values"><span>${landRegisterValueHtml(group.office, group.officeCode)}</span><span>${landRegisterValueHtml(group.district, group.districtCode)}</span><span class="selection-land-register-sheet-list">${group.sheets.map((sheet) => `<span>${escapeHtml(sheet)}</span>`).join('')}</span></span>`;
+    }
+    const rows = groups.map((group) => [
+      `<div class="selection-land-register-office">${landRegisterValueHtml(group.office, group.officeCode)}</div>`,
+      `<div class="selection-land-register-district">${landRegisterValueHtml(group.district, group.districtCode)}</div>`,
+      `<div class="selection-land-register-sheets">${landRegisterSheetListHtml(group.sheets)}</div>`
+    ].join('')).join('');
+    return `<div class="selection-land-register-grid selection-land-register-values">${rows}</div>`;
+  }
+
+  function landRegisterColumn({ preview = false } = {}) {
+    const previewGroups = [{
+      office: 'Amtsgericht Musterstadt',
+      officeCode: '',
+      district: 'Musterbezirk',
+      districtCode: '',
+      sheets: ['123', '124'],
+      authorityOnly: false
+    }];
+    return {
+      label: 'Grundbuchdaten',
+      title: 'Amtsgericht, Grundbuch und Grundbuchblatt',
+      keys: ['formal_land_register_entries', 'land_register_office_authority'],
+      slot: 'land-register',
+      headerHtml: landRegisterGrid([], { header: true }),
+      value: landRegisterGroups,
+      html: (item) => landRegisterGrid(landRegisterGroups(item)),
+      previewHtml: preview ? () => landRegisterGrid(previewGroups, { preview: true }) : undefined
+    };
+  }
+
   function areaGrid(rows, { header = false } = {}) {
     if (!rows.length) return '–';
     const className = header ? 'selection-area-grid selection-area-header' : 'selection-area-grid selection-area-values';
@@ -953,6 +1084,7 @@ export function createSelectionController({
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'], format: 'boolean' },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'], format: 'boolean' },
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], format: 'date', compact: true },
+      landRegisterColumn(),
       { label: 'Adressen', keys: ['addresses', 'address'], value: selectionAddressLabels, html: (item) => addressChips(item), alwaysVisible: true, slot: 'address' },
       areaColumn([
         { kind: 'official', label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }

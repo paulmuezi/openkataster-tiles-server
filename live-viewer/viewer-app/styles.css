@@ -354,7 +354,18 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .selection-data-table th.compact, .selection-data-table td.compact { width: 1%; white-space: nowrap; }
 .selection-data-table td:not(.compact) { max-width: 280px; white-space: normal; overflow-wrap: anywhere; }
 .selection-data-table th.selection-column-address, .selection-data-table td.selection-column-address { width: var(--selection-address-width, 220px); min-width: var(--selection-address-width, 220px); max-width: var(--selection-address-width, 220px); white-space: nowrap; overflow-wrap: normal; }
+.selection-data-table th.selection-column-land-register, .selection-data-table td.selection-column-land-register { width: 520px; min-width: 520px; max-width: 620px; white-space: normal; overflow-wrap: normal; }
 .selection-data-table th.selection-column-areas, .selection-data-table td.selection-column-areas { width: var(--selection-areas-width, 250px); min-width: var(--selection-areas-width, 250px); max-width: var(--selection-areas-width, 250px); white-space: nowrap; overflow-wrap: normal; }
+.selection-land-register-grid { display: grid; grid-template-columns: minmax(170px, 1.35fr) minmax(130px, 1fr) minmax(110px, .75fr); column-gap: 14px; width: 100%; }
+.selection-land-register-header > span { min-width: 0; white-space: nowrap; }
+.selection-land-register-values > * { min-width: 0; padding-block: 2px; border-bottom: 1px solid var(--ok-border-soft); overflow-wrap: anywhere; }
+.selection-land-register-values > *:nth-last-child(-n + 3) { border-bottom: 0; }
+.selection-land-register-sheet-list, .selection-land-register-more-list { display: grid; justify-items: start; gap: 2px; }
+.selection-land-register-sheet-list > span, .selection-land-register-more-list > span { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.selection-land-register-more { margin-top: 3px; }
+.selection-land-register-more summary { width: max-content; max-width: 100%; color: var(--ok-orange); cursor: pointer; font-size: 11px; line-height: 1.35; white-space: nowrap; }
+.selection-land-register-more summary:focus-visible { border-radius: 2px; outline: 2px solid var(--ok-orange); outline-offset: 2px; }
+.selection-land-register-more-list { max-height: 220px; margin-top: 3px; padding-right: 5px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .selection-area-grid { display: grid; grid-template-columns: repeat(var(--selection-area-count, 1), minmax(0, 1fr)); column-gap: 18px; align-items: baseline; width: 100%; }
 .selection-area-grid > span { min-width: 0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .selection-area-values > span { color: inherit; }
@@ -544,6 +555,8 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
   .selection-head > div { display: grid; gap: 1px; }
   .selection-data-table { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   .selection-data-table th, .selection-data-table td { padding: 8px 10px; }
+  .selection-data-table th.selection-column-land-register, .selection-data-table td.selection-column-land-register { width: 440px; min-width: 440px; max-width: 440px; }
+  .selection-land-register-grid { grid-template-columns: minmax(145px, 1.25fr) minmax(115px, 1fr) minmax(105px, .8fr); column-gap: 10px; }
   .selection-data-table .selection-pro-notice td { padding-inline: 10px; text-align: left; overflow: visible; }
   .selection-pro-notice-copy {
     position: relative;

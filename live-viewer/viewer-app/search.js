@@ -91,6 +91,24 @@ export function searchResultTypeLabel(result) {
   return 'Adresse';
 }
 
+export function addressSuggestionResolutionContext(result) {
+  const context = {};
+  const state = String(result?.state || '').trim();
+  if (state) context.state = state;
+  const center = centerFromResult(result);
+  if (center?.every(Number.isFinite)) {
+    context.nearLon = center[0];
+    context.nearLat = center[1];
+  }
+  return context;
+}
+
+export function committedAddressSuggestion(result, resolvedResults) {
+  const center = centerFromResult(result);
+  if (center?.every(Number.isFinite)) return result;
+  return (Array.isArray(resolvedResults) ? resolvedResults : [])[0];
+}
+
 export function createSearchController({
   map,
   api,
@@ -326,9 +344,9 @@ export function createSearchController({
     }
   }, 80);
 
-  function trackedAddressSearch(query, signal, limit = 12, analyticsQuery = '') {
+  function trackedAddressSearch(query, signal, limit = 12, analyticsQuery = '', resolutionContext = {}) {
     return api.searchAddress(
-      { query, analyticsQuery, ...nearbySearchOptions(limit) },
+      { query, analyticsQuery, ...nearbySearchOptions(limit), ...resolutionContext, limit },
       signal,
       createAnalyticsMarker('address')
     );
@@ -404,8 +422,14 @@ export function createSearchController({
         );
         resolved = (data.results || [])[0];
       } else {
-        const data = await trackedAddressSearch(selectedQuery, searchRequest.signal, 12, typedQuery);
-        resolved = (data.results || [])[0];
+        const data = await trackedAddressSearch(
+          selectedQuery,
+          searchRequest.signal,
+          12,
+          typedQuery,
+          addressSuggestionResolutionContext(result)
+        );
+        resolved = committedAddressSuggestion(result, data.results || []);
       }
       if (!resolved) {
         setBusy(false, 'Keine Treffer');

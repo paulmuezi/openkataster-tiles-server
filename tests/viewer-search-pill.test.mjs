@@ -52,10 +52,10 @@ assert.match(stylesSource, /html\[data-shell-mode="welcome"\] \.search-control/)
 
 assert.match(appSource, /'searchControl','searchPanel','searchModeButton','addressFields','parcelFields'/);
 assert.doesNotMatch(appSource, /'searchButton'|'searchClose'|'searchMode'|'parcelModeLabel'/);
-assert.match(appSource, /\.\/search\.js\?v=20260717-poi-selection-attribution2/);
+assert.match(appSource, /\.\/search\.js\?v=20260722-schwerin-selection1/);
 assert.match(appSource, /\.\/sources\.js\?v=20260722-hybrid-layers1/);
-assert.match(indexSource, /styles\.css\?v=20260722-bayern-height1/);
-assert.match(indexSource, /app\.js\?v=20260722-bayern-height1/);
+assert.match(indexSource, /styles\.css\?v=20260722-land-register-table1/);
+assert.match(indexSource, /app\.js\?v=20260722-schwerin-selection1/);
 assert.match(indexSource, /id="osmAttribution"[^>]+openstreetmap\.org\/copyright[^>]+hidden/);
 assert.match(appSource, /showCompactAttribution: \(\) => false/, 'the production viewer must never reveal compact OSM attribution');
 assert.match(sourcesSource, /showCompactAttribution = \(\) => false/, 'future source-controller instances default to hidden attribution');

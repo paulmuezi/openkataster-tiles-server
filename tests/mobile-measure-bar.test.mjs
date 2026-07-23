@@ -103,7 +103,12 @@ const appVersion = assetVersion(indexSource, 'app.js');
 assetVersion(appSource, 'measure.js');
 assert.equal(
   stylesVersion,
+  '20260722-land-register-table1',
+  'Die Grundbuch-Tabellenstile müssen den deployten CSS-Cache-Key behalten.'
+);
+assert.equal(
   appVersion,
-  'CSS und App-Einstieg müssen mit demselben Viewer-Release invalidiert werden.'
+  '20260722-schwerin-selection1',
+  'Der App-Einstieg muss den neueren Schwerin-Suchfix invalidieren.'
 );
 console.log('mobile-measure-bar-tests=ok');

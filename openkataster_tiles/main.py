@@ -6593,8 +6593,9 @@ def feature_spatial_addresses(con: sqlite3.Connection, source_db: str, geom) -> 
         """
         SELECT a.properties_json, a.geometry_wkb
         FROM address_index i
-        JOIN address_points a ON a.id = i.id
+        CROSS JOIN address_points a
         WHERE a.source_db = ?
+          AND a.id = i.id
           AND i.min_lon <= ? AND i.max_lon >= ?
           AND i.min_lat <= ? AND i.max_lat >= ?
         LIMIT 100

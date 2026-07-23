@@ -1,12 +1,12 @@
-import { createApi } from './api.js?v=20260723-austria1';
+import { createApi } from './api.js?v=20260723-austria2';
 import { createExportController } from './export.js?v=20260723-austria1';
-import { createLayerController } from './layers.js?v=20260723-austria1';
+import { createLayerController } from './layers.js?v=20260723-austria2';
 import { createLayout } from './layout.js?v=20260719-table-autofit1';
 import { createPlannerMap } from './map.js?v=20260723-austria1';
 import { createMeasureController } from './measure.js?v=20260719-free-preview-controls1';
 import { createPersistence, readPersistedState } from './persistence.js?v=20260723-austria1';
-import { createSearchController } from './search.js?v=20260723-austria1';
-import { createSelectionController } from './selection.js?v=20260723-austria1';
+import { createSearchController } from './search.js?v=20260723-austria2';
+import { createSelectionController } from './selection.js?v=20260723-austria2';
 import { createSourceController } from './sources.js?v=20260723-austria1';
 import { createStore } from './store.js';
 import {

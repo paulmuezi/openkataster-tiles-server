@@ -153,8 +153,8 @@ assert.match(indexSource, /data-dataset-switch="oesterreich" aria-pressed="false
 assert.match(appSource, /postToParent\('openkataster:request-dataset', \{ source: workspaceDataset, target \}\)/);
 assert.match(appSource, /window\.location\.assign\(datasetViewerUrl\(window\.location, target\)\)/);
 
-assert.match(layerSource, /\/bev\/tiles\/kataster\/\{z\}\/\{x\}\/\{y\}\.pbf/);
-assert.match(layerSource, /\/bev\/tiles\/symbole\/\{z\}\/\{x\}\/\{y\}\.pbf/);
+assert.match(layerSource, /\/api\/v1\/bev\/tiles\/kataster\/\{z\}\/\{x\}\/\{y\}\.pbf/);
+assert.match(layerSource, /\/api\/v1\/bev\/tiles\/symbole\/\{z\}\/\{x\}\/\{y\}\.pbf/);
 for (const sourceLayer of ['nfl', 'sli', 'gst', 'gnr', 'hnr', 'gp', 'ssb']) {
   assert.match(layerSource, new RegExp(`'source-layer': '${sourceLayer}'`));
 }

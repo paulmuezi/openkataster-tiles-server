@@ -203,13 +203,13 @@ export function createLayerController({ map, store, elements, datasetProfile = {
     if (map.getSource(AT_KATASTER_SOURCE_ID)) return;
     map.addSource(AT_KATASTER_SOURCE_ID, {
       type: 'vector',
-      tiles: [`${window.location.origin}/bev/tiles/kataster/{z}/{x}/{y}.pbf?v=bev-kataster-live-v1`],
+      tiles: [`${window.location.origin}/api/v1/bev/tiles/kataster/{z}/{x}/{y}.pbf?v=bev-kataster-live-v1`],
       minzoom: 0,
       maxzoom: 16
     });
     map.addSource(AT_SYMBOL_SOURCE_ID, {
       type: 'vector',
-      tiles: [`${window.location.origin}/bev/tiles/symbole/{z}/{x}/{y}.pbf?v=bev-symbole-live-v1`],
+      tiles: [`${window.location.origin}/api/v1/bev/tiles/symbole/{z}/{x}/{y}.pbf?v=bev-symbole-live-v1`],
       minzoom: 13,
       maxzoom: 16
     });

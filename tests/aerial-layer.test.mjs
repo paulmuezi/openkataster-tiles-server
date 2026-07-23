@@ -24,8 +24,8 @@ assert.match(sourcesSource, /aerialCapability\.attribution \|\| state\?\.quellen
 assert.match(sourcesSource, /onStateCapabilities\(state \|\| null\)/);
 assert.match(appSource, /state\?\.export\?\.dxf !== false/);
 assert.match(appSource, /dxfOption\.hidden = !dxfAvailable/);
-assert.match(appSource, /\.\/layers\.js\?v=20260723-austria1/);
-assert.match(indexSource, /app\.js\?v=20260723-austria1/);
+assert.match(appSource, /\.\/layers\.js\?v=20260723-austria2/);
+assert.match(indexSource, /app\.js\?v=20260723-austria2/);
 assert.match(indexSource, /styles\.css\?v=20260723-austria1/);
 
 console.log('aerial-layer-tests=ok');

@@ -161,6 +161,26 @@ url = new URL(call.path, window.location.origin);
 assert.equal(url.searchParams.get('analytics_id'), null);
 assert.equal(url.searchParams.get('analytics_scope'), null);
 
+await api.featureAt(
+  16.420647,
+  48.18246,
+  signal,
+  null,
+  {
+    street: 'Eyzinggasse',
+    houseNumber: '27',
+    label: 'Eyzinggasse 27, 1110 Wien',
+    addressId: '6833147'
+  }
+);
+call = calls.at(-1);
+url = new URL(call.path, window.location.origin);
+assert.equal(url.searchParams.get('address_street'), 'Eyzinggasse');
+assert.equal(url.searchParams.get('address_house_number'), '27');
+assert.equal(url.searchParams.get('address_label'), 'Eyzinggasse 27, 1110 Wien');
+assert.equal(url.searchParams.get('address_id'), '6833147');
+assert.equal(url.searchParams.get('analytics_id'), null);
+
 await api.createOrder({ test: true });
 call = calls.at(-1);
 assert.equal(call.path, '/api/orders');
@@ -275,7 +295,12 @@ assert.equal(searchResultTypeLabel({ search_scope: 'parcel' }), 'Flurstück');
 assert.equal(searchResultTypeLabel({ search_scope: 'poi' }), 'POI');
 assert.match(searchSource, /function handleSearchInput\(\)[\s\S]*clearPoiMarker\(\);[\s\S]*suggestSearch\(\)/, 'typing a different query clears a stale POI marker immediately');
 assert.doesNotMatch(selectionSource, /createAnalyticsMarker|map_selection/);
-assert.match(selectionSource, /async function selectAt\(lngLat, additive = false, preferredKind = null\)/);
+assert.match(selectionSource, /async function selectAt\(lngLat, additive = false, preferredKind = null, addressHint = null\)/);
+assert.match(
+  searchSource,
+  /selection\.selectAt\([\s\S]*selectionPreference === 'all' \? null : selectionPreference,[\s\S]*addressSelectionHint/,
+  'address searches must pass the official relation hint into point selection'
+);
 assert.match(selectionSource, /selectAt\(event\.lngLat, true\)/);
 assert.match(searchSource, /\{ gemarkung, flur, flurstueck, state: selectedGemarkungState \}/);
 assert.match(searchSource, /gemarkungInput\.value = label;/, 'selected Gemarkung code must stay visible');

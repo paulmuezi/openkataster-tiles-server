@@ -5995,29 +5995,41 @@ def address_match_score(address: dict, wanted: dict) -> int:
     return score
 
 
+def address_relation_match_score(address: dict, wanted: dict) -> int:
+    """Prefer an explicit official address relation over spatial proximity."""
+    score = address_match_score(address, wanted)
+    address_id = str(address.get("address_id") or "").strip()
+    wanted_id = str(wanted.get("address_id") or "").strip()
+    if address_id and wanted_id and address_id == wanted_id:
+        score += 100
+    return score
+
+
 def matching_address_points(con: sqlite3.Connection, source_db: str, address_properties: dict) -> list:
-    street = str(address_properties.get("street") or "").strip()
-    house_number = str(address_properties.get("house_number") or "").strip()
-    label = str(address_properties.get("label") or "").strip()
-    clauses = ["source_db = ?"]
-    params: list[str] = [source_db]
-    if street:
-        clauses.append("properties_json LIKE ?")
-        params.append(like_pattern(street))
-    if house_number:
-        clauses.append("properties_json LIKE ?")
-        params.append(like_pattern(house_number))
-    if not street and not house_number and label:
-        clauses.append("properties_json LIKE ?")
-        params.append(like_pattern(label))
+    address_id = str(address_properties.get("address_id") or "").strip()
+    if not address_id:
+        # A free-text LIKE scan over a national address_points table would be
+        # unbounded. Relation-aware selection still has the exact per-building
+        # address rows and falls back to footprint ranking when no source ID is
+        # available.
+        return []
+    source_ids = tuple(
+        dict.fromkeys(
+            value
+            for value in (address_id, f"address:{address_id}")
+            if value
+        )
+    )
+    placeholders = ",".join("?" for _ in source_ids)
     rows = con.execute(
         f"""
         SELECT properties_json, geometry_wkb, lon, lat
         FROM address_points
-        WHERE {" AND ".join(clauses)}
-        LIMIT 80
+        WHERE source_db = ?
+          AND source_id IN ({placeholders})
+        LIMIT 4
         """,
-        tuple(params),
+        (source_db, *source_ids),
     ).fetchall()
     matched = []
     for row in rows:
@@ -6298,7 +6310,7 @@ def building_for_parcel_address(
         (parcel_row["source_db"], max_lon, min_lon, max_lat, min_lat),
     ).fetchall()
 
-    best: tuple[float, sqlite3.Row, object] | None = None
+    candidates: list[tuple[int, float, sqlite3.Row, object]] = []
     for building_row in building_rows:
         try:
             building_geom = wkb.loads(bytes(building_row["geometry_wkb"]))
@@ -6306,21 +6318,41 @@ def building_for_parcel_address(
             continue
         if not (parcel_geom.contains(building_geom.representative_point()) or parcel_geom.intersects(building_geom)):
             continue
+        relation_score = max(
+            (
+                address_relation_match_score(address, address_properties)
+                for address in feature_relation_addresses(
+                    con,
+                    str(building_row["source_db"] or ""),
+                    "building",
+                    str(building_row["gml_id"] or ""),
+                ).addresses
+            ),
+            default=0,
+        )
         if address_points:
-            rank = min(
+            distance = min(
                 0.0 if building_geom.covers(address_geom) else building_geom.distance(address_geom)
                 for _, address_geom in address_points
             )
         else:
             # Live fallback for indexes that only have parcel relation addresses:
             # choose the building with the largest footprint inside the addressed parcel.
-            rank = -float(building_geom.intersection(parcel_geom).area or building_geom.area or 0.0)
-        if best is None or rank < best[0]:
-            best = (rank, building_row, building_geom)
+            distance = -float(building_geom.intersection(parcel_geom).area or building_geom.area or 0.0)
+        candidates.append((relation_score, distance, building_row, building_geom))
 
-    if best is None:
+    if not candidates:
         return None
-    return best[1], best[2]
+    trusted = [
+        candidate
+        for candidate in candidates
+        if candidate[0] >= 4
+    ]
+    best = min(
+        trusted or candidates,
+        key=lambda candidate: (-candidate[0], candidate[1], str(candidate[2]["gml_id"] or "")),
+    )
+    return best[2], best[3]
 
 
 def dedupe_addresses(addresses: list[dict]) -> list[dict]:
@@ -6693,7 +6725,12 @@ def enrich_gemarkung_from_lookup(path: Path, properties: dict) -> None:
             return
 
 
-def query_features_in_index(path: Path, lon: float, lat: float) -> tuple[list[dict], list[dict]]:
+def query_features_in_index(
+    path: Path,
+    lon: float,
+    lat: float,
+    address_hint: dict | None = None,
+) -> tuple[list[dict], list[dict]]:
     click = Point(lon, lat)
     parcels: list[dict] = []
     buildings: list[dict] = []
@@ -6831,6 +6868,7 @@ def query_features_in_index(path: Path, lon: float, lat: float) -> tuple[list[di
             (lon, lon, lat, lat),
         ).fetchall()
         matched = []
+        matched_parcel_rows: list[tuple[sqlite3.Row, object]] = []
         for row in rows:
             try:
                 geom = wkb.loads(bytes(row["geometry_wkb"]))
@@ -6845,6 +6883,7 @@ def query_features_in_index(path: Path, lon: float, lat: float) -> tuple[list[di
             properties["gml_id"] = str(row["gml_id"] or "")
             if row["kind"] == "parcel":
                 enrich_gemarkung_from_lookup(path, properties)
+                matched_parcel_rows.append((row, geom))
             address_relations = addresses_for_feature(con, dict(row), geom)
             properties["addresses"] = enrich_addresses_with_postcode(
                 address_relations.addresses,
@@ -6862,6 +6901,56 @@ def query_features_in_index(path: Path, lon: float, lat: float) -> tuple[list[di
             )
             matched.append((row["kind"], geom.area, properties))
 
+        if address_hint and matched_parcel_rows and not any(
+            kind == "building"
+            for kind, _area, _properties in matched
+        ):
+            for parcel_row, parcel_geom in sorted(
+                matched_parcel_rows,
+                key=lambda item: float(item[1].area or 0.0),
+            ):
+                inferred = building_for_parcel_address(
+                    con,
+                    parcel_row,
+                    address_hint,
+                )
+                if inferred is None:
+                    continue
+                building_row, building_geom = inferred
+                properties = load_properties(building_row["properties_json"])
+                properties["source_db"] = str(building_row["source_db"] or "")
+                properties["gml_id"] = str(building_row["gml_id"] or "")
+                address_relations = addresses_for_feature(
+                    con,
+                    dict(building_row),
+                    building_geom,
+                )
+                properties["addresses"] = enrich_addresses_with_postcode(
+                    address_relations.addresses,
+                    building_geom.representative_point().x,
+                    building_geom.representative_point().y,
+                    state_key,
+                )
+                properties["address"] = (
+                    properties["addresses"][0]["label"]
+                    if properties["addresses"]
+                    else ""
+                )
+                apply_feature_address_relation_metadata(
+                    properties,
+                    address_relations,
+                )
+                properties["geometry"] = mapping(building_geom)
+                properties = normalize_feature_properties_for_response(
+                    state_key,
+                    "building",
+                    properties,
+                )
+                matched.append(
+                    ("building", float(building_geom.area or 0.0), properties)
+                )
+                break
+
     for kind, _, properties in sorted(matched, key=lambda item: item[1]):
         if kind == "parcel" and len(parcels) < 8:
             parcels.append(properties)
@@ -6870,7 +6959,12 @@ def query_features_in_index(path: Path, lon: float, lat: float) -> tuple[list[di
     return parcels, buildings
 
 
-def features_at_point_for_dataset(dataset: str, lon: float, lat: float) -> dict:
+def features_at_point_for_dataset(
+    dataset: str,
+    lon: float,
+    lat: float,
+    address_hint: dict | None = None,
+) -> dict:
     entries = feature_db_entries_for_dataset(dataset)
     if not entries:
         raise HTTPException(status_code=404, detail="feature index not found")
@@ -6878,7 +6972,12 @@ def features_at_point_for_dataset(dataset: str, lon: float, lat: float) -> dict:
     parcel_candidates: list[tuple[dict, FeatureDbEntry]] = []
     buildings: list[dict] = []
     for entry in entries:
-        entry_parcels, entry_buildings = query_features_in_index(entry.path, lon, lat)
+        entry_parcels, entry_buildings = query_features_in_index(
+            entry.path,
+            lon,
+            lat,
+            address_hint=address_hint,
+        )
         parcel_candidates.extend((parcel, entry) for parcel in entry_parcels)
         buildings.extend(entry_buildings)
 
@@ -7921,8 +8020,12 @@ def search_address_result_from_row(row: sqlite3.Row, state: str, city_fallback: 
     if post_code:
         address["post_code"] = post_code
         address["postal_code"] = post_code
+    feature_kind = str(row["feature_kind"] or "address")
+    source_gml_id = str(row["gml_id"] or "")
+    if feature_kind == "address" and source_gml_id.startswith("address:"):
+        address["address_id"] = source_gml_id.removeprefix("address:")
     return {
-        "kind": str(row["feature_kind"] or "address"),
+        "kind": feature_kind,
         "result_type": "address",
         "label": label,
         "subtitle": "Adresse",
@@ -7941,7 +8044,12 @@ def search_address_result_from_row(row: sqlite3.Row, state: str, city_fallback: 
             "address": label,
             "addresses": [address],
             "source_db": str(row["source_db"] or ""),
-            "gml_id": str(row["gml_id"] or ""),
+            "gml_id": source_gml_id,
+            **(
+                {"address_id": address["address_id"]}
+                if address.get("address_id")
+                else {}
+            ),
         },
     }
 
@@ -13412,7 +13520,7 @@ def _austria_region_row() -> dict:
                 "sources": [
                     {
                         "id": layer,
-                        "tile_template": f"/bev/tiles/{layer}/{{z}}/{{x}}/{{y}}.pbf",
+                        "tile_template": f"/api/v1/bev/tiles/{layer}/{{z}}/{{x}}/{{y}}.pbf",
                         "minzoom": int(config["minzoom"]),
                         "maxzoom": int(config["maxzoom"]),
                         "revision": str(config["revision"]),
@@ -13767,7 +13875,7 @@ async def api_v1_tilejson(state: str, request: Request):
             "name": "BEV Kataster Österreich",
             "version": "1.0.0",
             "scheme": "xyz",
-            "tiles": [f"{base_url}/bev/tiles/kataster/{{z}}/{{x}}/{{y}}.pbf"],
+            "tiles": [f"{base_url}/api/v1/bev/tiles/kataster/{{z}}/{{x}}/{{y}}.pbf"],
             "minzoom": 0,
             "maxzoom": 16,
             "bounds": AUSTRIA_BOUNDS,
@@ -15495,6 +15603,10 @@ def api_v1_features_at_point(
     lon: Annotated[float, Query(ge=-180, le=180)],
     lat: Annotated[float, Query(ge=-90, le=90)],
     dataset: str = VIRTUAL_GERMANY_DATASET,
+    address_street: Annotated[str, Query(max_length=160)] = "",
+    address_house_number: Annotated[str, Query(max_length=40)] = "",
+    address_label: Annotated[str, Query(max_length=260)] = "",
+    address_id: Annotated[str, Query(max_length=160)] = "",
     analytics_id: str | None = None,
     analytics_scope: str | None = None,
 ) -> dict:
@@ -15505,7 +15617,18 @@ def api_v1_features_at_point(
         except HTTPException:
             if not feature_db_entries_for_dataset(dataset):
                 raise
-    payload = features_at_point_for_dataset(dataset, lon, lat)
+    address_hint = {
+        "street": address_street.strip(),
+        "house_number": address_house_number.strip(),
+        "label": address_label.strip(),
+        "address_id": address_id.strip(),
+    }
+    payload = features_at_point_for_dataset(
+        dataset,
+        lon,
+        lat,
+        address_hint=address_hint if any(address_hint.values()) else None,
+    )
     payload["access"] = access.mode
     return _record_search_analytics(
         started_at=analytics_started,
@@ -15524,6 +15647,10 @@ def api_v1_features_at_point_preview(
     lon: Annotated[float, Query(ge=-180, le=180)],
     lat: Annotated[float, Query(ge=-90, le=90)],
     dataset: str = VIRTUAL_GERMANY_DATASET,
+    address_street: Annotated[str, Query(max_length=160)] = "",
+    address_house_number: Annotated[str, Query(max_length=40)] = "",
+    address_label: Annotated[str, Query(max_length=260)] = "",
+    address_id: Annotated[str, Query(max_length=160)] = "",
     analytics_id: str | None = None,
     analytics_scope: str | None = None,
 ) -> dict:
@@ -15534,7 +15661,18 @@ def api_v1_features_at_point_preview(
         except HTTPException:
             if not feature_db_entries_for_dataset(dataset):
                 raise
-    payload = features_at_point_for_dataset(dataset, lon, lat)
+    address_hint = {
+        "street": address_street.strip(),
+        "house_number": address_house_number.strip(),
+        "label": address_label.strip(),
+        "address_id": address_id.strip(),
+    }
+    payload = features_at_point_for_dataset(
+        dataset,
+        lon,
+        lat,
+        address_hint=address_hint if any(address_hint.values()) else None,
+    )
     parcels = [preview for item in payload["parcels"] if (preview := feature_preview_item(item, "parcel"))]
     buildings = [preview for item in payload["buildings"] if (preview := feature_preview_item(item, "building"))]
     result = {
@@ -15745,6 +15883,10 @@ def _bev_vector_tile(layer: str, z: int, x: int, y: int) -> Response:
             ) from exc
 
 
+@app.api_route(
+    "/api/v1/bev/tiles/{layer}/{z:int}/{x:int}/{y:int}.pbf",
+    methods=["GET", "HEAD"],
+)
 @app.api_route("/bev/tiles/{layer}/{z:int}/{x:int}/{y:int}.pbf", methods=["GET", "HEAD"])
 def bev_vector_tile(layer: str, z: int, x: int, y: int) -> Response:
     return _bev_vector_tile(layer, z, x, y)
@@ -16972,6 +17114,7 @@ PUBLIC_OPENAPI_PATHS = {
     "/api/v1/features/geometry",
     "/api/v1/features/point",
     "/api/v1/features/point-preview",
+    "/api/v1/bev/tiles/{layer}/{z}/{x}/{y}.pbf",
     "/api/v1/session",
     "/api/v1/embed/sessions",
     "/api/v1/integrations/onoffice/selection-payload",

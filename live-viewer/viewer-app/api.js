@@ -144,13 +144,27 @@ export function createApi({ token = '', fresh = '', dataset = 'deutschland', req
     return `${base}${search}${analyticsInput ? `&analytics_query=${encodeURIComponent(analyticsInput)}` : ''}${nearbyQuery({ nearLon, nearLat })}&limit=${encodeURIComponent(limit)}`;
   }
 
+  function addressSelectionQuery(hint) {
+    if (!hint || typeof hint !== 'object') return '';
+    const values = {
+      address_street: hint.street,
+      address_house_number: hint.houseNumber,
+      address_label: hint.label,
+      address_id: hint.addressId
+    };
+    return Object.entries(values)
+      .filter(([, value]) => String(value || '').trim())
+      .map(([key, value]) => `&${key}=${encodeURIComponent(String(value).trim())}`)
+      .join('');
+  }
+
   return {
     viewerUrl,
     setToken,
     session: () => viewerJson(viewerUrl('/api/v1/session')),
     sources: () => viewerJson(viewerUrl('/api/v1/sources')),
-    featureAt: (lng, lat, signal, analytics = null) => viewerJson(withAnalytics(`${viewerUrl('/api/v1/features/point')}&lon=${encodeURIComponent(lng)}&lat=${encodeURIComponent(lat)}`, analytics), { signal }),
-    featurePreviewAt: (lng, lat, signal, analytics = null) => viewerJson(withAnalytics(`${viewerUrl('/api/v1/features/point-preview')}&lon=${encodeURIComponent(lng)}&lat=${encodeURIComponent(lat)}`, analytics), { signal }),
+    featureAt: (lng, lat, signal, analytics = null, addressHint = null) => viewerJson(withAnalytics(`${viewerUrl('/api/v1/features/point')}&lon=${encodeURIComponent(lng)}&lat=${encodeURIComponent(lat)}${addressSelectionQuery(addressHint)}`, analytics), { signal }),
+    featurePreviewAt: (lng, lat, signal, analytics = null, addressHint = null) => viewerJson(withAnalytics(`${viewerUrl('/api/v1/features/point-preview')}&lon=${encodeURIComponent(lng)}&lat=${encodeURIComponent(lat)}${addressSelectionQuery(addressHint)}`, analytics), { signal }),
     featureGeometry: ({ state = '', sourceDb, gmlId, kind = '' }, signal) => viewerJson(`${viewerUrl('/api/v1/features/geometry')}&state=${encodeURIComponent(state)}&source_db=${encodeURIComponent(sourceDb)}&gml_id=${encodeURIComponent(gmlId)}&kind=${encodeURIComponent(kind)}`, { signal }),
     searchAddress: (query, signal, analytics = null) => viewerJson(withAnalytics(addressSearchPath(query), analytics), { signal }),
     searchParcel: ({ gemarkung, flur = '', flurstueck, state = '', analyticsQuery = '', limit = 12 }, signal, analytics = null) => {

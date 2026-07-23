@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import gzip
 import os
 import sqlite3
@@ -11,6 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import HTTPException, Response
+from shapely import wkb
+from shapely.geometry import Point, Polygon
 
 from openkataster_tiles import main
 
@@ -258,6 +261,200 @@ class BevVectorProxyTests(unittest.TestCase):
         self.assertEqual(address["result_type"], "address")
         self.assertEqual(address["label"], "Eyzinggasse 27, 1110 Wien")
         self.assertEqual(address["address"]["country"], "Österreich")
+        self.assertEqual(address["address"]["address_id"], "6833147")
+        self.assertEqual(address["feature"]["address_id"], "6833147")
+
+    def test_address_selection_uses_trusted_building_relation_outside_footprint(
+        self,
+    ) -> None:
+        parcel = Polygon(
+            (
+                (16.4200, 48.1820),
+                (16.4210, 48.1820),
+                (16.4210, 48.1830),
+                (16.4200, 48.1830),
+                (16.4200, 48.1820),
+            )
+        )
+        trusted_building = Polygon(
+            (
+                (16.42070, 48.18270),
+                (16.42090, 48.18270),
+                (16.42090, 48.18290),
+                (16.42070, 48.18290),
+                (16.42070, 48.18270),
+            )
+        )
+        nearer_unrelated_building = Polygon(
+            (
+                (16.42020, 48.18220),
+                (16.42030, 48.18220),
+                (16.42030, 48.18230),
+                (16.42020, 48.18230),
+                (16.42020, 48.18220),
+            )
+        )
+        address_point = Point(16.42010, 48.18210)
+        address = {
+            "street": "Eyzinggasse",
+            "house_number": "27",
+            "label": "Eyzinggasse 27, 1110 Wien",
+            "address_id": "6833147",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "oesterreich.features.sqlite"
+            con = sqlite3.connect(path)
+            con.executescript(
+                """
+                CREATE TABLE features (
+                    id INTEGER PRIMARY KEY,
+                    state_key TEXT,
+                    kind TEXT NOT NULL,
+                    source_db TEXT NOT NULL,
+                    gml_id TEXT NOT NULL,
+                    properties_json TEXT NOT NULL,
+                    geometry_wkb BLOB NOT NULL,
+                    center_lon REAL,
+                    center_lat REAL,
+                    min_lon REAL NOT NULL,
+                    max_lon REAL NOT NULL,
+                    min_lat REAL NOT NULL,
+                    max_lat REAL NOT NULL
+                );
+                CREATE VIRTUAL TABLE feature_index USING rtree(
+                    id, min_lon, max_lon, min_lat, max_lat
+                );
+                CREATE TABLE address_points (
+                    id INTEGER PRIMARY KEY,
+                    source_db TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    properties_json TEXT NOT NULL,
+                    geometry_wkb BLOB NOT NULL,
+                    lon REAL NOT NULL,
+                    lat REAL NOT NULL
+                );
+                CREATE VIRTUAL TABLE address_index USING rtree(
+                    id, min_lon, max_lon, min_lat, max_lat
+                );
+                CREATE TABLE feature_addresses (
+                    id INTEGER PRIMARY KEY,
+                    source_db TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    gml_id TEXT NOT NULL,
+                    properties_json TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX idx_feature_addresses_unique
+                    ON feature_addresses(source_db, kind, gml_id, properties_json);
+                """
+            )
+            rows = (
+                (
+                    1,
+                    "parcel",
+                    "AT.BEV.GST.01107..1024",
+                    {"flurstueck": ".1024", "gemarkung": "Simmering"},
+                    parcel,
+                ),
+                (
+                    2,
+                    "building",
+                    "AT.BEV.BLD.TRUSTED",
+                    {"gebaeudefunktion_text": "Gebäude"},
+                    trusted_building,
+                ),
+                (
+                    3,
+                    "building",
+                    "AT.BEV.BLD.NEARER",
+                    {"gebaeudefunktion_text": "Nebengebäude"},
+                    nearer_unrelated_building,
+                ),
+            )
+            for feature_id, kind, gml_id, properties, geometry in rows:
+                min_lon, min_lat, max_lon, max_lat = geometry.bounds
+                center = geometry.representative_point()
+                con.execute(
+                    """
+                    INSERT INTO features VALUES (
+                        ?, 'oesterreich', ?, 'austria-bev', ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        feature_id,
+                        kind,
+                        gml_id,
+                        main.json.dumps(properties),
+                        wkb.dumps(geometry),
+                        center.x,
+                        center.y,
+                        min_lon,
+                        max_lon,
+                        min_lat,
+                        max_lat,
+                    ),
+                )
+                con.execute(
+                    "INSERT INTO feature_index VALUES (?, ?, ?, ?, ?)",
+                    (feature_id, min_lon, max_lon, min_lat, max_lat),
+                )
+            con.execute(
+                """
+                INSERT INTO address_points VALUES (
+                    1, 'austria-bev', 'address:6833147', ?, ?, ?, ?
+                )
+                """,
+                (
+                    main.json.dumps(address),
+                    wkb.dumps(address_point),
+                    address_point.x,
+                    address_point.y,
+                ),
+            )
+            con.execute(
+                "INSERT INTO address_index VALUES (1, ?, ?, ?, ?)",
+                (
+                    address_point.x,
+                    address_point.x,
+                    address_point.y,
+                    address_point.y,
+                ),
+            )
+            con.execute(
+                """
+                INSERT INTO feature_addresses(
+                    source_db, kind, gml_id, properties_json
+                ) VALUES ('austria-bev', 'building', 'AT.BEV.BLD.TRUSTED', ?)
+                """,
+                (main.json.dumps(address),),
+            )
+            con.commit()
+            con.close()
+
+            without_hint = main.query_features_in_index(
+                path,
+                address_point.x,
+                address_point.y,
+            )
+            with patch.object(
+                main,
+                "enrich_addresses_with_postcode",
+                side_effect=lambda addresses, *_args, **_kwargs: addresses,
+            ):
+                with_hint = main.query_features_in_index(
+                    path,
+                    address_point.x,
+                    address_point.y,
+                    address_hint=address,
+                )
+
+        self.assertEqual(len(without_hint[0]), 1)
+        self.assertEqual(without_hint[1], [])
+        self.assertEqual(
+            [building["gml_id"] for building in with_hint[1]],
+            ["AT.BEV.BLD.TRUSTED"],
+        )
 
     def test_austrian_parcel_search_preserves_leading_dot(self) -> None:
         result = self._search_austria(
@@ -314,6 +511,47 @@ class BevVectorProxyTests(unittest.TestCase):
 
         self.assertIs(response, expected)
         bev_tile.assert_called_once_with("kataster", 16, 35748, 22724)
+
+    def test_edge_safe_bev_route_and_tilejson_share_api_v1_namespace(self) -> None:
+        route_paths = {
+            getattr(route, "path", "")
+            for route in main.app.routes
+        }
+        self.assertIn(
+            "/api/v1/bev/tiles/{layer}/{z:int}/{x:int}/{y:int}.pbf",
+            route_paths,
+        )
+
+        request = object()
+        with (
+            patch.object(main, "normalize_state_key", return_value="oesterreich"),
+            patch.object(
+                main,
+                "public_base_url",
+                return_value="https://tiles.openkataster.de",
+            ),
+        ):
+            payload = asyncio.run(main.api_v1_tilejson("oesterreich", request))
+
+        self.assertEqual(
+            payload["tiles"],
+            [
+                "https://tiles.openkataster.de/api/v1/bev/tiles/kataster/"
+                "{z}/{x}/{y}.pbf"
+            ],
+        )
+        catalog = main._austria_region_row()
+        source_templates = {
+            source["tile_template"]
+            for source in catalog["rendering"]["cadastre_vector"]["sources"]
+        }
+        self.assertEqual(
+            source_templates,
+            {
+                "/api/v1/bev/tiles/kataster/{z}/{x}/{y}.pbf",
+                "/api/v1/bev/tiles/symbole/{z}/{x}/{y}.pbf",
+            },
+        )
 
     def test_text_error_document_is_never_cached_as_vector_tile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

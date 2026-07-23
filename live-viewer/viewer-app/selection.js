@@ -1136,7 +1136,7 @@ export function createSelectionController({
     return dynamicTable(terms.parcelPlural, parcels, columns, 'parcel');
   }
 
-  async function selectAt(lngLat, additive = false, preferredKind = null) {
+  async function selectAt(lngLat, additive = false, preferredKind = null, addressHint = null) {
     request?.abort();
     const controller = new AbortController();
     request = controller;
@@ -1149,7 +1149,9 @@ export function createSelectionController({
       const data = await (access.pro ? api.featureAt : api.featurePreviewAt)(
         lngLat.lng,
         lngLat.lat,
-        controller.signal
+        controller.signal,
+        null,
+        addressHint
       );
       if (controller.signal.aborted || request !== controller) return null;
       const next = store.getState();

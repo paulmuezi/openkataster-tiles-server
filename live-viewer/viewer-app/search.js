@@ -1,4 +1,4 @@
-import { createAnalyticsMarker } from './api.js?v=20260717-osm-poi-search2';
+import { createAnalyticsMarker } from './api.js?v=20260723-austria2';
 import { centerFromResult, debounce, escapeHtml, resultLabel } from './utils.js?v=20260711-search-context1';
 
 export function structuredPoiAddress(result) {
@@ -53,6 +53,37 @@ function addressPartsFromResult(result) {
       || address?.houseNumber
       || ''
     ).trim()
+  };
+}
+
+export function addressSelectionHintForSearchResult(result) {
+  const feature = result?.feature && typeof result.feature === 'object'
+    ? result.feature
+    : {};
+  const address = result?.address && typeof result.address === 'object'
+    ? result.address
+    : (Array.isArray(feature.addresses) ? feature.addresses[0] : null);
+  const poiAddress = structuredPoiAddress(result);
+  const street = String(poiAddress?.street || address?.street || feature.street || '').trim();
+  const houseNumber = String(
+    poiAddress?.houseNumber
+    || address?.house_number
+    || address?.housenumber
+    || feature.house_number
+    || ''
+  ).trim();
+  if (!street || !houseNumber) return null;
+  const sourceGmlId = String(feature.gml_id || result?.gml_id || '').trim();
+  const addressId = String(
+    feature.address_id
+    || address?.address_id
+    || (sourceGmlId.startsWith('address:') ? sourceGmlId.slice('address:'.length) : '')
+  ).trim();
+  return {
+    street,
+    houseNumber,
+    label: String(address?.label || result?.label || '').trim(),
+    addressId
   };
 }
 
@@ -457,6 +488,7 @@ export function createSearchController({
     }
     else clearPoiMarker();
     const selectionPreference = selectionPreferenceForSearchResult(result);
+    const addressSelectionHint = addressSelectionHintForSearchResult(result);
     const selectionCenterPromise = scope === 'poi' && selectionPreference
       ? resolvePoiSelectionCenter(result, center)
       : Promise.resolve(center);
@@ -467,7 +499,8 @@ export function createSearchController({
       await selection.selectAt(
         { lng: selectionCenter[0], lat: selectionCenter[1] },
         false,
-        selectionPreference === 'all' ? null : selectionPreference
+        selectionPreference === 'all' ? null : selectionPreference,
+        addressSelectionHint
       );
     }
   }

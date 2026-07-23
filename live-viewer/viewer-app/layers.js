@@ -462,11 +462,13 @@ export function createLayerController({
     const sourceId = `aerial-${slug}`;
     const revision = encodeURIComponent(String(capability.revision || 'aerial-wms-v1'));
     const separator = String(capability.tile_template).includes('?') ? '&' : '?';
+    const nativeMaxZoom = Number(capability.maxzoom) || 22;
     if (!map.getSource(sourceId)) {
       map.addSource(sourceId, {
         type: 'raster',
         tiles: [`${capability.tile_template}${separator}v=${revision}`],
-        tileSize: Number(capability.tile_size) || 512
+        tileSize: Number(capability.tile_size) || 512,
+        maxzoom: nativeMaxZoom
       });
     }
     if (!map.getLayer(sourceId)) {
@@ -475,7 +477,6 @@ export function createLayerController({
         type: 'raster',
         source: sourceId,
         minzoom: Number(capability.minzoom) || detailZoom,
-        maxzoom: Number(capability.maxzoom) || 22,
         paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 }
       }, currentDataset() === 'oesterreich' ? `${AT_LAYER_PREFIX}surface-fills` : 'alkis-surface-fills');
     }

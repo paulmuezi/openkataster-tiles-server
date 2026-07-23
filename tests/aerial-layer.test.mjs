@@ -19,6 +19,20 @@ assert.match(
   'Die Luftbild-URL und ihre Revision müssen vollständig aus der Capability kommen.'
 );
 assert.match(layersSource, /tileSize: Number\(capability\.tile_size\) \|\| 512/);
+assert.match(
+  layersSource,
+  /const nativeMaxZoom = Number\(capability\.maxzoom\) \|\| 22;[\s\S]*?map\.addSource\(sourceId,[\s\S]*?maxzoom: nativeMaxZoom[\s\S]*?map\.addLayer\(\{[\s\S]*?minzoom: Number\(capability\.minzoom\) \|\| detailZoom,[\s\S]*?paint:/,
+  'Die höchste native Luftbildstufe gehört an die Rasterquelle; der Layer muss darüber sichtbar bleiben und überzoomen.'
+);
+const updateAerialStart = layersSource.indexOf('function updateAerial(show)');
+const aerialLayerStart = layersSource.indexOf('map.addLayer({', updateAerialStart);
+const aerialLayerEnd = layersSource.indexOf('}, currentDataset()', aerialLayerStart);
+assert.ok(updateAerialStart >= 0 && aerialLayerStart >= 0 && aerialLayerEnd > aerialLayerStart);
+assert.doesNotMatch(
+  layersSource.slice(aerialLayerStart, aerialLayerEnd),
+  /\bmaxzoom:/,
+  'Die native Kachelgrenze darf den Luftbild-Layer nicht bei Zoom 19 ausblenden.'
+);
 assert.match(layersSource, /map\.moveLayer\(activeAerial, activeCadastre\)/);
 assert.match(sourcesSource, /const aerialCapability = state\?\.rendering\?\.aerial_raster/);
 assert.match(sourcesSource, /aerialCapability\.attribution \|\| state\?\.quellenvermerk/);
@@ -27,8 +41,8 @@ assert.match(appSource, /exportController\?\.setStateCapabilities\(state\)/);
 assert.match(exportSource, /stateDxfAllowed = !onOfficeMode && state\?\.export\?\.dxf !== false/);
 assert.match(exportSource, /option\.hidden = !allowed/);
 assert.match(exportSource, /countryResolver\?\.intersectsAustria\?\.\(frame\) === true/);
-assert.match(appSource, /\.\/layers\.js\?v=20260723-unified1/);
-assert.match(indexSource, /app\.js\?v=20260723-unified2/);
+assert.match(appSource, /\.\/layers\.js\?v=20260723-aerial1/);
+assert.match(indexSource, /app\.js\?v=20260723-unified3/);
 assert.match(indexSource, /styles\.css\?v=20260723-unified1/);
 
 console.log('aerial-layer-tests=ok');

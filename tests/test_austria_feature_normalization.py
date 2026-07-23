@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import unittest
+from unittest import mock
 
 from openkataster_tiles import main
 
@@ -103,6 +104,131 @@ class AustriaFeatureNormalizationTests(unittest.TestCase):
             }
             & normalized.keys()
         )
+
+    def test_parcel_repairs_legacy_bev_kg_encoding(self) -> None:
+        normalized = main.normalize_feature_properties_for_response(
+            "oesterreich",
+            "parcel",
+            {
+                "source_db": "austria-bev",
+                "gml_id": "AT.BEV.GST.19544.1543/14",
+                "gemarkung": "St. PÃ¶lten",
+                "bundesland": "NiederÃ¶sterreich",
+                "flurstueck": "1543/14",
+                "addresses": [
+                    {
+                        "label": "Mühlweg 14, 3100 St.Pölten",
+                        "city": "St.Pölten",
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(normalized["gemarkung"], "St. Pölten")
+        self.assertEqual(
+            normalized["addresses"][0]["label"],
+            "Mühlweg 14, 3100 St.Pölten",
+        )
+        self.assertNotIn("bundesland", normalized)
+
+    def test_search_variants_keep_current_and_legacy_kg_spellings(self) -> None:
+        variants = main.normalize_geocoder_text_variants("St. Pölten")
+
+        self.assertIn("st polten", variants)
+        self.assertIn("st pa lten", variants)
+        self.assertEqual(
+            main.repair_utf8_decoded_as_cp1252("NiederÃ¶sterreich"),
+            "Niederösterreich",
+        )
+
+    def test_explicit_region_filter_cannot_escape_dataset(self) -> None:
+        with (
+            mock.patch.object(
+                main,
+                "all_local_search_db_entries",
+                return_value=(
+                    main.FeatureDbEntry(
+                        name="niedersachsen",
+                        path=main.DATA_DIR / "niedersachsen.search.sqlite",
+                    ),
+                    main.FeatureDbEntry(
+                        name="oesterreich",
+                        path=main.DATA_DIR / "oesterreich.search.sqlite",
+                    ),
+                ),
+            ),
+            mock.patch.object(
+                main,
+                "dataset_region_keys",
+                side_effect=lambda dataset: (
+                    {"niedersachsen"}
+                    if dataset == "deutschland"
+                    else {"oesterreich"}
+                ),
+            ),
+        ):
+            self.assertEqual(
+                main.search_suggestion_states_for_dataset(
+                    "deutschland",
+                    "oesterreich",
+                ),
+                set(),
+            )
+            self.assertEqual(
+                main.search_suggestion_states_for_dataset(
+                    "oesterreich",
+                    "niedersachsen",
+                ),
+                set(),
+            )
+            self.assertEqual(
+                main.search_suggestion_states_for_dataset(
+                    "oesterreich",
+                    "oesterreich",
+                ),
+                {"oesterreich"},
+            )
+
+    def test_point_features_keep_region_for_persisted_selection_references(self) -> None:
+        entry = main.FeatureDbEntry(
+            name="oesterreich",
+            path=main.DATA_DIR / "oesterreich.features.sqlite",
+        )
+        parcel = {
+            "source_db": "austria-bev",
+            "gml_id": "AT.BEV.GST.19544.1543/14",
+            "geometry": {"type": "Polygon", "coordinates": []},
+        }
+        building = {
+            "source_db": "austria-bev",
+            "gml_id": "AT.BEV.BWG.42",
+            "geometry": {"type": "Polygon", "coordinates": []},
+        }
+        with (
+            mock.patch.object(
+                main,
+                "feature_db_entries_for_dataset",
+                return_value=(entry,),
+            ),
+            mock.patch.object(
+                main,
+                "query_features_in_index",
+                return_value=([parcel], [building]),
+            ),
+            mock.patch.object(
+                main,
+                "_enrich_onoffice_land_register_features",
+                return_value=None,
+            ),
+        ):
+            result = main.features_at_point_for_dataset(
+                "oesterreich",
+                15.6,
+                48.2,
+            )
+
+        self.assertEqual(result["parcels"][0]["state"], "oesterreich")
+        self.assertEqual(result["buildings"][0]["state"], "oesterreich")
 
     def test_other_datasets_remain_unfiltered(self) -> None:
         properties = {

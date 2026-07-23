@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { createApi } from '../live-viewer/viewer-app/api.js';
+import { createApi, createUnifiedApi } from '../live-viewer/viewer-app/api.js';
 import {
   applyDatasetTerminology,
   austriaBasemapStyle,
+  createCountryResolver,
   datasetIdFromLocation,
   datasetViewerUrl,
-  viewerDatasetProfile
+  unifiedViewerProfile,
+  viewerDatasetProfile,
+  WORKSPACE_DATASET
 } from '../live-viewer/viewer-app/dataset.js';
 import { locationLabelFromFeatures } from '../live-viewer/viewer-app/export.js';
 import { readPersistedState } from '../live-viewer/viewer-app/persistence.js';
@@ -28,11 +31,11 @@ assert.equal(
     { pathname: '/viewer/deutschland', search: '?fresh=17&dataset=deutschland', hash: '#16/48.2/16.3' },
     'oesterreich'
   ),
-  '/viewer/oesterreich?fresh=17&dataset=oesterreich#16/48.2/16.3'
+  '/viewer/deutschland?fresh=17&initialCountry=AT#16/48.2/16.3'
 );
 assert.equal(
   datasetViewerUrl({ pathname: '/embed/deutschland', search: '?surface=planner', hash: '' }, 'oesterreich'),
-  '/embed/oesterreich?surface=planner&dataset=oesterreich'
+  '/embed/deutschland?surface=planner&initialCountry=AT'
 );
 
 const austria = viewerDatasetProfile('oesterreich');
@@ -45,6 +48,10 @@ assert.deepEqual(austria.terminology, {
   district: ''
 });
 assert.equal(austria.detailZoom, 14);
+const unified = unifiedViewerProfile();
+assert.equal(unified.id, WORKSPACE_DATASET);
+assert.equal(unified.unified, true);
+assert.deepEqual(unified.detailZoomByRegion, { deutschland: 17, oesterreich: 14 });
 
 const style = austriaBasemapStyle();
 assert.deepEqual(
@@ -83,8 +90,6 @@ const searchSubmit = fakeElement();
 searchSubmit.querySelector = () => searchSubmitLabel;
 const termCadastre = fakeElement({ dataset: { datasetTerm: 'cadastre' } });
 const termParcel = fakeElement({ dataset: { datasetTerm: 'parcel' } });
-const switchGermany = fakeElement({ dataset: { datasetSwitch: 'deutschland' } });
-const switchAustria = fakeElement({ dataset: { datasetSwitch: 'oesterreich' } });
 const byId = {
   addressInput,
   searchPanel,
@@ -99,21 +104,16 @@ const fakeRoot = {
   documentElement: fakeElement(),
   body: fakeElement(),
   getElementById: (id) => byId[id] || null,
-  querySelectorAll: (selector) => selector === '[data-dataset-switch]'
-    ? [switchGermany, switchAustria]
-    : [termCadastre, termParcel]
+  querySelectorAll: () => [termCadastre, termParcel]
 };
-applyDatasetTerminology(austria, fakeRoot);
-assert.equal(addressInput.placeholder, 'Adresse oder Grundstück suchen');
-assert.equal(gemarkungInput.placeholder, 'Katastralgemeinde erforderlich');
-assert.equal(parcelInput.placeholder, 'Grundstück erforderlich');
-assert.equal(flurField.hidden, true);
-assert.equal(flurInput.disabled, true);
+applyDatasetTerminology(unified, fakeRoot);
+assert.equal(addressInput.placeholder, 'Adresse, Flurstück, Grundstück oder POI suchen');
+assert.equal(gemarkungInput.placeholder, 'Gemarkung oder Katastralgemeinde');
+assert.equal(parcelInput.placeholder, 'Flurstück oder Grundstück');
+assert.equal(flurField.hidden, false);
+assert.equal(flurInput.disabled, false);
 assert.equal(termCadastre.textContent, 'Kataster');
-assert.equal(termParcel.textContent, 'Grundstück');
-assert.equal(switchGermany.getAttribute('aria-pressed'), 'false');
-assert.equal(switchAustria.getAttribute('aria-pressed'), 'true');
-assert.equal(switchAustria.getAttribute('aria-current'), 'true');
+assert.equal(termParcel.textContent, 'Flurstück / Grundstück');
 
 assert.equal(parcelDisplayNumber({ grundstuecksnummer: '.123/2' }), '.123/2');
 assert.equal(
@@ -126,13 +126,13 @@ assert.equal(
 
 const now = Date.now();
 const persistedGermany = { version: 1, savedAt: now, view: { lng: 10, lat: 51, zoom: 8 } };
-const persistedAustria = { version: 1, savedAt: now, view: { lng: 16, lat: 48, zoom: 12 } };
+const persistedAustria = { version: 1, savedAt: now + 1, view: { lng: 16, lat: 48, zoom: 12 } };
 const storageValues = new Map([
   ['openkataster:planer-v2:v1:deutschland', JSON.stringify(persistedGermany)],
   ['openkataster:planer-v2:v1:oesterreich', JSON.stringify(persistedAustria)]
 ]);
 globalThis.localStorage = { getItem: (key) => storageValues.get(key) ?? null };
-assert.deepEqual(readPersistedState('deutschland'), persistedGermany);
+assert.deepEqual(readPersistedState('deutschland'), persistedAustria);
 assert.deepEqual(readPersistedState('oesterreich'), persistedAustria);
 
 globalThis.window = { location: { origin: 'https://tiles.openkataster.de' } };
@@ -148,11 +148,9 @@ assert.match(requestedPath, /dataset=oesterreich/);
 assert.match(requestedPath, /gemarkung=01001/);
 assert.match(requestedPath, /flur=&flurstueck=.123%2F2/);
 
-assert.match(indexSource, /class="dataset-switch" role="group" aria-label="Land auswählen"/);
-assert.match(indexSource, /data-dataset-switch="deutschland" aria-pressed="true"/);
-assert.match(indexSource, /data-dataset-switch="oesterreich" aria-pressed="false"/);
-assert.match(appSource, /postToParent\('openkataster:request-dataset', \{ source: workspaceDataset, target \}\)/);
-assert.match(appSource, /window\.location\.assign\(datasetViewerUrl\(window\.location, target\)\)/);
+assert.doesNotMatch(indexSource, /class="dataset-switch"/);
+assert.match(appSource, /const api = createUnifiedApi\(/);
+assert.doesNotMatch(appSource, /openkataster:request-dataset/);
 
 assert.match(layerSource, /\/api\/v1\/bev\/tiles\/kataster\/\{z\}\/\{x\}\/\{y\}\.pbf/);
 assert.match(layerSource, /\/api\/v1\/bev\/tiles\/symbole\/\{z\}\/\{x\}\/\{y\}\.pbf/);
@@ -161,5 +159,55 @@ for (const sourceLayer of ['nfl', 'sli', 'gst', 'gnr', 'hnr', 'gp', 'ssb']) {
 }
 assert.match(selectionSource, /flaechenbestimmung: 'Flächenbestimmung'/);
 assert.match(selectionSource, /rechtsstatus_text: 'Rechtsstatus'/);
+
+const squareAustria = {
+  type: 'Feature',
+  properties: { country_code: 'AT' },
+  geometry: {
+    type: 'Polygon',
+    coordinates: [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]]
+  }
+};
+const resolver = createCountryResolver({
+  fetchImpl: async () => ({ ok: true, json: async () => squareAustria }),
+  countriesUrl: '/fixture/austria.json'
+});
+await resolver.ready();
+assert.equal(resolver.datasetAt(5, 5), 'oesterreich');
+assert.equal(resolver.datasetAt(11, 5), 'deutschland');
+assert.equal(resolver.intersectsAustria({ west: 9, south: 4, east: 11, north: 6 }), true);
+assert.equal(resolver.intersectsAustria({ west: 11, south: 4, east: 12, north: 6 }), false);
+assert.equal(resolver.containsAustria({ west: 2, south: 2, east: 4, north: 4 }), true);
+assert.equal(resolver.containsAustria({ west: 9, south: 4, east: 11, north: 6 }), false);
+
+const originalWarn = console.warn;
+console.warn = () => {};
+const failedResolver = createCountryResolver({
+  fetchImpl: async () => ({ ok: false }),
+  countriesUrl: '/fixture/missing.json'
+});
+await failedResolver.ready();
+console.warn = originalWarn;
+assert.equal(failedResolver.datasetAt(11.5, 48.1), 'deutschland');
+assert.equal(failedResolver.intersectsAustria({ west: 11, south: 47, east: 12, north: 48 }), false);
+
+globalThis.fetch = async (path) => {
+  const url = new URL(String(path), globalThis.window.location.origin);
+  const dataset = url.searchParams.get('dataset');
+  const prefix = dataset === 'oesterreich' ? 'AT' : 'DE';
+  return {
+    ok: true,
+    json: async () => ({
+      results: [
+        { label: `${prefix} 1`, center: dataset === 'oesterreich' ? [16, 48] : [10, 51] },
+        { label: `${prefix} 2`, center: dataset === 'oesterreich' ? [16.1, 48.1] : [10.1, 51.1] }
+      ]
+    })
+  };
+};
+const unifiedApi = createUnifiedApi();
+const federated = await unifiedApi.suggestAddresses({ query: 'Test', limit: 4 });
+assert.deepEqual(federated.results.map((result) => result.label), ['DE 1', 'AT 1', 'DE 2', 'AT 2']);
+assert.deepEqual(federated.results.map((result) => result.dataset), ['deutschland', 'oesterreich', 'deutschland', 'oesterreich']);
 
 console.log('austria-viewer-tests=ok');

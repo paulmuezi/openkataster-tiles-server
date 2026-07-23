@@ -1,20 +1,21 @@
-import { createApi } from './api.js?v=20260723-austria2';
-import { createExportController } from './export.js?v=20260723-austria1';
-import { createLayerController } from './layers.js?v=20260723-austria2';
+import { createUnifiedApi } from './api.js?v=20260723-unified1';
+import { createExportController } from './export.js?v=20260723-unified1';
+import { createLayerController } from './layers.js?v=20260723-unified1';
 import { createLayout } from './layout.js?v=20260719-table-autofit1';
-import { createPlannerMap } from './map.js?v=20260723-austria1';
+import { createPlannerMap } from './map.js?v=20260723-unified1';
 import { createMeasureController } from './measure.js?v=20260719-free-preview-controls1';
-import { createPersistence, readPersistedState } from './persistence.js?v=20260723-austria1';
-import { createSearchController } from './search.js?v=20260723-austria2';
-import { createSelectionController } from './selection.js?v=20260723-austria3';
-import { createSourceController } from './sources.js?v=20260723-austria1';
+import { createPersistence, readPersistedState } from './persistence.js?v=20260723-unified1';
+import { createSearchController } from './search.js?v=20260723-unified1';
+import { createSelectionController } from './selection.js?v=20260723-unified1';
+import { createSourceController } from './sources.js?v=20260723-unified1';
 import { createStore } from './store.js';
 import {
   applyDatasetTerminology,
-  datasetViewerUrl,
+  createCountryResolver,
   datasetIdFromLocation,
-  viewerDatasetProfile
-} from './dataset.js?v=20260723-austria1';
+  unifiedViewerProfile,
+  WORKSPACE_DATASET
+} from './dataset.js?v=20260723-unified1';
 import {
   WORKSPACE_VERSION,
   normalizeLayerVisibility,
@@ -23,9 +24,10 @@ import {
 } from './workspace.js?v=20260722-land-register-table1';
 
 const params = new URLSearchParams(window.location.search);
-const workspaceDataset = datasetIdFromLocation(window.location);
-const WORKSPACE_DATASET = workspaceDataset;
-const datasetProfile = viewerDatasetProfile(workspaceDataset);
+const initialFocusDataset = datasetIdFromLocation(window.location);
+const workspaceDataset = WORKSPACE_DATASET;
+const datasetProfile = unifiedViewerProfile();
+const countryResolver = createCountryResolver();
 const surface = params.get('surface') === 'planner' ? 'planner' : 'embed';
 const preview = params.get('preview') === '1';
 const onOfficeMode = params.get('onoffice') === '1';
@@ -35,12 +37,23 @@ const requestedParentOrigin = params.get('okParentOrigin');
 let parentOrigin = window.location.origin;
 if (requestedParentOrigin) {
   try {
-    parentOrigin = new URL(requestedParentOrigin).origin;
+    const candidate = new URL(requestedParentOrigin).origin;
+    const referrerOrigin = document.referrer ? new URL(document.referrer).origin : '';
+    const trustedOnOfficeParents = new Set([
+      'https://crm.onoffice.de',
+      'https://crm-beta.onoffice.de'
+    ]);
+    if (
+      candidate === window.location.origin
+      || candidate === referrerOrigin
+      || trustedOnOfficeParents.has(candidate)
+    ) parentOrigin = candidate;
   } catch (_) {
     // Invalid embed origins fall back to the current, same-origin parent contract.
   }
 }
 const saved = preview || onOfficeMode ? null : readPersistedState(workspaceDataset);
+const savedSelection = saved?.selection || { parcels: [], buildings: [] };
 const mobileBoot = window.matchMedia('(max-width: 760px)').matches;
 const restoreOpenLayout = !preview && !onOfficeMode && shellMode !== 'welcome' && surface !== 'planner';
 const app = document.getElementById('plannerApp');
@@ -50,7 +63,9 @@ const headerAccountLink = document.getElementById('headerAccountLink');
 const welcomeDefaultView = { lng: 9.84841, lat: 52.32984, zoom: 16.5 };
 const map = createPlannerMap({
   container: document.getElementById('map'),
-  savedView: saved?.view || (shellMode === 'welcome' && workspaceDataset === 'deutschland' ? welcomeDefaultView : null),
+  savedView: (initialFocusDataset === 'oesterreich' ? { lng: 14.20, lat: 47.60, zoom: 6.6 } : null)
+    || saved?.view
+    || (shellMode === 'welcome' ? welcomeDefaultView : null),
   datasetProfile
 });
 window.__openKatasterPlannerMap = map;
@@ -81,14 +96,14 @@ const store = createStore({
   },
   layers: initialLayerWorkspace.visible,
   layerWorkspace: initialLayerWorkspace,
-  selection: { parcels: saved?.selection?.parcels || [], buildings: saved?.selection?.buildings || [], loading: false },
+  selection: { parcels: [], buildings: [], loading: false },
   export: { center: saved?.export?.center || null, bbox: saved?.export?.bbox || null },
   notice: null
 });
-const api = createApi({
+const api = createUnifiedApi({
   token: params.get('token') || '',
   fresh: params.get('fresh') || '',
-  dataset: workspaceDataset,
+  countryResolver,
   requestTokenRefresh: () => postToParent('openkataster:request-viewer-token')
 });
 
@@ -100,7 +115,6 @@ const elements = Object.fromEntries([
   'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge','exportProBadge','exportLocked'
 ].map((id) => [id, document.getElementById(id)]));
 elements.layerInputs = [...document.querySelectorAll('[data-layer]')];
-elements.datasetSwitches = [...document.querySelectorAll('[data-dataset-switch]')];
 if (onOfficeMode) {
   for (const option of [...elements.exportOutput.options]) {
     if (option.value === 'dxf') option.remove();
@@ -108,17 +122,10 @@ if (onOfficeMode) {
 }
 
 const layout = createLayout({ app, map, store, elements });
-const layers = createLayerController({ map, store, elements, datasetProfile });
+const layers = createLayerController({ map, store, elements, datasetProfile, countryResolver });
+let exportController = null;
 function applyStateExportCapabilities(state) {
-  const dxfOption = [...elements.exportOutput.options].find((option) => option.value === 'dxf');
-  if (!dxfOption) return;
-  const dxfAvailable = !onOfficeMode && state?.export?.dxf !== false;
-  dxfOption.hidden = !dxfAvailable;
-  dxfOption.disabled = !dxfAvailable;
-  if (!dxfAvailable && elements.exportOutput.value === 'dxf') {
-    elements.exportOutput.value = 'pdf';
-    elements.exportOutput.dispatchEvent(new Event('change', { bubbles: true }));
-  }
+  exportController?.setStateCapabilities(state);
 }
 const sources = createSourceController({
   map,
@@ -151,16 +158,16 @@ const search = createSearchController({
   onOsmUse: sources.revealCompactAttribution
 });
 const measure = createMeasureController({ map, store, elements, finish: () => layout.setTool('measure') });
-const exportController = createExportController({
+exportController = createExportController({
   map,
   api,
   store,
   elements,
   datasetProfile,
+  countryResolver,
   onOfficeMode,
   onWorkspaceChange: scheduleWorkspaceChanged
 });
-if (!preview && !onOfficeMode) createPersistence({ map, store, dataset: workspaceDataset });
 
 function canExport(state = store.getState()) {
   return state.access.pro;
@@ -178,18 +185,6 @@ elements.mobileExportBackdrop.addEventListener('click', layout.closeMobileExport
 elements.selectionClose.addEventListener('click', selection.clear);
 elements.selectionResize.addEventListener('pointerdown', layout.beginTableResize);
 elements.noticeClose.addEventListener('click', () => store.setState({ notice: null }, 'notice'));
-for (const button of elements.datasetSwitches) {
-  button.addEventListener('click', () => {
-    const target = button.dataset.datasetSwitch;
-    if (!target || target === workspaceDataset) return;
-    if (window.parent && window.parent !== window) {
-      postToParent('openkataster:request-dataset', { source: workspaceDataset, target });
-      return;
-    }
-    window.location.assign(datasetViewerUrl(window.location, target));
-  });
-}
-
 store.subscribe((state, reason) => {
   elements.selectTool.setAttribute('aria-pressed', state.activeTool === 'select' ? 'true' : 'false');
   elements.measureTool.setAttribute('aria-pressed', state.activeTool === 'measure' ? 'true' : 'false');
@@ -620,7 +615,16 @@ mapReady.then(() => {
 });
 const accessReady = refreshAccess();
 
-Promise.all([mapReady, accessReady]).then(() => {
+Promise.all([mapReady, accessReady]).then(async () => {
+  if (saved?.export) exportController.restoreWorkspace(saved.export);
+  const hasSavedSelection = savedSelection.parcels?.length || savedSelection.buildings?.length;
+  if (hasSavedSelection && store.getState().access.pro) {
+    try {
+      await selection.restoreReferences(savedSelection);
+    } catch (error) {
+      console.warn('Gespeicherte Objektauswahl konnte nicht wiederhergestellt werden.', error);
+    }
+  }
   elements.zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`;
   selection.render();
   layers.apply();
@@ -639,6 +643,14 @@ Promise.all([mapReady, accessReady]).then(() => {
     'request-state'
   ];
   if (onOfficeMode) capabilities.push('restore-workspace', 'workspace-state');
+  if (!preview && !onOfficeMode) {
+    createPersistence({
+      map,
+      store,
+      dataset: workspaceDataset,
+      exportWorkspace: () => exportController.workspaceState()
+    });
+  }
   postToParent('openkataster:ready', {
     capabilities,
     access: session?.access || 'free',

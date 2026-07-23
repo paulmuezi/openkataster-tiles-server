@@ -3,6 +3,7 @@ import fs from 'node:fs';
 
 const layersSource = fs.readFileSync(new URL('../live-viewer/viewer-app/layers.js', import.meta.url), 'utf8');
 const appSource = fs.readFileSync(new URL('../live-viewer/viewer-app/app.js', import.meta.url), 'utf8');
+const exportSource = fs.readFileSync(new URL('../live-viewer/viewer-app/export.js', import.meta.url), 'utf8');
 const indexSource = fs.readFileSync(new URL('../live-viewer/viewer-app/index.html', import.meta.url), 'utf8');
 const sourcesSource = fs.readFileSync(new URL('../live-viewer/viewer-app/sources.js', import.meta.url), 'utf8');
 
@@ -22,10 +23,12 @@ assert.match(layersSource, /map\.moveLayer\(activeAerial, activeCadastre\)/);
 assert.match(sourcesSource, /const aerialCapability = state\?\.rendering\?\.aerial_raster/);
 assert.match(sourcesSource, /aerialCapability\.attribution \|\| state\?\.quellenvermerk/);
 assert.match(sourcesSource, /onStateCapabilities\(state \|\| null\)/);
-assert.match(appSource, /state\?\.export\?\.dxf !== false/);
-assert.match(appSource, /dxfOption\.hidden = !dxfAvailable/);
-assert.match(appSource, /\.\/layers\.js\?v=20260723-austria2/);
-assert.match(indexSource, /app\.js\?v=20260723-austria3/);
-assert.match(indexSource, /styles\.css\?v=20260723-austria1/);
+assert.match(appSource, /exportController\?\.setStateCapabilities\(state\)/);
+assert.match(exportSource, /stateDxfAllowed = !onOfficeMode && state\?\.export\?\.dxf !== false/);
+assert.match(exportSource, /option\.hidden = !allowed/);
+assert.match(exportSource, /countryResolver\?\.intersectsAustria\?\.\(frame\) === true/);
+assert.match(appSource, /\.\/layers\.js\?v=20260723-unified1/);
+assert.match(indexSource, /app\.js\?v=20260723-unified1/);
+assert.match(indexSource, /styles\.css\?v=20260723-unified1/);
 
 console.log('aerial-layer-tests=ok');

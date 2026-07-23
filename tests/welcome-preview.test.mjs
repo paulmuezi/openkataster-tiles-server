@@ -8,18 +8,18 @@ const stylesSource = readFileSync(new URL('../live-viewer/viewer-app/styles.css'
 
 assert.match(indexSource, /dataset\.preview = okParams\.get\('preview'\) === '1' \? 'true' : 'false'/);
 assert.match(indexSource, /dataset\.shellMode = okParams\.get\('welcome'\) === '1' \? 'welcome' : 'planner'/);
-assert.match(indexSource, /styles\.css\?v=20260723-austria1/);
-assert.match(indexSource, /app\.js\?v=20260723-austria3/);
+assert.match(indexSource, /styles\.css\?v=20260723-unified1/);
+assert.match(indexSource, /app\.js\?v=20260723-unified1/);
 
 // The old preview contract remains isolated and non-persistent.
 assert.match(appSource, /const preview = params\.get\('preview'\) === '1'/);
 assert.match(appSource, /const saved = preview \|\| onOfficeMode \? null : readPersistedState\(workspaceDataset\)/);
-assert.match(appSource, /if \(!preview && !onOfficeMode\) createPersistence\(\{ map, store, dataset: workspaceDataset \}\)/);
+assert.match(appSource, /if \(!preview && !onOfficeMode\) \{[\s\S]*createPersistence\(\{[\s\S]*dataset: workspaceDataset,[\s\S]*exportWorkspace:/);
 
 // Welcome is presentation-only and can switch without recreating the map.
 assert.match(appSource, /let shellMode = params\.get\('welcome'\) === '1' \? 'welcome' : 'planner'/);
 assert.match(appSource, /const welcomeDefaultView = \{ lng: 9\.84841, lat: 52\.32984, zoom: 16\.5 \}/);
-assert.match(appSource, /saved\?\.view \|\| \(shellMode === 'welcome' && workspaceDataset === 'deutschland' \? welcomeDefaultView : null\)/);
+assert.match(appSource, /savedView:[\s\S]*initialFocusDataset === 'oesterreich'[\s\S]*\|\| saved\?\.view[\s\S]*\|\| \(shellMode === 'welcome' \? welcomeDefaultView : null\)/);
 assert.match(appSource, /function setShellMode\(mode\)/);
 assert.match(appSource, /if \(mode === 'welcome'\) sources\.closePanel\(\)/);
 assert.match(appSource, /message\.type === 'openkataster:set-shell-mode'/);

@@ -1,4 +1,4 @@
-import { createAnalyticsMarker } from './api.js?v=20260723-austria2';
+import { createAnalyticsMarker } from './api.js?v=20260723-unified1';
 import { centerFromResult, debounce, escapeHtml, resultLabel } from './utils.js?v=20260711-search-context1';
 
 export function structuredPoiAddress(result) {
@@ -114,7 +114,7 @@ export function searchResultScope(result) {
 
 export function searchResultTypeLabel(result) {
   const scope = searchResultScope(result);
-  if (scope === 'parcel') return 'Flurstück';
+  if (scope === 'parcel') return result?.dataset === 'oesterreich' ? 'Grundstück' : 'Flurstück';
   if (scope === 'poi') return 'POI';
   const type = String(result?.result_type || result?.kind || '').trim().toLocaleLowerCase('de-DE');
   if (type === 'place') return 'Ort';
@@ -185,7 +185,7 @@ export function createSearchController({
     searchModeButton.setAttribute('aria-expanded', advancedOpen ? 'true' : 'false');
     searchModeButton.setAttribute(
       'aria-label',
-      advancedOpen ? `${terms.parcel}suche mit Feldern schließen` : `${terms.parcel}suche mit Feldern öffnen`
+      advancedOpen ? 'Katasterreferenz mit Feldern schließen' : 'Katasterreferenz mit Feldern öffnen'
     );
     hideSuggestions();
     clearResults();
@@ -264,7 +264,7 @@ export function createSearchController({
     return {
       primary,
       secondary: secondaryParts.filter(Boolean).join(' · '),
-      scopeLabel: searchResultScope(result) === 'parcel' ? terms.parcel : searchResultTypeLabel(result)
+      scopeLabel: searchResultTypeLabel(result)
     };
   }
 
@@ -400,7 +400,7 @@ export function createSearchController({
     }
     if (missingFields.length) {
       missingFields[0].focus();
-      setBusy(false, `Bitte ${terms.cadastralDistrict} und ${terms.parcel} eingeben.`);
+      setBusy(false, 'Bitte Gemarkung beziehungsweise Katastralgemeinde und Flurstück beziehungsweise Grundstück eingeben.');
       return;
     }
     setBusy(true);
@@ -438,7 +438,7 @@ export function createSearchController({
       let resolved;
       if (scope === 'parcel') {
         const parcelSearch = result?.parcel_search || {};
-        if (!parcelSearch.gemarkung || !parcelSearch.flurstueck) throw new Error(`${terms.parcel} konnte nicht aufgelöst werden.`);
+        if (!parcelSearch.gemarkung || !parcelSearch.flurstueck) throw new Error('Katasterreferenz konnte nicht aufgelöst werden.');
         const data = await api.searchParcel(
           { ...parcelSearch, analyticsQuery: typedQuery },
           searchRequest.signal,

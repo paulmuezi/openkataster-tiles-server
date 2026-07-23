@@ -1,5 +1,3 @@
-import { austriaBasemapStyle } from './dataset.js?v=20260723-austria1';
-
 // MapLibre 5.14 only starts dragPan with the primary mouse button. Forward
 // middle-button drags to that handler so its inertia and move lifecycle stay intact.
 export function enableMiddleMousePan(map, {
@@ -101,9 +99,7 @@ export function createPlannerMap({ container, savedView, datasetProfile = { id: 
   const view = hashView || savedView || datasetProfile.defaultView;
   const map = new maplibregl.Map({
     container,
-    style: datasetProfile.id === 'oesterreich'
-      ? austriaBasemapStyle()
-      : '/viewer-assets/viewer-app/bkg-style.json?v=20260723-austria1',
+    style: '/viewer-assets/viewer-app/bkg-style.json?v=20260723-unified1',
     center: [view.lng, view.lat],
     zoom: view.zoom,
     bearing: 0,
@@ -145,5 +141,7 @@ export function createPlannerMap({ container, savedView, datasetProfile = { id: 
 function parseHashView(hash) {
   const parts = String(hash || '').replace(/^#/, '').split('/').map(Number);
   if (parts.length < 3 || parts.some((value) => !Number.isFinite(value))) return null;
-  return { zoom: parts[0], lat: parts[1], lng: parts[2] };
+  const [zoom, lat, lng] = parts;
+  if (zoom < 3.2 || zoom > 20 || lng < -180 || lng > 180 || lat < -85.051129 || lat > 85.051129) return null;
+  return { zoom, lat, lng };
 }

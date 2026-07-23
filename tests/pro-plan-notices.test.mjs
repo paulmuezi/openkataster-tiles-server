@@ -32,8 +32,8 @@ assert.match(stylesSource, /@media \(max-width: 760px\)[\s\S]*\.measure-upgrade-
 assert.doesNotMatch(stylesSource, /@media \(max-width: 760px\)[\s\S]*\.measure-panel \{[^}]*pointer-events: auto;/, 'Nur der Link, nicht die ganze Mobile-Leiste, darf Pointer-Events erhalten.');
 
 assert.match(appSource, /\.\/measure\.js\?v=20260719-free-preview-controls1/);
-assert.match(appSource, /\.\/selection\.js\?v=20260723-austria3/);
-assert.match(indexSource, /styles\.css\?v=20260723-austria1/);
-assert.match(indexSource, /app\.js\?v=20260723-austria3/);
+assert.match(appSource, /\.\/selection\.js\?v=20260723-unified1/);
+assert.match(indexSource, /styles\.css\?v=20260723-unified1/);
+assert.match(indexSource, /app\.js\?v=20260723-unified1/);
 
 console.log('pro-plan-notice-tests=ok');

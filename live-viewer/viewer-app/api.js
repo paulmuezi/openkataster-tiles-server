@@ -195,3 +195,288 @@ export function createApi({ token = '', fresh = '', dataset = 'deutschland', req
     orderStatus: (orderId, guestToken) => json(`/api/orders/${encodeURIComponent(orderId)}/status${guestToken ? `?guest_token=${encodeURIComponent(guestToken)}` : ''}`)
   };
 }
+
+const UNIFIED_DATASETS = Object.freeze(['deutschland', 'oesterreich']);
+
+function resultDataset(result, fallback = 'deutschland') {
+  const explicit = String(result?.dataset || result?.country_dataset || '').trim().toLocaleLowerCase('de');
+  if (explicit === 'oesterreich') return 'oesterreich';
+  const state = String(result?.state || result?.parcel_search?.state || '').trim().toLocaleLowerCase('de');
+  const sourceDb = String(
+    result?.source_db || result?.sourceDb || result?.feature?.source_db || ''
+  ).trim().toLocaleLowerCase('de');
+  return state === 'oesterreich' || sourceDb === 'austria-bev' ? 'oesterreich' : fallback;
+}
+
+function tagResult(result, dataset) {
+  if (!result || typeof result !== 'object') return result;
+  const taggedDataset = resultDataset(result, dataset);
+  return {
+    ...result,
+    dataset: taggedDataset,
+    country_code: result.country_code || (taggedDataset === 'oesterreich' ? 'AT' : 'DE'),
+    ...(result.parcel_search && typeof result.parcel_search === 'object'
+      ? { parcel_search: { ...result.parcel_search, dataset: taggedDataset } }
+      : {})
+  };
+}
+
+function resultIdentity(result) {
+  const feature = result?.feature && typeof result.feature === 'object' ? result.feature : {};
+  const sourceDb = String(result?.source_db || feature.source_db || '');
+  const gmlId = String(result?.gml_id || feature.gml_id || result?.poi_id || '');
+  if (sourceDb && gmlId) return `${sourceDb}\u0000${gmlId}`;
+  if (gmlId) return `${resultDataset(result)}\u0000${gmlId}`;
+  const center = Array.isArray(result?.center) ? result.center.map((value) => Number(value).toFixed(6)).join(',') : '';
+  return [
+    resultDataset(result),
+    String(result?.result_type || result?.kind || result?.search_scope || ''),
+    String(result?.label || result?.value || ''),
+    center
+  ].join('\u0000');
+}
+
+function mergeResultPayloads(entries, limit = 50) {
+  const successful = entries.filter((entry) => entry.status === 'fulfilled');
+  if (!successful.length) throw entries.find((entry) => entry.status === 'rejected')?.reason || new Error('Suche fehlgeschlagen');
+  const results = [];
+  const seen = new Set();
+  const queues = successful.map((entry) => ({
+    dataset: entry.value.dataset,
+    results: [...(entry.value.payload?.results || [])]
+  }));
+  // Round-robin keeps the near-country preference while preventing a full
+  // German page from hiding every Austrian result (and vice versa).
+  while (results.length < limit && queues.some((queue) => queue.results.length)) {
+    for (const queue of queues) {
+      const raw = queue.results.shift();
+      if (!raw) continue;
+      const result = tagResult(raw, queue.dataset);
+      const key = resultIdentity(result);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push(result);
+      if (results.length >= limit) break;
+    }
+  }
+  return {
+    ...(successful[0].value.payload || {}),
+    dataset: 'deutschland',
+    country: 'Deutschland und Österreich',
+    results
+  };
+}
+
+function mergeSourcePayloads(germany = {}, austria = {}) {
+  const mergeUnique = (left, right, keyOf) => {
+    const merged = new Map();
+    for (const item of [...(left || []), ...(right || [])]) {
+      const key = keyOf(item);
+      if (!key) continue;
+      merged.set(key, item);
+    }
+    return [...merged.values()];
+  };
+  const uniqueAttributions = [];
+  const attributionKeys = new Set();
+  for (const item of [...(germany.attributions || []), ...(austria.attributions || [])]) {
+    const key = `${item?.text || ''}\u0000${item?.href || ''}`;
+    if (!item?.text || attributionKeys.has(key)) continue;
+    attributionKeys.add(key);
+    uniqueAttributions.push(item);
+  }
+  return {
+    ...germany,
+    dataset: 'deutschland',
+    country: 'Deutschland und Österreich',
+    runtime_kind: 'unified-de-at',
+    bounds: [5.8, 46.3, 17.2, 55.1],
+    center: { lon: 11.55, lat: 50.75 },
+    states: mergeUnique(
+      germany.states,
+      austria.states,
+      (item) => String(item?.slug || item?.dataset || item?.name || '')
+    ),
+    regions: mergeUnique(
+      germany.regions,
+      austria.regions,
+      (item) => String(item?.slug || item?.dataset || item?.name || '')
+    ),
+    sources: mergeUnique(
+      germany.sources,
+      austria.sources,
+      (item) => `${item?.id || item?.name || item?.text || ''}\u0000${item?.href || item?.url || ''}`
+    ),
+    attributions: uniqueAttributions
+  };
+}
+
+function referenceDataset(reference) {
+  return resultDataset(reference, 'deutschland');
+}
+
+/**
+ * One browser-facing API facade for both national runtimes. Point queries are
+ * routed by the exact country polygon; text searches are federated and retain
+ * the originating dataset on every result for subsequent geometry requests.
+ */
+export function createUnifiedApi({
+  token = '',
+  fresh = '',
+  requestTokenRefresh = null,
+  countryResolver = null
+} = {}) {
+  const clients = Object.fromEntries(UNIFIED_DATASETS.map((dataset) => [
+    dataset,
+    createApi({ token, fresh, dataset, requestTokenRefresh })
+  ]));
+
+  const orderedDatasets = async ({ nearLon = null, nearLat = null, state = '', dataset = '' } = {}) => {
+    const requested = String(dataset || '').trim().toLocaleLowerCase('de');
+    if (UNIFIED_DATASETS.includes(requested)) return [requested, ...UNIFIED_DATASETS.filter((item) => item !== requested)];
+    if (String(state || '').trim().toLocaleLowerCase('de') === 'oesterreich') return ['oesterreich', 'deutschland'];
+    if (Number.isFinite(Number(nearLon)) && Number.isFinite(Number(nearLat)) && countryResolver) {
+      await countryResolver.ready?.();
+      const primary = countryResolver.datasetAt(Number(nearLon), Number(nearLat));
+      return [primary, ...UNIFIED_DATASETS.filter((item) => item !== primary)];
+    }
+    return [...UNIFIED_DATASETS];
+  };
+
+  const federate = async (method, args, routing = {}, limit = 50) => {
+    const order = await orderedDatasets(routing);
+    const entries = await Promise.allSettled(order.map(async (dataset) => ({
+      dataset,
+      payload: await clients[dataset][method](...args)
+    })));
+    return mergeResultPayloads(entries, limit);
+  };
+
+  const pointQuery = async (method, lng, lat, signal, analytics, addressHint) => {
+    const order = await orderedDatasets({ nearLon: lng, nearLat: lat });
+    let firstEmpty = null;
+    let firstError = null;
+    for (const dataset of order) {
+      try {
+        const payload = await clients[dataset][method](lng, lat, signal, analytics, addressHint);
+        const tagged = {
+          ...payload,
+          dataset,
+          parcels: (payload?.parcels || []).map((item) => tagResult(item, dataset)),
+          buildings: (payload?.buildings || []).map((item) => tagResult(item, dataset))
+        };
+        if (tagged.parcels.length || tagged.buildings.length) return tagged;
+        firstEmpty ||= tagged;
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error;
+        firstError ||= error;
+      }
+    }
+    if (firstEmpty) return firstEmpty;
+    throw firstError || new Error('Objektabfrage fehlgeschlagen');
+  };
+
+  return {
+    viewerUrl: clients.deutschland.viewerUrl,
+    setToken(nextToken) {
+      const results = UNIFIED_DATASETS.map((dataset) => clients[dataset].setToken(nextToken));
+      return results.some(Boolean);
+    },
+    session: clients.deutschland.session,
+    async sources() {
+      const [germany, austria] = await Promise.allSettled([
+        clients.deutschland.sources(),
+        clients.oesterreich.sources()
+      ]);
+      if (germany.status === 'rejected' && austria.status === 'rejected') throw germany.reason;
+      return mergeSourcePayloads(
+        germany.status === 'fulfilled' ? germany.value : {},
+        austria.status === 'fulfilled' ? austria.value : {}
+      );
+    },
+    featureAt: (lng, lat, signal, analytics = null, addressHint = null) => (
+      pointQuery('featureAt', lng, lat, signal, analytics, addressHint)
+    ),
+    featurePreviewAt: (lng, lat, signal, analytics = null, addressHint = null) => (
+      pointQuery('featurePreviewAt', lng, lat, signal, analytics, addressHint)
+    ),
+    featureGeometry(reference, signal) {
+      return clients[referenceDataset(reference)].featureGeometry(reference, signal);
+    },
+    searchAddress(query, signal, analytics = null) {
+      const limit = Number(query?.limit) || 12;
+      return federate(
+        'searchAddress',
+        [query, signal, analytics],
+        { nearLon: query?.nearLon, nearLat: query?.nearLat, state: query?.state, dataset: query?.dataset },
+        limit
+      );
+    },
+    searchParcel(query, signal, analytics = null) {
+      const limit = Number(query?.limit) || 12;
+      const state = String(query?.state || '').trim().toLocaleLowerCase('de');
+      if (state && state !== 'oesterreich') {
+        return clients.deutschland.searchParcel(query, signal, analytics).then((payload) => ({
+          ...payload,
+          results: (payload?.results || []).map((item) => tagResult(item, 'deutschland'))
+        }));
+      }
+      if (state === 'oesterreich' || query?.dataset === 'oesterreich') {
+        return clients.oesterreich.searchParcel(query, signal, analytics).then((payload) => ({
+          ...payload,
+          results: (payload?.results || []).map((item) => tagResult(item, 'oesterreich'))
+        }));
+      }
+      return federate('searchParcel', [query, signal, analytics], {}, limit);
+    },
+    searchPoi: (query, signal, analytics = null) => clients.deutschland.searchPoi(query, signal, analytics),
+    suggestSearch(query, signal) {
+      const limit = Number(query?.limit) || 8;
+      return federate(
+        'suggestSearch',
+        [query, signal],
+        { nearLon: query?.nearLon, nearLat: query?.nearLat },
+        limit
+      );
+    },
+    suggestAddresses(query, signal) {
+      const limit = Number(query?.limit) || 8;
+      return federate(
+        'suggestAddresses',
+        [query, signal],
+        { nearLon: query?.nearLon, nearLat: query?.nearLat },
+        limit
+      );
+    },
+    suggestPlaces(query, signal, analytics = null) {
+      return federate('suggestPlaces', [query, signal, analytics], {}, 8);
+    },
+    suggestStreets(place, query, state, signal, analytics = null) {
+      const dataset = String(state || '').trim().toLocaleLowerCase('de') === 'oesterreich'
+        ? 'oesterreich'
+        : 'deutschland';
+      return clients[dataset].suggestStreets(place, query, state, signal, analytics);
+    },
+    suggestGemarkungen(query, signal) {
+      return federate('suggestGemarkungen', [query, signal], {}, 50);
+    },
+    async selectionPayload(references, signal) {
+      const partitions = Object.fromEntries(UNIFIED_DATASETS.map((dataset) => [dataset, []]));
+      for (const reference of Array.isArray(references) ? references : []) {
+        partitions[referenceDataset(reference)].push(reference);
+      }
+      const responses = await Promise.all(UNIFIED_DATASETS
+        .filter((dataset) => partitions[dataset].length)
+        .map((dataset) => clients[dataset].selectionPayload(partitions[dataset], signal)));
+      return {
+        integration: 'onoffice',
+        mode: 'selection-payload-preview',
+        features: responses.flatMap((payload) => payload?.features || []),
+        missing: responses.flatMap((payload) => payload?.missing || []),
+        warnings: responses.flatMap((payload) => payload?.warnings || [])
+      };
+    },
+    createOrder: clients.deutschland.createOrder,
+    orderStatus: clients.deutschland.orderStatus
+  };
+}

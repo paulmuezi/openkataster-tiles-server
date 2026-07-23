@@ -15,6 +15,9 @@ function usableLocationLabel(value) {
 
 function parcelLocationLabel(parcel, terminology = {}) {
   if (!parcel || typeof parcel !== 'object') return '';
+  const austria = String(parcel.state || '').toLocaleLowerCase('de-DE') === 'oesterreich'
+    || String(parcel.source_db || '').toLocaleLowerCase('de-DE') === 'austria-bev'
+    || Boolean(parcel.katastralgemeinde || parcel.katastralgemeindenummer || parcel.grundstuecksnummer);
   const cadastralDistrict = usableLocationLabel(
     parcel.gemarkung
       || parcel.gemarkungsname
@@ -29,9 +32,9 @@ function parcelLocationLabel(parcel, terminology = {}) {
       || parcel.grundstuecksnummer
       || [parcel.zaehler, parcel.nenner].filter((value) => value !== undefined && value !== null && value !== '').join('/')
   );
-  const cadastralDistrictTerm = terminology.cadastralDistrict || 'Gemarkung';
-  const districtTerm = terminology.district || '';
-  const parcelTerm = terminology.parcel || 'Flurstück';
+  const cadastralDistrictTerm = austria ? 'Katastralgemeinde' : 'Gemarkung';
+  const districtTerm = austria ? '' : 'Flur';
+  const parcelTerm = austria ? 'Grundstück' : 'Flurstück';
   return [
     cadastralDistrict && `${cadastralDistrictTerm} ${cadastralDistrict}`,
     districtTerm && flur && `${districtTerm} ${flur}`,
@@ -111,6 +114,7 @@ export function createExportController({
   store,
   elements,
   datasetProfile = { terminology: {} },
+  countryResolver = null,
   onOfficeMode = false,
   onWorkspaceChange = () => {}
 }) {
@@ -123,6 +127,7 @@ export function createExportController({
   let pinch = null;
   let pendingFitTimer = 0;
   let pendingFitFrame = 0;
+  let stateDxfAllowed = !onOfficeMode;
   const activePointers = new Map();
 
   if (onOfficeMode && exportOutput.value === 'dxf') exportOutput.value = 'pdf';
@@ -407,8 +412,28 @@ export function createExportController({
     return map.getContainer()?.closest?.('.planner-app')?.dataset?.layoutTransitioning === 'true';
   }
 
+  function exportCountries(frame = pageBounds()) {
+    const includesAustria = countryResolver?.intersectsAustria?.(frame) === true;
+    if (!includesAustria) return ['DE'];
+    return countryResolver?.containsAustria?.(frame) === true ? ['AT'] : ['DE', 'AT'];
+  }
+
+  function dxfAllowed() {
+    return stateDxfAllowed && !exportCountries().includes('AT');
+  }
+
+  function updateDxfControl() {
+    const option = [...exportOutput.options].find((candidate) => candidate.value === 'dxf');
+    if (!option) return;
+    const allowed = dxfAllowed();
+    option.hidden = !allowed;
+    option.disabled = !allowed;
+    if (!allowed && exportOutput.value === 'dxf') exportOutput.value = 'pdf';
+  }
+
   function updateControlState() {
     if (onOfficeMode && exportOutput.value === 'dxf') exportOutput.value = 'pdf';
+    updateDxfControl();
     const pdf = exportOutput.value === 'pdf';
     const png = exportOutput.value === 'png';
     const layoutRequested = Boolean(exportLayout.checked);
@@ -570,9 +595,12 @@ export function createExportController({
       geometry: item.geometry
     });
     const frameBounds = bounds();
+    const countries = exportCountries(pageBounds());
     return {
       source: 'planner',
       version: 2,
+      countries,
+      dataset: countries.length > 1 ? 'deutschland-oesterreich' : countries[0] === 'AT' ? 'oesterreich' : 'deutschland',
       layers: state.layers,
       selection: highlight ? {
         parcels: state.selection.parcels.map((item) => selectedFeature(item, 'parcel')),
@@ -755,5 +783,16 @@ export function createExportController({
     onWorkspaceChange();
   });
   exportPreview.addEventListener('click', preview);
-  return { render, setCenter, fitFrame, preview, workspaceState, restoreWorkspace };
+  return {
+    render,
+    setCenter,
+    fitFrame,
+    preview,
+    workspaceState,
+    restoreWorkspace,
+    setStateCapabilities(state) {
+      stateDxfAllowed = !onOfficeMode && state?.export?.dxf !== false;
+      render();
+    }
+  };
 }

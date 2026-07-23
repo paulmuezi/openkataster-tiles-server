@@ -4429,6 +4429,60 @@ def load_properties(raw: str | bytes | None) -> dict:
         return {}
 
 
+_UTF8_AS_CP1252_MARKERS = (
+    "Ã",
+    "Â",
+    "â€",
+    "â€“",
+    "â€”",
+    "â€™",
+    "â€œ",
+    "â€�",
+    "ðŸ",
+    "�",
+)
+
+
+def repair_utf8_decoded_as_cp1252(value):
+    """Repair the conservative UTF-8-as-Windows-1252 mojibake pattern.
+
+    The first Austrian runtime decoded the BEV Katastralgemeindenverzeichnis
+    with Windows-1252 even though the file is UTF-8 with a BOM.  Keep the
+    immutable runtime untouched and repair affected labels at the response
+    boundary.  Correct strings do not contain the characteristic markers and
+    therefore pass through byte-for-byte unchanged.
+    """
+    if isinstance(value, dict):
+        return {
+            key: repair_utf8_decoded_as_cp1252(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [repair_utf8_decoded_as_cp1252(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(repair_utf8_decoded_as_cp1252(item) for item in value)
+    if not isinstance(value, str) or not any(
+        marker in value for marker in _UTF8_AS_CP1252_MARKERS
+    ):
+        return value
+    try:
+        repaired = value.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
+    original_markers = sum(value.count(marker) for marker in _UTF8_AS_CP1252_MARKERS)
+    repaired_markers = sum(repaired.count(marker) for marker in _UTF8_AS_CP1252_MARKERS)
+    return repaired if repaired_markers < original_markers else value
+
+
+def utf8_as_cp1252_search_variant(value: str | None) -> str:
+    """Return the legacy Austrian index spelling for a correctly typed label."""
+    text = str(value or "")
+    try:
+        return text.encode("utf-8").decode("cp1252")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return ""
+
+
 _SACHSEN_ANHALT_COMMON_FEATURE_FIELDS = frozenset(
     {
         # Stable references and trusted runtime geometry. These fields are not
@@ -4673,6 +4727,7 @@ def normalize_feature_properties_for_response(state: str, kind: str, properties:
     kind = str(kind or props.get("type") or "").strip().lower()
 
     if state_key == AUSTRIA_DATASET or source_key in _AUSTRIA_FEATURE_SOURCE_KEYS:
+        props = repair_utf8_decoded_as_cp1252(props)
         addresses = props.get("addresses")
         if isinstance(addresses, list):
             normalized_addresses = []
@@ -5064,17 +5119,20 @@ def allowed_place_states(dataset: str) -> set[str]:
 
 
 def search_suggestion_states_for_dataset(dataset: str, state: str = "") -> set[str]:
-    state_key = normalize_state_key(state)
-    if state_key:
-        return {state_key}
-    if is_virtual_germany_dataset(dataset):
+    dataset_key = ensure_dataset_available(dataset)
+    if is_virtual_germany_dataset(dataset_key):
         local_states = {
             entry.name
             for entry in all_local_search_db_entries()
             if entry.name not in NATIONAL_HYBRID_DATASETS
         }
-        return local_states or allowed_place_states(dataset)
-    return allowed_place_states(dataset)
+        allowed_states = local_states or allowed_place_states(dataset_key)
+    else:
+        allowed_states = allowed_place_states(dataset_key)
+    state_key = normalize_state_key(state)
+    if state_key:
+        return {state_key} if state_key in allowed_states else set()
+    return allowed_states
 
 
 @lru_cache(maxsize=8)
@@ -7037,6 +7095,12 @@ def features_at_point_for_dataset(
             lat,
             address_hint=address_hint,
         )
+        # Keep the runtime region on every browser-facing feature. Besides
+        # being useful for mixed-country terminology, this is required for the
+        # compact, server-validated selection references persisted by the
+        # unified viewer.
+        for item in (*entry_parcels, *entry_buildings):
+            item.setdefault("state", entry.name)
         parcel_candidates.extend((parcel, entry) for parcel in entry_parcels)
         buildings.extend(entry_buildings)
 
@@ -7315,13 +7379,19 @@ def german_digraph_collapse_variants(value: str, limit: int = 32) -> tuple[str, 
 
 def normalize_geocoder_text_variants(value: str | None) -> tuple[str, ...]:
     variants: list[str] = []
-    normalized = normalize_geocoder_text(value)
-    plain = _normalize_geocoder_tokens(plain_place_search_text(value))
     candidates: list[str] = []
-    for base in (normalized, plain):
-        for candidate in german_digraph_collapse_variants(base):
-            if candidate and candidate not in candidates:
-                candidates.append(candidate)
+    # The initial Austrian search index inherited the KG-directory decoding
+    # bug.  Include its deterministic legacy spelling so correctly typed
+    # names such as "St. Pölten" can still match that immutable runtime until
+    # the next locally reproduced data release replaces it.
+    source_values = (value, utf8_as_cp1252_search_variant(value))
+    for source in source_values:
+        normalized = normalize_geocoder_text(source)
+        plain = _normalize_geocoder_tokens(plain_place_search_text(source))
+        for base in (normalized, plain):
+            for candidate in german_digraph_collapse_variants(base):
+                if candidate and candidate not in candidates:
+                    candidates.append(candidate)
     for candidate in candidates:
         # The ALKIS search index keeps common street abbreviations such as
         # ``Hauptstr.`` as ``hauptstr``.  Accept both the expanded query form
@@ -8240,7 +8310,9 @@ def search_parcel_result_from_row(row: sqlite3.Row, state: str) -> dict:
     lat = fast_float(row["lat"])
     flur = str(row["flur_label"] or "")
     flurstueck = str(row["flurstueck_label"] or "")
-    gemarkung = str(row["gemarkung_label"] or "")
+    gemarkung = str(
+        repair_utf8_decoded_as_cp1252(str(row["gemarkung_label"] or ""))
+    )
     terminology = (dataset_profile(state) or {}).get("terminology") or {}
     parcel_term = str(terminology.get("parcel") or "Flurstück")
     district_term = str(terminology.get("district") or "Flur")
@@ -9459,7 +9531,9 @@ def search_gemarkung_suggestions_cached(
     entries = search_db_entries_for_states(states_key)
 
     def suggestion_payload(entry_name: str, row: sqlite3.Row) -> dict | None:
-        gemarkung_label = str(row["gemarkung_label"] or "").strip()
+        gemarkung_label = str(
+            repair_utf8_decoded_as_cp1252(str(row["gemarkung_label"] or ""))
+        ).strip()
         if not gemarkung_label:
             return None
         gemarkungsnummer = str(row["gemarkungsnummer"] or "").strip()
@@ -12441,12 +12515,7 @@ def search_features_for_dataset(
 
     per_index_limit = max(8, min(limit * 2, 30))
     results: list[dict] = []
-    active_states = set(active_bucket_state_keys())
-    if is_virtual_germany_dataset(dataset):
-        allowed_states = active_states
-    else:
-        state_key, _, _ = _mosaic_state_key(DATA_DIR / f"{dataset}.pmtiles")
-        allowed_states = {state_key}
+    allowed_states = dataset_region_keys(ensure_dataset_available(dataset))
     structured_state = requested_state_context(state, allowed_states)
     preliminary_search_states = {structured_state} if structured_state else allowed_states
     if cadastre_mode and any(part.strip() for part in (gemarkung, flur, flurstueck)):
@@ -12604,12 +12673,7 @@ def cached_search_features_for_dataset(
     # Feature DB signatures require filesystem stats for every active state and can
     # turn typo/no-result searches into multi-second requests.
     if direct_candidates:
-        active_states = set(active_bucket_state_keys())
-        if is_virtual_germany_dataset(dataset):
-            allowed_states = active_states
-        else:
-            state_key, _, _ = _mosaic_state_key(DATA_DIR / f"{dataset}.pmtiles")
-            allowed_states = {state_key}
+        allowed_states = dataset_region_keys(ensure_dataset_available(dataset))
         structured_state = requested_state_context(state, allowed_states)
         candidate_places = [candidate[3] for candidate in direct_candidates if len(candidate) >= 4 and str(candidate[3] or "").strip()]
         if not structured_state:

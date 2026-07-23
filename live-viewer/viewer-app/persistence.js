@@ -1,4 +1,4 @@
-import { debounce, deepCopy } from './utils.js';
+import { debounce } from './utils.js';
 
 const KEY_PREFIX = 'openkataster:planer-v2:v1';
 
@@ -9,16 +9,41 @@ function storageKey(dataset = 'deutschland') {
 
 export function readPersistedState(dataset = 'deutschland') {
   try {
-    const current = localStorage.getItem(storageKey(dataset));
-    // Retain the previous Germany key as a one-way compatibility fallback.
-    const legacy = dataset === 'deutschland' ? localStorage.getItem(KEY_PREFIX) : null;
-    const value = JSON.parse(current || legacy);
-    if (!value || value.version !== 1 || Date.now() - Number(value.savedAt || 0) > 21 * 86400000) return null;
-    return value;
+    const candidates = [
+      localStorage.getItem(storageKey(dataset)),
+      dataset === 'deutschland' ? localStorage.getItem(KEY_PREFIX) : null,
+      // One-way migration from the former, separate Austria workspace.
+      dataset === 'deutschland' ? localStorage.getItem(storageKey('oesterreich')) : null
+    ]
+      .filter(Boolean)
+      .map((serialized) => {
+        try { return JSON.parse(serialized); } catch (_) { return null; }
+      })
+      .filter((value) => (
+        value?.version === 1
+        && Date.now() - Number(value.savedAt || 0) <= 21 * 86400000
+      ))
+      .sort((left, right) => Number(right.savedAt || 0) - Number(left.savedAt || 0));
+    return candidates[0] || null;
   } catch (_) { return null; }
 }
 
-export function createPersistence({ map, store, dataset = 'deutschland' }) {
+function compactSelectionReference(item, kind) {
+  const reference = {
+    kind,
+    state: String(item?.state || item?.bundesland || '').trim(),
+    source_db: String(item?.source_db || '').trim(),
+    gml_id: String(item?.gml_id || item?.id || '').trim()
+  };
+  return reference.state && reference.source_db && reference.gml_id ? reference : null;
+}
+
+export function createPersistence({
+  map,
+  store,
+  dataset = 'deutschland',
+  exportWorkspace = () => store.getState().export
+}) {
   const save = debounce(() => {
     const state = store.getState();
     const center = map.getCenter();
@@ -28,13 +53,18 @@ export function createPersistence({ map, store, dataset = 'deutschland' }) {
       view: { lng: center.lng, lat: center.lat, zoom: map.getZoom() },
       layout: state.layout,
       layers: state.layers,
-      export: state.export,
+      layerWorkspace: state.layerWorkspace || { visible: state.layers },
+      export: exportWorkspace(),
       selection: {
-        parcels: state.selection.parcels.slice(0, 25).map(deepCopy).filter(Boolean),
-        buildings: state.selection.buildings.slice(0, 25).map(deepCopy).filter(Boolean)
+        parcels: state.selection.parcels.slice(0, 25).map((item) => compactSelectionReference(item, 'parcel')).filter(Boolean),
+        buildings: state.selection.buildings.slice(0, 25).map((item) => compactSelectionReference(item, 'building')).filter(Boolean)
       }
     };
-    localStorage.setItem(storageKey(dataset), JSON.stringify(payload));
+    try {
+      localStorage.setItem(storageKey(dataset), JSON.stringify(payload));
+    } catch (error) {
+      console.warn('Kartenstand konnte nicht lokal gespeichert werden.', error);
+    }
   }, 180);
   map.on('moveend', save);
   store.subscribe((_state, reason) => { if (!['selection-loading', 'resize'].includes(reason)) save(); });

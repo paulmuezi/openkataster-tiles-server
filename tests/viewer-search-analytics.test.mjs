@@ -306,7 +306,7 @@ assert.match(searchSource, /\{ gemarkung, flur, flurstueck, state: selectedGemar
 assert.match(searchSource, /gemarkungInput\.value = label;/, 'selected Gemarkung code must stay visible');
 assert.doesNotMatch(searchSource, /!gemarkung \|\| !flur \|\| !flurstueck/);
 assert.match(searchSource, /Viele Treffer – bitte \$\{terms\.district\} zur Eingrenzung eingeben\./);
-assert.match(viewerHtml, /id="addressInput"[^>]*placeholder="Adresse, Flurstück oder POI suchen"/);
+assert.match(viewerHtml, /id="addressInput"[^>]*placeholder="Adresse, Flurstück, Grundstück oder POI suchen"/);
 assert.match(viewerHtml, /id="addressInput"[^>]*role="combobox"[^>]*aria-controls="searchSuggestions"/);
 assert.match(viewerHtml, /id="searchSuggestions"[^>]*role="listbox"/);
 assert.match(searchSource, /class="search-result-type search-result-type-\$\{scope\}"/, 'address and parcel suggestions share one renderer with kind badges');

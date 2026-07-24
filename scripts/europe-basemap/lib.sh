@@ -345,8 +345,9 @@ ok_preflight_disk() {
   while [[ ! -e $existing_path ]]; do
     existing_path=$(dirname -- "$existing_path")
   done
-  read -r total_kib available_kib < <(
-    df -Pk -- "$existing_path" | awk 'NR == 2 {print $2, $4}'
+  IFS=$'\t' read -r total_kib available_kib < <(
+    df -Pk -- "$existing_path" \
+      | awk 'NR == 2 {printf "%s\t%s\n", $2, $4}'
   )
   [[ $total_kib =~ ^[0-9]+$ && $available_kib =~ ^[0-9]+$ ]] \
     || ok_die "Freier Speicher konnte für $existing_path nicht bestimmt werden."

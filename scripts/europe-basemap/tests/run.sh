@@ -59,6 +59,12 @@ grep -Fq 'zu klein' <<<"$ADOPT_OUTPUT"
 (
   # shellcheck source=../lib.sh
   source "${SCRIPT_DIR}/lib.sh"
+  df() {
+    printf '%s\n' \
+      'Filesystem 1024-blocks Used Available Capacity Mounted on' \
+      'mockfs 200000000 20000000 180000000 10% /tmp'
+  }
+  ok_preflight_disk "$TEMP_ROOT" >/dev/null
   [[ $(ok_version_for_build_date 20260723) == "europe-de-at-20260723-z15" ]]
   [[ $(ok_build_date_for_version europe-20260723-z15) == "20260723" ]]
   [[ $(ok_build_date_for_version europe-de-at-20260723-z15) == "20260723" ]]

@@ -17,6 +17,7 @@ import { readPersistedState } from '../live-viewer/viewer-app/persistence.js';
 import { parcelDisplayNumber } from '../live-viewer/viewer-app/selection.js';
 import {
   AUSTRIA_USAGE_COLOR,
+  cadastreGroupLayerVisible,
   COUNTRY_OVERVIEW_LABELS,
   COUNTRY_OVERVIEW_MAX_ZOOM
 } from '../live-viewer/viewer-app/layers.js';
@@ -66,19 +67,14 @@ assert.deepEqual(
   ['https://mapsneu.wien.gv.at/basemap/geolandbasemap/normal/google3857/{z}/{y}/{x}.png']
 );
 assert.equal(style.sources['basemap-at'].attribution, 'Grundkarte: basemap.at');
-assert.deepEqual(
-  style.sources['basemap-at-overlay'].tiles,
-  ['https://mapsneu.wien.gv.at/basemap/bmapoverlay/normal/google3857/{z}/{y}/{x}.png']
-);
-assert.equal(style.sources['basemap-at-overlay'].maxzoom, 20);
-assert.equal(style.sources['basemap-at-overlay'].attribution, 'Datenquelle: basemap.at');
+assert.equal(style.sources['basemap-at-overlay'], undefined);
 assert.equal(style.layers.find((layer) => layer.id === 'basemap-at-standard')?.minzoom, COUNTRY_OVERVIEW_MAX_ZOOM);
 assert.deepEqual(
   style.layers.find((layer) => layer.id === 'basemap-at-standard')?.paint?.['raster-opacity'],
   ['interpolate', ['linear'], ['zoom'], 5.8, .84, 15.7, .84, 16.2, .62, 17.2, .18]
 );
-assert.match(layerSource, /id: AT_STREET_OVERLAY_LAYER_ID,[\s\S]*source: AT_STREET_OVERLAY_SOURCE_ID/);
-assert.match(layerSource, /bmapoverlay\/normal\/google3857/);
+assert.doesNotMatch(layerSource, /AT_STREET_OVERLAY/);
+assert.doesNotMatch(layerSource, /bmapoverlay\/normal\/google3857/);
 assert.match(layerSource, /const AUSTRIA_SOURCE_BOUNDS = \[9\.35, 46\.3, 17\.2, 49\.1\]/);
 assert.equal(
   (layerSource.match(/bounds: AUSTRIA_SOURCE_BOUNDS/g) || []).length,
@@ -86,9 +82,53 @@ assert.equal(
   'Both BEV vector sources must be constrained to Austria.'
 );
 assert.match(layerSource, /id: AT_STREET_LABEL_LAYER_ID,[\s\S]*\['get', 'text'\][\s\S]*\['get', 'rot_nr'\]/);
+const austriaHouseNumberLayer = layerSource.match(
+  /id: `\$\{AT_LAYER_PREFIX\}house-numbers`,[\s\S]*?(?=\n    add\(\{)/
+)?.[0] ?? '';
+assert.match(austriaHouseNumberLayer, /'text-field': \['coalesce', \['get', 'hnr'\], ''\]/);
+assert.doesNotMatch(austriaHouseNumberLayer, /\['get', 'name'\]/);
+assert.doesNotMatch(austriaHouseNumberLayer, /'text-field': \['step'/);
 assert.match(
   layerSource,
   /id: `\$\{AT_LAYER_PREFIX\}symbols`[\s\S]*filter: \['!=', \['to-number', \['get', 'typ'\]\], 200\]/
+);
+for (const id of [
+  'alkis-building-fills',
+  'alkis-house-numbers',
+  'alkis-street-names',
+  'at-kataster-building-fills',
+  'at-kataster-house-numbers',
+  'at-kataster-street-names'
+]) {
+  assert.equal(
+    cadastreGroupLayerVisible({
+      id,
+      group: id.includes('street') ? 'streetNames' : id.includes('house') ? 'houseNumbers' : 'buildings',
+      layers: {
+        alkis: false,
+        buildings: true,
+        houseNumbers: true,
+        streetNames: true
+      },
+      austria: id.startsWith('at-kataster-'),
+      austriaDetail: true,
+      germanyDetail: true
+    }),
+    false,
+    `${id} must follow the Kataster master switch.`
+  );
+}
+assert.equal(
+  cadastreGroupLayerVisible({
+    id: 'at-kataster-street-names',
+    group: 'streetNames',
+    layers: { alkis: true, streetNames: true, aerial: true },
+    austria: true,
+    austriaDetail: true,
+    germanyDetail: true
+  }),
+  true,
+  'BEV street labels remain available above aerial imagery without the basemap.at house-number overlay.'
 );
 assert.doesNotMatch(layerSource, /austriaDetailFillOpacity/);
 assert.match(

@@ -8,6 +8,96 @@ const AT_STREET_LABEL_LAYER_ID = `${AT_LAYER_PREFIX}street-names`;
 const AUSTRIA_SOURCE_BOUNDS = [9.35, 46.3, 17.2, 49.1];
 const NO_STATE_MASK_FILTER = ['==', 'gen', '__openkataster_no_state__'];
 const GERMANY_BASEMAP_SOURCES = new Set(['smarttiles_de', 'germany_geojson', 'states_geojson', 'state_labels_source']);
+const EUROPE_BASEMAP_SOURCE = 'openkataster_europe';
+
+function sameStyleValue(left, right) {
+  if (Object.is(left, right)) return true;
+  if (
+    (left === null || typeof left !== 'object')
+    && (right === null || typeof right !== 'object')
+  ) return false;
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch (_) {
+    return false;
+  }
+}
+
+export function createMapStyleMutationWriter(map) {
+  function setLayoutProperty(id, property, value) {
+    if (!map.getLayer(id)) return false;
+    if (
+      typeof map.getLayoutProperty === 'function'
+      && sameStyleValue(map.getLayoutProperty(id, property), value)
+    ) return false;
+    map.setLayoutProperty(id, property, value);
+    return true;
+  }
+
+  function setPaintProperty(id, property, value) {
+    if (!map.getLayer(id)) return false;
+    if (
+      typeof map.getPaintProperty === 'function'
+      && sameStyleValue(map.getPaintProperty(id, property), value)
+    ) return false;
+    map.setPaintProperty(id, property, value);
+    return true;
+  }
+
+  function setFilter(id, value) {
+    if (!map.getLayer(id)) return false;
+    if (
+      typeof map.getFilter === 'function'
+      && sameStyleValue(map.getFilter(id), value)
+    ) return false;
+    map.setFilter(id, value);
+    return true;
+  }
+
+  return { setLayoutProperty, setPaintProperty, setFilter };
+}
+
+export function createLatestFrameScheduler(callback, requestFrame = null) {
+  const enqueue = requestFrame
+    || globalThis.requestAnimationFrame?.bind(globalThis)
+    || ((task) => globalThis.setTimeout(task, 0));
+  let queued = false;
+  let latestValue;
+  return (value) => {
+    latestValue = value;
+    if (queued) return;
+    queued = true;
+    enqueue(() => {
+      queued = false;
+      const valueForFrame = latestValue;
+      latestValue = undefined;
+      callback(valueForFrame);
+    });
+  };
+}
+
+export function layerZoomBandSignature({
+  zoom,
+  dataset,
+  deDetailZoom,
+  atDetailZoom,
+  deAerialZoom,
+  atAerialZoom
+}) {
+  return [
+    dataset,
+    zoom >= deDetailZoom,
+    zoom >= atDetailZoom,
+    zoom >= deAerialZoom,
+    zoom >= atAerialZoom
+  ].join(':');
+}
+
+export function resolveLayerFontStack(bold = false, basemapProfile = 'national') {
+  if (!bold) return 'Noto Sans Regular';
+  return basemapProfile === 'europe' ? 'Noto Sans Medium' : 'Noto Sans Bold';
+}
+
 export const COUNTRY_OVERVIEW_MAX_ZOOM = 5.8;
 export const COUNTRY_OVERVIEW_LABELS = Object.freeze({
   type: 'FeatureCollection',
@@ -18,33 +108,33 @@ export const COUNTRY_OVERVIEW_LABELS = Object.freeze({
 });
 export const AUSTRIA_USAGE_COLOR = Object.freeze([
   'match', ['to-number', ['get', 'ns']],
-  40, '#FFF5BF',
+  40, '#FFFDEE',
   42, '#FFFFFF',
-  48, '#FFF5BF',
-  52, '#EAFFD3',
-  53, '#FFF5BF',
-  54, '#EAFFD3',
-  55, '#DFF0B6',
-  56, '#DFF0B6',
-  57, '#EAFFD3',
+  48, '#FFFDEE',
+  52, '#F1F8EC',
+  53, '#FFFDEE',
+  54, '#F1F8EC',
+  55, '#EAF5E4',
+  56, '#EAF5E4',
+  57, '#F1F8EC',
   58, '#FFFFFF',
-  59, '#DCEFFF',
-  60, '#DCEFFF',
-  61, '#EAFFD3',
-  62, '#F2F2EE',
-  63, '#EDEDED',
-  64, '#DCEFFF',
+  59, '#E8F5FA',
+  60, '#E8F5FA',
+  61, '#F1F8EC',
+  62, '#F4F4F1',
+  63, '#F0F0EE',
+  64, '#E8F5FA',
   65, '#FFFFFF',
-  71, '#EDEDED',
-  72, '#E0FFD8',
-  76, '#E0FFD8',
-  83, '#FFEAF4',
-  84, '#EDEDED',
-  87, '#F2F2EE',
-  88, '#DCEFFF',
+  71, '#F0F0EE',
+  72, '#EDF8E8',
+  76, '#EDF8E8',
+  83, '#FDF1F6',
+  84, '#F0F0EE',
+  87, '#F4F4F1',
+  88, '#E8F5FA',
   92, '#FFFFFF',
   95, '#FFFFFF',
-  96, '#E0FFD8',
+  96, '#EDF8E8',
   '#FFFDEE'
 ]);
 
@@ -101,7 +191,8 @@ export function createLayerController({
   store,
   elements,
   datasetProfile = { id: 'deutschland', detailZoom: 17, nationalRegion: '' },
-  countryResolver = null
+  countryResolver = null,
+  basemapRuntime = { profile: 'national' }
 }) {
   const { layerButton, layerMenu, layerInputs, layerZoomNote, layerPresentationNote } = elements;
   const DE_DETAIL_ZOOM = Number(datasetProfile.detailZoomByRegion?.deutschland || datasetProfile.detailZoom || 17);
@@ -114,7 +205,12 @@ export function createLayerController({
   let sourceMetadata = null;
   let activeAerial = '';
   let activeCadastre = '';
-  const basemapVisibility = { deutschland: true, oesterreich: true };
+  let lastZoomBand = '';
+  let lastViewportSlug = '';
+  const sourceReadiness = new Map();
+  const europeBasemap = basemapRuntime.profile === 'europe';
+  const basemapVisibility = { deutschland: true, oesterreich: true, europe: true };
+  const styleWriter = createMapStyleMutationWriter(map);
 
   function updateLayerOverflowHint() {
     if (!layerControl || !layerMenu || layerMenu.hidden) {
@@ -154,8 +250,12 @@ export function createLayerController({
     return aliases[raw] || raw.replaceAll(' ', '-').replaceAll('ü', 'u').replaceAll('ä', 'a').replaceAll('ö', 'o').replaceAll('ß', 'ss');
   }
 
+  function datasetForSlug(slug) {
+    return slug === 'oesterreich' ? 'oesterreich' : 'deutschland';
+  }
+
   function currentDataset() {
-    return currentStateSlug() === 'oesterreich' ? 'oesterreich' : 'deutschland';
+    return datasetForSlug(currentStateSlug());
   }
 
   function currentDetailZoom() {
@@ -190,10 +290,11 @@ export function createLayerController({
   function updateUnavailableStateMask() {
     const layerId = 'State_Overlay_Bavaria_SaxonyAnhalt_GeoJSON';
     if (!map.getLayer(layerId)) return;
-    map.setFilter(layerId, unavailableStateMaskFilter(sourceMetadata));
+    styleWriter.setFilter(layerId, unavailableStateMaskFilter(sourceMetadata));
   }
 
   function addAustriaBasemap() {
+    if (europeBasemap) return;
     if (!map.getSource('openkataster-austria-overview')) {
       map.addSource('openkataster-austria-overview', {
         type: 'geojson',
@@ -258,7 +359,7 @@ export function createLayerController({
         maxzoom: COUNTRY_OVERVIEW_MAX_ZOOM,
         layout: {
           'text-field': ['get', 'name'],
-          'text-font': ['Noto Sans Bold'],
+          'text-font': [resolveLayerFontStack(true, basemapRuntime.profile)],
           'text-size': ['interpolate', ['linear'], ['zoom'], 3.2, 15, COUNTRY_OVERVIEW_MAX_ZOOM, 21],
           'text-letter-spacing': .04,
           'text-allow-overlap': true,
@@ -411,7 +512,7 @@ export function createLayerController({
       source: AT_SYMBOL_SOURCE_ID,
       'source-layer': 'sli',
       minzoom: 15,
-      paint: { 'line-color': '#466278', 'line-width': ['interpolate', ['linear'], ['zoom'], 15, .45, 20, 1] }
+      paint: { 'line-color': '#74797d', 'line-width': ['interpolate', ['linear'], ['zoom'], 15, .45, 20, 1] }
     });
     add({
       id: `${AT_LAYER_PREFIX}building-fills`,
@@ -420,7 +521,7 @@ export function createLayerController({
       'source-layer': 'nfl',
       minzoom: AT_DETAIL_ZOOM,
       filter: ['==', ['to-number', ['get', 'ns']], 41],
-      paint: { 'fill-color': '#f3b4ae', 'fill-opacity': 1 }
+      paint: { 'fill-color': '#d7d7d3', 'fill-opacity': 1 }
     });
     add({
       id: `${AT_LAYER_PREFIX}building-lines`,
@@ -430,7 +531,7 @@ export function createLayerController({
       minzoom: AT_DETAIL_ZOOM,
       filter: ['==', ['to-number', ['get', 'ns']], 41],
       paint: {
-        'line-color': '#8a4b46',
+        'line-color': '#4e5054',
         'line-width': ['interpolate', ['linear'], ['zoom'], 14, .45, 20, 1.35],
         'line-opacity': 1
       }
@@ -455,7 +556,7 @@ export function createLayerController({
       minzoom: 16,
       layout: {
         'text-field': ['coalesce', ['get', 'gnr'], ''],
-        'text-font': ['Noto Sans Bold'],
+        'text-font': [resolveLayerFontStack(true, basemapRuntime.profile)],
         'text-size': ['interpolate', ['linear'], ['zoom'], 16, 9, 20, 13],
         'text-rotate': ['*', -1, ['coalesce', ['to-number', ['get', 'rot']], 0]],
         'text-allow-overlap': true,
@@ -554,7 +655,7 @@ export function createLayerController({
       id, type: 'symbol', source: SOURCE_ID, 'source-layer': 'labels', minzoom: DE_DETAIL_ZOOM, filter,
       layout: {
         'text-field': ['coalesce', ['get', 'text_content'], ''],
-        'text-font': [bold ? 'Noto Sans Bold' : 'Noto Sans Regular'],
+        'text-font': [resolveLayerFontStack(bold, basemapRuntime.profile)],
         'text-size': ['interpolate', ['linear'], ['zoom'], 17, baseSize, 19, baseSize + 2, 20, baseSize + 4],
         'text-rotation-alignment': 'map',
         'text-rotate': ['*', -1, ['coalesce', ['to-number', ['get', 'render_rotation']], 0]],
@@ -600,7 +701,11 @@ export function createLayerController({
     const aerialZoom = currentAerialZoom();
     const capability = aerialCapability(slug);
     if (!show || !capability) {
-      for (const layer of map.getStyle().layers || []) if (String(layer.id).startsWith('aerial-') && map.getLayer(layer.id)) map.setLayoutProperty(layer.id, 'visibility', 'none');
+      for (const layer of map.getStyle().layers || []) {
+        if (String(layer.id).startsWith('aerial-')) {
+          styleWriter.setLayoutProperty(layer.id, 'visibility', 'none');
+        }
+      }
       activeAerial = '';
       return;
     }
@@ -625,7 +730,15 @@ export function createLayerController({
         paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 }
       }, currentDataset() === 'oesterreich' ? `${AT_LAYER_PREFIX}surface-fills` : 'alkis-surface-fills');
     }
-    for (const layer of map.getStyle().layers || []) if (String(layer.id).startsWith('aerial-') && map.getLayer(layer.id)) map.setLayoutProperty(layer.id, 'visibility', layer.id === sourceId ? 'visible' : 'none');
+    for (const layer of map.getStyle().layers || []) {
+      if (String(layer.id).startsWith('aerial-')) {
+        styleWriter.setLayoutProperty(
+          layer.id,
+          'visibility',
+          layer.id === sourceId ? 'visible' : 'none'
+        );
+      }
+    }
     activeAerial = sourceId;
   }
 
@@ -636,7 +749,7 @@ export function createLayerController({
     if (!show || !capability) {
       for (const layer of map.getStyle().layers || []) {
         if (String(layer.id).startsWith('official-cadastre-') && map.getLayer(layer.id)) {
-          map.setLayoutProperty(layer.id, 'visibility', 'none');
+          styleWriter.setLayoutProperty(layer.id, 'visibility', 'none');
         }
       }
       activeCadastre = '';
@@ -667,8 +780,14 @@ export function createLayerController({
     for (const layer of map.getStyle().layers || []) {
       if (!String(layer.id).startsWith('official-cadastre-') || !map.getLayer(layer.id)) continue;
       const visible = layer.id === sourceId;
-      map.setLayoutProperty(layer.id, 'visibility', visible ? 'visible' : 'none');
-      if (visible) map.setPaintProperty(layer.id, 'raster-opacity', aerialVisible ? .62 : 1);
+      styleWriter.setLayoutProperty(layer.id, 'visibility', visible ? 'visible' : 'none');
+      if (visible) {
+        styleWriter.setPaintProperty(
+          layer.id,
+          'raster-opacity',
+          aerialVisible ? .62 : 1
+        );
+      }
     }
     activeCadastre = sourceId;
     ensureRasterStack();
@@ -679,13 +798,19 @@ export function createLayerController({
     basemapVisibility[dataset] = visible;
     for (const layer of map.getStyle().layers || []) {
       const source = String(layer.source || '');
-      const matches = dataset === 'oesterreich'
+      const matches = dataset === 'europe'
+        ? source === EUROPE_BASEMAP_SOURCE
+        : dataset === 'oesterreich'
         ? source === 'basemap-at'
         : GERMANY_BASEMAP_SOURCES.has(source);
       if (!layer.id || !matches) continue;
       if (!map.getLayer(layer.id)) continue;
       if (!baseVisibility.has(layer.id)) baseVisibility.set(layer.id, map.getLayoutProperty(layer.id, 'visibility') || 'visible');
-      map.setLayoutProperty(layer.id, 'visibility', visible ? baseVisibility.get(layer.id) : 'none');
+      styleWriter.setLayoutProperty(
+        layer.id,
+        'visibility',
+        visible ? baseVisibility.get(layer.id) : 'none'
+      );
     }
   }
 
@@ -693,6 +818,42 @@ export function createLayerController({
     if (!sourceId || !map.getSource(sourceId)) return false;
     if (typeof map.isSourceLoaded !== 'function') return true;
     try { return map.isSourceLoaded(sourceId); } catch (_) { return false; }
+  }
+
+  function zoomBandSignature(dataset = null) {
+    const cachedDataset = dataset
+      || (lastViewportSlug
+        ? datasetForSlug(lastViewportSlug)
+        : datasetForSlug(datasetProfile.id));
+    return layerZoomBandSignature({
+      zoom: map.getZoom(),
+      dataset: cachedDataset,
+      deDetailZoom: DE_DETAIL_ZOOM,
+      atDetailZoom: AT_DETAIL_ZOOM,
+      deAerialZoom: DE_AERIAL_ZOOM,
+      atAerialZoom: AT_AERIAL_ZOOM
+    });
+  }
+
+  function relevantSourceId(sourceId) {
+    return [
+      SOURCE_ID,
+      AT_KATASTER_SOURCE_ID,
+      AT_SYMBOL_SOURCE_ID,
+      activeAerial,
+      activeCadastre
+    ].includes(sourceId);
+  }
+
+  function sourceReadinessChanged(event) {
+    const sourceId = event?.sourceId;
+    if (!sourceId || !relevantSourceId(sourceId)) return false;
+    const ready = typeof event.isSourceLoaded === 'boolean'
+      ? event.isSourceLoaded
+      : sourceReady(sourceId);
+    if (sourceReadiness.get(sourceId) === ready) return false;
+    sourceReadiness.set(sourceId, ready);
+    return true;
   }
 
   function apply(state = store.getState()) {
@@ -715,14 +876,14 @@ export function createLayerController({
     if (layerZoomNote) {
       layerZoomNote.hidden = detail && (!aerial || aerialDetail);
       if (fullPresentation) {
-        layerZoomNote.textContent = 'Amtliche Gesamtdarstellung und Luftbild sind ab Zoom 17 verfügbar.';
+        layerZoomNote.textContent = 'Katasterlayer und Luftbilder sind ab Zoomstufe 17 verfügbar.';
       } else if (austria && aerial && aerialZoom !== detailZoom) {
         const unavailable = [];
         if (!aerialDetail) unavailable.push(`Luftbild ab Zoom ${aerialZoom}`);
         if (!detail) unavailable.push(`Kataster ab Zoom ${detailZoom}`);
         layerZoomNote.textContent = `${unavailable.join(' · ')}.`;
       } else {
-        layerZoomNote.textContent = `${austria ? 'Kataster' : 'ALKIS'} und Luftbild sind ab Zoom ${detailZoom} verfügbar.`;
+        layerZoomNote.textContent = `Katasterlayer und Luftbilder sind ab Zoomstufe ${detailZoom} verfügbar.`;
       }
     }
     if (layerMenu) layerMenu.dataset.detailUnavailable = detail || aerialDetail ? 'false' : 'true';
@@ -740,29 +901,37 @@ export function createLayerController({
           germanyDetail,
           fullPresentation
         });
-        map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+        styleWriter.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
       }
     }
     if (map.getLayer('alkis-building-fills')) {
-      map.setPaintProperty(
+      styleWriter.setPaintProperty(
         'alkis-building-fills',
         'fill-color',
         layers.buildingUsage ? ['coalesce', ['get', 'fill_color'], '#CCCCCC'] : '#CCCCCC'
       );
-      map.setPaintProperty('alkis-building-fills', 'fill-opacity', !austria && detail && layers.aerial ? .36 : 1);
+      styleWriter.setPaintProperty(
+        'alkis-building-fills',
+        'fill-opacity',
+        !austria && detail && layers.aerial ? .36 : 1
+      );
     }
     if (map.getLayer(`${AT_LAYER_PREFIX}building-fills`)) {
-      map.setPaintProperty(
+      styleWriter.setPaintProperty(
         `${AT_LAYER_PREFIX}building-fills`,
         'fill-opacity',
         austria && detail && layers.aerial ? .36 : 1
       );
     }
     for (const id of ['alkis-surface-fills', 'alkis-traffic-surface-fills']) {
-      if (map.getLayer(id)) map.setPaintProperty(id, 'fill-opacity', !austria && detail && layers.aerial ? .18 : 1);
+      styleWriter.setPaintProperty(
+        id,
+        'fill-opacity',
+        !austria && detail && layers.aerial ? .18 : 1
+      );
     }
     if (map.getLayer(`${AT_LAYER_PREFIX}surface-fills`)) {
-      map.setPaintProperty(
+      styleWriter.setPaintProperty(
         `${AT_LAYER_PREFIX}surface-fills`,
         'fill-opacity',
         austria && detail && layers.aerial ? .18 : 1
@@ -774,8 +943,12 @@ export function createLayerController({
     const detailBackground = (detail && (
       (layers.alkis && sourceReady(activeCadastre || (austria ? AT_KATASTER_SOURCE_ID : SOURCE_ID)))
     )) || (aerialDetail && layers.aerial && sourceReady(activeAerial));
-    setBasemapVisible('deutschland', !(!austria && detailBackground));
-    setBasemapVisible('oesterreich', !(austria && aerialDetail && layers.aerial && sourceReady(activeAerial)));
+    if (europeBasemap) {
+      setBasemapVisible('europe', !detailBackground);
+    } else {
+      setBasemapVisible('deutschland', !(!austria && detailBackground));
+      setBasemapVisible('oesterreich', !(austria && aerialDetail && layers.aerial && sourceReady(activeAerial)));
+    }
     for (const input of layerInputs) {
       input.checked = !!layers[input.dataset.layer];
       const isSublayer = !['alkis', 'aerial'].includes(input.dataset.layer);
@@ -793,6 +966,26 @@ export function createLayerController({
       const label = input.closest('label');
       if (label && unsupportedInAustria) label.hidden = true;
     }
+    lastViewportSlug = slug;
+    lastZoomBand = zoomBandSignature(activeDataset);
+  }
+
+  const scheduleApply = createLatestFrameScheduler((state) => {
+    apply(state || store.getState());
+  });
+
+  function applyForZoomBand() {
+    const signature = zoomBandSignature();
+    if (signature === lastZoomBand) return;
+    lastZoomBand = signature;
+    scheduleApply();
+  }
+
+  function applyForViewport() {
+    const slug = currentStateSlug();
+    if (slug === lastViewportSlug) return;
+    lastViewportSlug = slug;
+    scheduleApply();
   }
 
   layerButton.addEventListener('click', () => {
@@ -825,12 +1018,14 @@ export function createLayerController({
     addAlkisLayers();
     apply();
   });
-  map.on('zoom', () => apply());
-  map.on('moveend', () => apply());
+  map.on('zoom', applyForZoomBand);
+  map.on('moveend', applyForViewport);
   map.on('sourcedata', (event) => {
-    if ([SOURCE_ID, AT_KATASTER_SOURCE_ID, AT_SYMBOL_SOURCE_ID, activeAerial, activeCadastre].includes(event.sourceId)) apply();
+    if (sourceReadinessChanged(event)) scheduleApply();
   });
-  store.subscribe((state, reason) => { if (reason === 'layers' || reason === 'restore') apply(state); });
+  store.subscribe((state, reason) => {
+    if (reason === 'layers' || reason === 'restore') scheduleApply(state);
+  });
   return {
     apply,
     currentStateSlug,
@@ -839,7 +1034,7 @@ export function createLayerController({
     currentAerialZoom,
     viewportIntersectsAustria: () => countryResolver?.intersectsAustria?.(map.getBounds()) === true,
     viewportInsideAustria: () => countryResolver?.containsAustria?.(map.getBounds()) === true,
-    isBasemapVisible: () => basemapVisibility[currentDataset()],
+    isBasemapVisible: () => basemapVisibility[europeBasemap ? 'europe' : currentDataset()],
     setSourceMetadata(metadata) {
       sourceMetadata = metadata || null;
       apply();

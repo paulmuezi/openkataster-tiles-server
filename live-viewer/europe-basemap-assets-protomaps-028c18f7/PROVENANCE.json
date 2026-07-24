@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "upstream_repository": "https://github.com/protomaps/basemaps-assets",
+  "upstream_commit": "028c18f713baecad011301ff7a69acc39bcc2ae7",
+  "upstream_archive_url": "https://github.com/protomaps/basemaps-assets/archive/028c18f713baecad011301ff7a69acc39bcc2ae7.tar.gz",
+  "upstream_archive_sha256": "c02634724bee074ac41f1bbccc7eecaa3268703d5c601d4c8f3ad0d6bb6378c7",
+  "vendored_file_count_excluding_provenance": 1048,
+  "vendored_size_bytes_excluding_provenance": 17868392,
+  "canonical_tree_sha256_excluding_provenance": "a873eaa91d030c8e65d869ed567d3663d23b5eff0ec2ded408a0bc559ac43e30",
+  "canonical_tree_format": "For each regular file except PROVENANCE.json, sorted by UTF-8 relative POSIX path: path + NUL + lowercase file SHA-256 + LF."
+}

@@ -604,6 +604,10 @@ class BevVectorProxyTests(unittest.TestCase):
         self.assertEqual(catalog["rendering"]["label_overlay_raster"]["maxzoom"], 20)
         self.assertEqual(catalog["rendering"]["aerial_raster"]["minzoom"], 14)
         self.assertEqual(catalog["rendering"]["cadastre_vector"]["minzoom"], 16)
+        self.assertEqual(
+            catalog["rendering"]["cadastre_vector"]["attribution"],
+            "© BEV · Darstellung durch OpenKataster verändert · CC BY 4.0",
+        )
         source_templates = {
             source["tile_template"]
             for source in catalog["rendering"]["cadastre_vector"]["sources"]

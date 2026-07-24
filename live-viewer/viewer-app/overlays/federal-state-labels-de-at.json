@@ -1,0 +1,130 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "Schleswig-Holstein", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [9.5, 54.2] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Hamburg", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [10.0, 53.55] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Niedersachsen", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [9.8, 52.8] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Bremen", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [8.8, 53.08] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Nordrhein-Westfalen", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [7.6, 51.4] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Hessen", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [9.0, 50.6] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Rheinland-Pfalz", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [7.4, 49.9] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Baden-Württemberg", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [9.0, 48.6] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Bayern", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [11.5, 49.0] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Saarland", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [6.95, 49.38] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Berlin", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [13.4, 52.52] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Brandenburg", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [13.5, 52.1] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Mecklenburg-Vorpommern", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [12.6, 53.8] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Sachsen", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [13.3, 51.0] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Sachsen-Anhalt", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [11.6, 52.0] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Thüringen", "country_code": "DE" },
+      "geometry": { "type": "Point", "coordinates": [11.0, 50.9] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Vorarlberg", "country_code": "AT" },
+      "geometry": { "type": "Point", "coordinates": [9.82, 47.25] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Tirol", "country_code": "AT" },
+      "geometry": { "type": "Point", "coordinates": [11.2, 47.25] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Salzburg", "country_code": "AT" },
+      "geometry": { "type": "Point", "coordinates": [13.05, 47.45] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Oberösterreich", "country_code": "AT" },
+      "geometry": { "type": "Point", "coordinates": [14.05, 48.15] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Niederösterreich", "country_code": "AT" },
+      "geometry": { "type": "Point", "coordinates": [15.55, 48.25] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Wien", "country_code": "AT" },
+      "geometry": { "type": "Point", "coordinates": [16.37, 48.21] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Burgenland", "country_code": "AT" },
+      "geometry": { "type": "Point", "coordinates": [16.35, 47.5] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Steiermark", "country_code": "AT" },
+      "geometry": { "type": "Point", "coordinates": [15.1, 47.2] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Kärnten", "country_code": "AT" },
+      "geometry": { "type": "Point", "coordinates": [13.83, 46.75] }
+    }
+  ]
+}

@@ -15,6 +15,7 @@ htmlcov/
 venv/
 env/
 ENV/
+node_modules/
 
 # Runtime/cache data
 .cache/

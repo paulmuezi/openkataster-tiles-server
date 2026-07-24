@@ -7,7 +7,7 @@
   <script>const okParams = new URLSearchParams(location.search); document.documentElement.dataset.embed = okParams.has('iframe') ? 'true' : 'false'; document.documentElement.dataset.preview = okParams.get('preview') === '1' ? 'true' : 'false'; document.documentElement.dataset.onoffice = okParams.get('onoffice') === '1' ? 'true' : 'false'; document.documentElement.dataset.shellMode = okParams.get('welcome') === '1' ? 'welcome' : 'planner';</script>
   <link rel="icon" href="/viewer-assets/viewer-app/openkataster-logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/viewer-assets/viewer-app/maplibre-gl-5.14.0.css">
-  <link rel="stylesheet" href="/viewer-assets/viewer-app/styles.css?v=20260723-unified1">
+  <link rel="stylesheet" href="/viewer-assets/viewer-app/styles.css?v=20260724-europe2">
 </head>
 <body>
   <header class="site-header">
@@ -77,7 +77,7 @@
           </button>
           <section id="layerMenu" class="layer-menu ui-panel" hidden>
             <strong>Karteninhalt</strong>
-            <p id="layerZoomNote" class="layer-zoom-note">Kataster ist je nach Region ab Zoom 16 beziehungsweise 17 verfügbar.</p>
+            <p id="layerZoomNote" class="layer-zoom-note">Katasterlayer und Luftbilder sind ab Zoomstufe 17 verfügbar.</p>
             <details class="alkis-layer-details" open><summary><label><input type="checkbox" data-layer="alkis"><span class="swatch alkis"></span><span data-dataset-term="cadastre">Kataster</span></label></summary>
               <p id="layerPresentationNote" class="layer-presentation-note" hidden>Amtliche Gesamtdarstellung: Gebäude, Flurstücke beziehungsweise Grundstücke und Beschriftungen werden gemeinsam angezeigt.</p>
               <div class="layer-subtree">
@@ -156,6 +156,6 @@
   </main>
 
   <script src="/viewer-assets/viewer-app/maplibre-gl-5.14.0.js"></script>
-  <script type="module" src="/viewer-assets/viewer-app/app.js?v=20260724-unified7"></script>
+  <script type="module" src="/viewer-assets/viewer-app/app.js?v=20260724-europe7"></script>
 </body>
 </html>

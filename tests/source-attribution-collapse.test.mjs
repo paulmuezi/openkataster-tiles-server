@@ -116,7 +116,8 @@ async function flushPromises() {
 
 function createHarness({
   showCompactAttribution = () => true,
-  compactAttributionDurationMs = 5000
+  compactAttributionDurationMs = 5000,
+  basemapRuntime = { profile: 'national' }
 } = {}) {
   const map = new FakeMap();
   const elements = createElements();
@@ -133,6 +134,7 @@ function createHarness({
     },
     store: { subscribe() {} },
     elements,
+    basemapRuntime,
     layerController: {
       currentStateSlug: () => '',
       isBasemapVisible: () => true
@@ -186,6 +188,36 @@ try {
     elements.sourceButton.dispatch('click');
     assert.equal(elements.sourcePanel.hidden, true);
     assert.equal(elements.osmAttribution.hidden, true, 'closing the panel does not re-expand collapsed credit');
+  }
+
+  clock.reset();
+
+  {
+    const { map, elements } = createHarness({
+      basemapRuntime: { profile: 'europe' }
+    });
+    await flushPromises();
+
+    assert.equal(
+      elements.osmAttribution.hidden,
+      false,
+      'Europe profile keeps the OSM corner credit visible'
+    );
+    map.canvas.dispatch('pointerdown', { pointerType: 'mouse' });
+    assert.equal(
+      elements.osmAttribution.hidden,
+      false,
+      'Europe profile never collapses the mandatory OSM corner credit'
+    );
+    const links = findLinks(elements.sourceList);
+    assert.ok(
+      links.some((link) => link.href === 'https://esa-worldcover.org/'),
+      'Europe source panel identifies ESA WorldCover'
+    );
+    assert.ok(
+      links.some((link) => link.href === 'https://creativecommons.org/licenses/by/4.0/'),
+      'Europe source panel links the CC BY 4.0 license'
+    );
   }
 
   clock.reset();

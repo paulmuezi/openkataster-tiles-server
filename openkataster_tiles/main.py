@@ -10,6 +10,7 @@ import http.client
 import io
 import json
 import math
+import mmap
 import os
 import re
 import secrets
@@ -35,6 +36,7 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Reques
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse
 from fastapi.responses import HTMLResponse
+from fastapi.responses import JSONResponse
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -68,6 +70,45 @@ DATA_DIR = Path(os.environ.get("OPENKATASTER_TILE_DATA_DIR", "/srv/openkataster-
 SEARCH_ANALYTICS = SearchAnalytics.from_environment(DATA_DIR)
 install_queryless_uvicorn_access_logging()
 VIEWER_ROOT = Path(os.environ.get("OPENKATASTER_VIEWER_ROOT", "/srv/openkataster-tiles/live-viewer"))
+EUROPE_BASEMAP_ROOT = Path(
+    os.environ.get(
+        "OPENKATASTER_EUROPE_BASEMAP_ROOT",
+        "/srv/openkataster-tiles/basemaps/europe",
+    )
+)
+EUROPE_BASEMAP_ENV_MODE = os.environ.get("OPENKATASTER_EUROPE_BASEMAP_MODE", "off")
+EUROPE_BASEMAP_STYLE_URL = os.environ.get(
+    "OPENKATASTER_EUROPE_BASEMAP_STYLE_URL",
+    "/viewer-assets/europe-basemap-style-20260724-bkg4/style.json",
+).strip()
+EUROPE_BASEMAP_ATTRIBUTION = (
+    "© OpenStreetMap contributors · "
+    "© ESA WorldCover project 2020 / Contains modified Copernicus Sentinel "
+    "data (2020) processed by ESA WorldCover consortium"
+)
+EUROPE_BASEMAP_DATA_LICENSES = [
+    {
+        "id": "openstreetmap",
+        "license": "ODbL-1.0",
+        "url": "https://www.openstreetmap.org/copyright",
+        "attribution": "© OpenStreetMap contributors",
+    },
+    {
+        "id": "esa-worldcover-2020",
+        "license": "CC-BY-4.0",
+        "url": "https://esa-worldcover.org/",
+        "attribution": (
+            "© ESA WorldCover project 2020 / Contains modified Copernicus "
+            "Sentinel data (2020) processed by ESA WorldCover consortium"
+        ),
+        "via": "Daylight Landcover / Overture Maps",
+    },
+]
+EUROPE_BASEMAP_LICENSE_LINK = (
+    '<https://www.openstreetmap.org/copyright>; rel="license", '
+    '<https://creativecommons.org/licenses/by/4.0/>; rel="license", '
+    '<https://esa-worldcover.org/>; rel="describedby"'
+)
 GN250_PLACES_DB = Path(os.environ.get("OPENKATASTER_GN250_PLACES_DB", str(DATA_DIR / "places.sqlite")))
 POSTCODE_AREAS_DB = Path(os.environ.get("OPENKATASTER_POSTCODE_AREAS_DB", "/srv/openkataster-tiles/plz/postcode_areas.sqlite"))
 OPENPLZ_DB = Path(os.environ.get("OPENKATASTER_OPENPLZ_DB", "/srv/openkataster-tiles/plz/openplz.sqlite"))
@@ -101,8 +142,21 @@ SEARCH_CACHE_SECONDS = int(os.environ.get("OPENKATASTER_TILE_SEARCH_CACHE_SECOND
 _SEARCH_RESPONSE_CACHE: dict[tuple, tuple[float, dict]] = {}
 _SEARCH_RESPONSE_CACHE_MAX = int(os.environ.get("OPENKATASTER_TILE_SEARCH_CACHE_MAX", "512"))
 DATASET_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,80}$")
+EUROPE_BASEMAP_VERSION_RE = re.compile(
+    r"^europe(?P<regional>-de-at)?-(?P<build_date>20[0-9]{6})-z15$"
+)
+EUROPE_BASEMAP_SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+EUROPE_BASEMAP_DE_AT_PROFILE = "de-at-buffer-v1"
+EUROPE_BASEMAP_DE_AT_BOUNDS = (5.0, 45.5, 18.0, 55.75)
+EUROPE_BASEMAP_LEGACY_PROFILE = "legacy-europe-v1"
+EUROPE_BASEMAP_LEGACY_BOUNDS = (-25.0, 34.0, 45.0, 72.0)
 VIEWER_VERSION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,80}$")
-VIEWER_ASSET_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,120}$")
+# MapLibre expands ``{fontstack}`` to URL-decoded asset segments such as
+# ``Noto Sans Regular`` and, for fallback stacks, comma-separated names.
+# Retina sprite filenames also contain MapLibre's conventional ``@2x`` suffix.
+# Spaces, commas and ``@`` are safe inside one already-split path segment;
+# traversal separators, control characters and other punctuation stay rejected.
+VIEWER_ASSET_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_. ,@-]{0,160}$")
 ASSET_RE = re.compile(r"^[a-z0-9_-]+\.json$")
 OVERVIEW_ASSET_RE = re.compile(r"^([a-z0-9][a-z0-9_-]{0,80})_overview_(boundaries|labels)\.json$")
 ALLOWED_ASSETS = {
@@ -289,18 +343,18 @@ BEV_VECTOR_TILE_CONFIGS = {
         "url": "https://kataster.bev.gv.at/tiles/kataster/{z}/{x}/{y}.pbf",
         "minzoom": 0,
         "maxzoom": 16,
-        "attribution": "© BEV",
+        "attribution": "© BEV · Darstellung durch OpenKataster verändert · CC BY 4.0",
         "revision": "bev-kataster-live-v1",
     },
     "symbole": {
         "url": "https://kataster.bev.gv.at/tiles/symbole/{z}/{x}/{y}.pbf",
         "minzoom": 13,
         "maxzoom": 16,
-        "attribution": "© BEV",
+        "attribution": "© BEV · Darstellung durch OpenKataster verändert · CC BY 4.0",
         "revision": "bev-symbole-live-v1",
     },
 }
-BEV_ATTRIBUTION = "© BEV"
+BEV_ATTRIBUTION = "© BEV · Darstellung durch OpenKataster verändert · CC BY 4.0"
 BEV_LICENSE_NAME = "Creative Commons Namensnennung 4.0 International (CC BY 4.0)"
 BEV_LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/"
 AUSTRIA_OBJECT_DATA_STATUS = (
@@ -668,7 +722,7 @@ LOCAL_STATE_METADATA = {
         "country_code": "AT",
         "datenstand": "Darstellung tagesaktuell",
         "objektdatenstand": AUSTRIA_OBJECT_DATA_STATUS,
-        "quellenvermerk": "© BEV",
+        "quellenvermerk": BEV_ATTRIBUTION,
         "lizenz": BEV_LICENSE_NAME,
         "lizenz_url": BEV_LICENSE_URL,
         "source_url": "https://kataster.bev.gv.at/",
@@ -1349,9 +1403,19 @@ class Dataset:
         self.path = path
         self.size = path.stat().st_size
         self.file = path.open("rb")
-        self.reader = Reader(MmapSource(self.file))
+        self._mapping: mmap.mmap | None = mmap.mmap(
+            self.file.fileno(),
+            0,
+            access=mmap.ACCESS_READ,
+        )
+        self.reader = Reader(self._read_mapped_bytes)
         self.header = self.reader.header()
         self.metadata = self.reader.metadata()
+
+    def _read_mapped_bytes(self, offset: int, length: int) -> bytes:
+        if self._mapping is None:
+            raise ValueError("PMTiles dataset is closed")
+        return self._mapping[offset : offset + length]
 
     def tile(self, z: int, x: int, y: int) -> bytes | None:
         return self.reader.get(z, x, y)
@@ -1383,7 +1447,25 @@ class Dataset:
         )
 
     def close(self) -> None:
+        mapping = self._mapping
+        self._mapping = None
+        if mapping is not None:
+            mapping.close()
         self.file.close()
+
+
+@dataclass(frozen=True)
+class EuropeBasemapRuntime:
+    version: str
+    path: Path
+    sha256: str
+    size_bytes: int
+    min_zoom: int
+    max_zoom: int
+    bounds: tuple[float, float, float, float]
+    attribution: str
+    source: str
+    dataset: Dataset
 
 
 class CachedBucketRangeSource:
@@ -1515,6 +1597,230 @@ def load_bucket_dataset(object_key: str, size: int, etag: str) -> BucketDataset:
 def load_volume_dataset(path_text: str, mtime_ns: int, size: int) -> Dataset:
     del mtime_ns, size
     return Dataset(Path(path_text))
+
+
+_EUROPE_BASEMAP_DATASET_CACHE_LOCK = threading.RLock()
+_EUROPE_BASEMAP_DATASET_CACHE: dict[tuple[str, int, int, int], Dataset] = {}
+_EUROPE_BASEMAP_DATASET_CACHE_SIZE = 2
+
+
+def load_europe_basemap_dataset(
+    path_text: str,
+    inode: int,
+    mtime_ns: int,
+    size: int,
+) -> Dataset:
+    """Open a bounded set of immutable archives keyed by target identity.
+
+    Keeping two readers avoids closing a file underneath an in-flight request
+    during an atomic activation. Production activation still restarts all API
+    workers after switching the symlink; the shutdown hook closes every reader.
+    """
+
+    key = (path_text, inode, mtime_ns, size)
+    stale: list[Dataset] = []
+    with _EUROPE_BASEMAP_DATASET_CACHE_LOCK:
+        cached = _EUROPE_BASEMAP_DATASET_CACHE.pop(key, None)
+        if cached is not None:
+            _EUROPE_BASEMAP_DATASET_CACHE[key] = cached
+            return cached
+        dataset = Dataset(Path(path_text))
+        _EUROPE_BASEMAP_DATASET_CACHE[key] = dataset
+        while len(_EUROPE_BASEMAP_DATASET_CACHE) > _EUROPE_BASEMAP_DATASET_CACHE_SIZE:
+            oldest_key = next(iter(_EUROPE_BASEMAP_DATASET_CACHE))
+            old_dataset = _EUROPE_BASEMAP_DATASET_CACHE.pop(oldest_key)
+            stale.append(old_dataset)
+    for old_dataset in stale:
+        try:
+            old_dataset.close()
+        except OSError:
+            pass
+    return dataset
+
+
+def clear_europe_basemap_dataset_cache() -> None:
+    with _EUROPE_BASEMAP_DATASET_CACHE_LOCK:
+        datasets = list(_EUROPE_BASEMAP_DATASET_CACHE.values())
+        _EUROPE_BASEMAP_DATASET_CACHE.clear()
+    for dataset in datasets:
+        try:
+            dataset.close()
+        except OSError:
+            pass
+
+
+def europe_basemap_mode_details() -> tuple[str, str]:
+    """Return a fail-closed mode and the source used to select it.
+
+    Operators switch modes by atomically replacing ``EUROPE_BASEMAP_ROOT/mode``.
+    A missing mode file falls back to the environment. A malformed or symlinked
+    mode file disables the feature instead of silently enabling it.
+    """
+
+    allowed = {"off", "preview", "on"}
+    mode_path = EUROPE_BASEMAP_ROOT / "mode"
+    if os.path.lexists(mode_path):
+        if mode_path.is_symlink() or not mode_path.is_file():
+            return "off", "mode-file-invalid"
+        try:
+            raw_mode = mode_path.read_text(encoding="utf-8")
+        except OSError:
+            return "off", "mode-file-invalid"
+        if len(raw_mode) > 32:
+            return "off", "mode-file-invalid"
+        mode = raw_mode.strip().lower()
+        if mode not in allowed:
+            return "off", "mode-file-invalid"
+        return mode, "mode-file"
+
+    mode = str(EUROPE_BASEMAP_ENV_MODE or "off").strip().lower()
+    if mode not in allowed:
+        return "off", "environment-invalid"
+    return mode, "environment"
+
+
+def europe_basemap_mode() -> str:
+    return europe_basemap_mode_details()[0]
+
+
+def _europe_basemap_number(value: object, *, minimum: float, maximum: float) -> float:
+    number = float(value)
+    if not math.isfinite(number) or number < minimum or number > maximum:
+        raise ValueError("invalid Europe basemap manifest number")
+    return number
+
+
+def _europe_basemap_version_contract(
+    version: str,
+) -> tuple[str, tuple[float, float, float, float]]:
+    match = EUROPE_BASEMAP_VERSION_RE.fullmatch(version)
+    if match is None:
+        raise ValueError("invalid Europe basemap version")
+    if match.group("regional"):
+        return EUROPE_BASEMAP_DE_AT_PROFILE, EUROPE_BASEMAP_DE_AT_BOUNDS
+    return EUROPE_BASEMAP_LEGACY_PROFILE, EUROPE_BASEMAP_LEGACY_BOUNDS
+
+
+def _resolve_europe_basemap_runtime() -> EuropeBasemapRuntime:
+    root = EUROPE_BASEMAP_ROOT.resolve(strict=True)
+    versions_root = (root / "versions").resolve(strict=True)
+    if versions_root.parent != root or not versions_root.is_dir():
+        raise ValueError("invalid Europe basemap versions root")
+
+    active_path = root / "active"
+    if not active_path.is_symlink():
+        raise ValueError("Europe basemap active pointer must be a symlink")
+    version_dir = active_path.resolve(strict=True)
+    if version_dir.parent != versions_root or not version_dir.is_dir():
+        raise ValueError("Europe basemap active version escapes versions root")
+
+    manifest_path = version_dir / "manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError("invalid Europe basemap manifest")
+    if manifest_path.resolve(strict=True).parent != version_dir:
+        raise ValueError("Europe basemap manifest escapes active version")
+    if manifest_path.stat().st_size > 64 * 1024:
+        raise ValueError("Europe basemap manifest is too large")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        raise ValueError("unsupported Europe basemap manifest")
+
+    version = str(manifest.get("version") or "")
+    if version != version_dir.name:
+        raise ValueError("invalid Europe basemap version")
+    coverage_profile, expected_bounds = _europe_basemap_version_contract(version)
+    filename = str(manifest.get("pmtiles") or "")
+    if filename != "basemap.pmtiles":
+        raise ValueError("invalid Europe basemap PMTiles filename")
+    sha256 = str(manifest.get("sha256") or "").lower()
+    if not EUROPE_BASEMAP_SHA256_RE.fullmatch(sha256):
+        raise ValueError("invalid Europe basemap SHA-256")
+    size_bytes = int(manifest.get("size_bytes") or 0)
+    if size_bytes <= 0:
+        raise ValueError("invalid Europe basemap size")
+
+    pmtiles_path = version_dir / filename
+    if pmtiles_path.is_symlink() or not pmtiles_path.is_file():
+        raise ValueError("invalid Europe basemap PMTiles file")
+    resolved_pmtiles_path = pmtiles_path.resolve(strict=True)
+    if resolved_pmtiles_path.parent != version_dir:
+        raise ValueError("Europe basemap PMTiles file escapes active version")
+    stat_result = resolved_pmtiles_path.stat()
+    if stat_result.st_size != size_bytes:
+        raise ValueError("Europe basemap PMTiles size does not match manifest")
+
+    min_zoom = int(manifest.get("minzoom"))
+    max_zoom = int(manifest.get("maxzoom"))
+    if min_zoom < 0 or max_zoom > 22 or min_zoom > max_zoom:
+        raise ValueError("invalid Europe basemap zoom range")
+    raw_bounds = manifest.get("bounds")
+    if not isinstance(raw_bounds, list) or len(raw_bounds) != 4:
+        raise ValueError("invalid Europe basemap bounds")
+    bounds = (
+        _europe_basemap_number(raw_bounds[0], minimum=-180, maximum=180),
+        _europe_basemap_number(raw_bounds[1], minimum=-90, maximum=90),
+        _europe_basemap_number(raw_bounds[2], minimum=-180, maximum=180),
+        _europe_basemap_number(raw_bounds[3], minimum=-90, maximum=90),
+    )
+    if bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
+        raise ValueError("invalid Europe basemap bounds order")
+    if any(
+        abs(actual - expected) > 1e-6
+        for actual, expected in zip(bounds, expected_bounds)
+    ):
+        raise ValueError("Europe basemap bounds do not match the version contract")
+    attribution = str(manifest.get("attribution") or "").strip()
+    if attribution != EUROPE_BASEMAP_ATTRIBUTION:
+        raise ValueError("incomplete Europe basemap attribution")
+    provenance = manifest.get("provenance")
+    if (
+        not isinstance(provenance, dict)
+        or provenance.get("data_licenses") != EUROPE_BASEMAP_DATA_LICENSES
+    ):
+        raise ValueError("incomplete Europe basemap data-license inventory")
+    manifest_profile = provenance.get("coverage_profile")
+    if coverage_profile == EUROPE_BASEMAP_LEGACY_PROFILE:
+        if manifest_profile not in (None, EUROPE_BASEMAP_LEGACY_PROFILE):
+            raise ValueError("invalid legacy Europe basemap coverage profile")
+    elif manifest_profile != coverage_profile:
+        raise ValueError("invalid regional Europe basemap coverage profile")
+    source = str(manifest.get("source") or "").strip()
+    if len(source) > 200:
+        raise ValueError("invalid Europe basemap source")
+
+    dataset = load_europe_basemap_dataset(
+        str(resolved_pmtiles_path),
+        stat_result.st_ino,
+        stat_result.st_mtime_ns,
+        stat_result.st_size,
+    )
+    tile_type = dataset.header.get("tile_type")
+    tile_type_value = getattr(tile_type, "value", tile_type)
+    if tile_type_value != 1 and not str(tile_type).lower().endswith("mvt"):
+        raise ValueError("Europe basemap PMTiles archive is not vector data")
+    if dataset.min_zoom > min_zoom or dataset.max_zoom < max_zoom:
+        raise ValueError("Europe basemap PMTiles zoom range does not match manifest")
+    return EuropeBasemapRuntime(
+        version=version,
+        path=resolved_pmtiles_path,
+        sha256=sha256,
+        size_bytes=size_bytes,
+        min_zoom=min_zoom,
+        max_zoom=max_zoom,
+        bounds=bounds,
+        attribution=attribution,
+        source=source,
+        dataset=dataset,
+    )
+
+
+def europe_basemap_runtime() -> EuropeBasemapRuntime | None:
+    try:
+        return _resolve_europe_basemap_runtime()
+    except Exception:
+        # Runtime activation is deliberately fail-closed. A broken pointer,
+        # manifest, or archive must never replace the national fallback maps.
+        return None
 
 
 def get_dataset(dataset: str) -> Dataset:
@@ -13204,6 +13510,7 @@ def _active_volume_state_dir(state_slug: str) -> Path:
 
 
 app = FastAPI(title="OpenKataster Tiles", version="0.1.0")
+app.add_event_handler("shutdown", clear_europe_basemap_dataset_cache)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -14064,6 +14371,141 @@ async def api_v1_tilejson(state: str, request: Request):
         ],
         "attribution": "ALKIS / OpenKataster",
     }
+
+
+def europe_basemap_config_payload(request: Request) -> dict:
+    configured_mode, mode_source = europe_basemap_mode_details()
+    runtime = europe_basemap_runtime() if configured_mode != "off" else None
+    ready = runtime is not None
+    payload = {
+        "schema_version": 1,
+        "configured_mode": configured_mode,
+        "mode": configured_mode if ready else "off",
+        "mode_source": mode_source,
+        "status": "ready" if ready else ("disabled" if configured_mode == "off" else "unavailable"),
+        "enabled_by_default": ready and configured_mode == "on",
+        "preview_available": ready and configured_mode in {"preview", "on"},
+        "fallback": "national",
+        "europe": {"available": ready},
+    }
+    if runtime is None:
+        return payload
+    base_url = public_base_url(request)
+    tile_template = f"{base_url}/api/v1/basemap/europe/{{z}}/{{x}}/{{y}}.mvt"
+    payload["europe"].update(
+        {
+            "version": runtime.version,
+            "style_url": EUROPE_BASEMAP_STYLE_URL,
+            "tile_template": tile_template,
+            "minzoom": runtime.min_zoom,
+            "maxzoom": runtime.max_zoom,
+            "bounds": list(runtime.bounds),
+            "attribution": runtime.attribution,
+            "licenses": [dict(item) for item in EUROPE_BASEMAP_DATA_LICENSES],
+            "source": runtime.source,
+        }
+    )
+    return payload
+
+
+@app.api_route("/api/v1/basemap/config", methods=["GET", "HEAD"])
+def api_v1_basemap_config(request: Request) -> JSONResponse:
+    return JSONResponse(
+        europe_basemap_config_payload(request),
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+def _europe_basemap_cache_control(version: str | None, active_version: str) -> str:
+    if version == active_version:
+        return "public, max-age=31536000, immutable"
+    return "public, max-age=300, must-revalidate"
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    if not if_none_match:
+        return False
+    candidates = {value.strip() for value in if_none_match.split(",")}
+    return "*" in candidates or etag in candidates or f"W/{etag}" in candidates
+
+
+@app.api_route(
+    "/api/v1/basemap/europe/{z}/{x}/{y}.mvt",
+    methods=["GET", "HEAD"],
+)
+def api_v1_europe_basemap_tile(
+    request: Request,
+    z: int,
+    x: int,
+    y: int,
+    version: Annotated[str | None, Query(alias="v", max_length=81)] = None,
+) -> Response:
+    mode = europe_basemap_mode()
+    if mode == "off":
+        raise HTTPException(
+            status_code=404,
+            detail="Europe basemap is disabled",
+            headers={"Cache-Control": "no-store"},
+        )
+    runtime = europe_basemap_runtime()
+    if runtime is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Europe basemap is unavailable",
+            headers={"Cache-Control": "no-store", "Retry-After": "60"},
+        )
+    if version is not None and version != runtime.version:
+        raise HTTPException(
+            status_code=404,
+            detail="Europe basemap version not found",
+            headers={"Cache-Control": "no-store"},
+        )
+    if (
+        z < runtime.min_zoom
+        or z > runtime.max_zoom
+        or x < 0
+        or y < 0
+        or x >= 2**z
+        or y >= 2**z
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="Europe basemap tile not found",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    cache_control = _europe_basemap_cache_control(version, runtime.version)
+    data = runtime.dataset.tile(z, x, y)
+    if data is None:
+        etag = f'"{hashlib.sha256(f"{runtime.version}:{z}:{x}:{y}:empty".encode()).hexdigest()}"'
+        headers = {
+            "Cache-Control": cache_control,
+            "ETag": etag,
+            "Link": EUROPE_BASEMAP_LICENSE_LINK,
+        }
+        if _etag_matches(request.headers.get("if-none-match"), etag):
+            return Response(status_code=304, headers=headers)
+        return Response(status_code=204, headers=headers)
+
+    etag = f'"{hashlib.sha256(data).hexdigest()}"'
+    headers = {
+        "Cache-Control": cache_control,
+        "ETag": etag,
+        "Link": EUROPE_BASEMAP_LICENSE_LINK,
+        "X-Content-Type-Options": "nosniff",
+        **compression_header(runtime.dataset),
+    }
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+    return Response(
+        content=data,
+        media_type="application/vnd.mapbox-vector-tile",
+        headers=headers,
+    )
+
 
 @app.api_route("/api/v1/tiles/{state}/{z}/{x}/{y}.mvt", methods=["GET", "HEAD"])
 def api_v1_tile_mvt(state: str, z: int, x: int, y: int) -> Response:
@@ -16519,11 +16961,21 @@ def _viewer_media_type(path: Path) -> str | None:
         ".js": "text/javascript; charset=utf-8",
         ".css": "text/css; charset=utf-8",
         ".json": "application/json",
+        ".pbf": "application/x-protobuf",
         ".svg": "image/svg+xml",
         ".png": "image/png",
         ".webp": "image/webp",
         ".wasm": "application/wasm",
     }.get(path.suffix.lower())
+
+
+def _viewer_asset_cache_control(viewer_version: str) -> str:
+    if (
+        re.search(r"(?:^|[-_.])v?\d{8}(?:[-_.]|$)", viewer_version)
+        or re.search(r"(?:^|[-_.])[0-9a-f]{8,64}$", viewer_version)
+    ):
+        return "public, max-age=31536000, immutable"
+    return "public, max-age=300"
 
 
 @app.api_route("/viewer-assets/{viewer_version}/{asset_path:path}", methods=["GET", "HEAD"])
@@ -16532,7 +16984,7 @@ def viewer_asset(viewer_version: str, asset_path: str) -> FileResponse:
     return FileResponse(
         path,
         media_type=_viewer_media_type(path),
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": _viewer_asset_cache_control(viewer_version)},
     )
 
 
@@ -17253,6 +17705,8 @@ PUBLIC_OPENAPI_PATHS = {
     "/api/v1/sources",
     "/api/v1/catalog/{dataset}",
     "/api/v1/datasets",
+    "/api/v1/basemap/config",
+    "/api/v1/basemap/europe/{z}/{x}/{y}.mvt",
     "/api/v1/tilejson/{state}.json",
     "/api/v1/tiles/{state}/{z}/{x}/{y}.mvt",
     "/api/v1/search/address",

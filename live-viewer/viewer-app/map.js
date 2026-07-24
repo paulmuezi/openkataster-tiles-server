@@ -94,18 +94,27 @@ export function enableMiddleMousePan(map, {
   return cleanup;
 }
 
-export function createPlannerMap({ container, savedView, datasetProfile = { id: 'deutschland', defaultView: { lng: 10.45, lat: 51.16, zoom: 4.05 } } }) {
+export function createPlannerMap({
+  container,
+  savedView,
+  basemapRuntime = null,
+  datasetProfile = { id: 'deutschland', defaultView: { lng: 10.45, lat: 51.16, zoom: 4.05 } }
+}) {
   const hashView = parseHashView(window.location.hash);
   const view = hashView || savedView || datasetProfile.defaultView;
+  const mapLimits = resolvePlannerMapLimits(basemapRuntime, {
+    mobile: window.matchMedia?.('(max-width: 760px)').matches === true
+  });
   const map = new maplibregl.Map({
     container,
-    style: '/viewer-assets/viewer-app/bkg-style.json?v=20260723-unified1',
+    style: basemapRuntime?.style || '/viewer-assets/viewer-app/bkg-style.json?v=20260724-europe4',
     center: [view.lng, view.lat],
     zoom: view.zoom,
     bearing: 0,
     pitch: 0,
-    minZoom: 3.2,
+    minZoom: mapLimits.minZoom,
     maxZoom: 20,
+    maxBounds: mapLimits.maxBounds,
     hash: true,
     attributionControl: false,
     dragRotate: false,
@@ -136,6 +145,22 @@ export function createPlannerMap({ container, savedView, datasetProfile = { id: 
   });
   observer.observe(container);
   return map;
+}
+
+export function resolvePlannerMapLimits(basemapRuntime, { mobile = false } = {}) {
+  if (basemapRuntime?.profile !== 'europe') {
+    return { minZoom: 3.2, maxBounds: undefined };
+  }
+  if (mobile) {
+    return {
+      minZoom: 4.35,
+      maxBounds: [[-10.0, 35.0], [32.0, 66.0]]
+    };
+  }
+  return {
+    minZoom: 4.9,
+    maxBounds: [[-4.0, 41.5], [27.0, 59.0]]
+  };
 }
 
 function parseHashView(hash) {

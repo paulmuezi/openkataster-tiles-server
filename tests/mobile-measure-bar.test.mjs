@@ -103,12 +103,12 @@ const appVersion = assetVersion(indexSource, 'app.js');
 assetVersion(appSource, 'measure.js');
 assert.equal(
   stylesVersion,
-  '20260723-unified1',
+  '20260724-europe2',
   'Die Österreich-Viewer-Stile müssen mit dem deployten CSS-Cache-Key geladen werden.'
 );
 assert.equal(
   appVersion,
-  '20260724-unified7',
+  '20260724-europe7',
   'Der App-Einstieg muss den Österreich-Viewer-Stand invalidieren.'
 );
 console.log('mobile-measure-bar-tests=ok');

@@ -33,7 +33,7 @@ assert.doesNotMatch(stylesSource, /@media \(max-width: 760px\)[\s\S]*\.measure-p
 
 assert.match(appSource, /\.\/measure\.js\?v=20260719-free-preview-controls1/);
 assert.match(appSource, /\.\/selection\.js\?v=20260723-table2/);
-assert.match(indexSource, /styles\.css\?v=20260723-unified1/);
-assert.match(indexSource, /app\.js\?v=20260724-unified7/);
+assert.match(indexSource, /styles\.css\?v=20260724-europe2/);
+assert.match(indexSource, /app\.js\?v=20260724-europe7/);
 
 console.log('pro-plan-notice-tests=ok');

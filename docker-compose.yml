@@ -14,9 +14,11 @@ services:
       - .env
     environment:
       OPENKATASTER_ADMIN_API_BASE_URL: http://openkataster-api:8000
+      OPENKATASTER_EUROPE_BASEMAP_ROOT: /srv/openkataster-tiles/basemaps/europe
     volumes:
       - /srv/openkataster-tiles/data:/srv/openkataster-tiles/data
       - /srv/openkataster-tiles/active:/srv/openkataster-tiles/active
+      - /srv/openkataster-tiles/basemaps/europe:/srv/openkataster-tiles/basemaps/europe:ro
       - /srv/openkataster-tiles/cache:/srv/openkataster-tiles/cache
       - /srv/openkataster-tiles/plz:/srv/openkataster-tiles/plz
       - /srv/openkataster-tiles/poi:/srv/openkataster-tiles/poi:ro

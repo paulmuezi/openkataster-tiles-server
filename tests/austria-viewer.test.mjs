@@ -137,7 +137,7 @@ assert.match(
 );
 assert.match(
   layerSource,
-  /id: `\$\{AT_LAYER_PREFIX\}building-fills`[\s\S]*?'fill-color': '#f3b4ae', 'fill-opacity': 1/
+  /id: `\$\{AT_LAYER_PREFIX\}building-fills`[\s\S]*?'fill-color': '#d7d7d3', 'fill-opacity': 1/
 );
 assert.match(
   layerSource,
@@ -172,10 +172,11 @@ const austriaPalette = new Map();
 for (let index = 2; index < AUSTRIA_USAGE_COLOR.length - 1; index += 2) {
   austriaPalette.set(AUSTRIA_USAGE_COLOR[index], AUSTRIA_USAGE_COLOR[index + 1]);
 }
-for (const code of [59, 60, 64, 88]) assert.equal(austriaPalette.get(code), '#DCEFFF');
-assert.equal(austriaPalette.get(61), '#EAFFD3', 'Feuchtgebiete dürfen nicht als Gewässer erscheinen.');
-for (const code of [62, 87]) assert.equal(austriaPalette.get(code), '#F2F2EE');
-for (const code of [63, 84]) assert.equal(austriaPalette.get(code), '#EDEDED');
+for (const code of [59, 60, 64, 88]) assert.equal(austriaPalette.get(code), '#E8F5FA');
+assert.equal(austriaPalette.get(61), '#F1F8EC', 'Feuchtgebiete dürfen nicht als Gewässer erscheinen.');
+for (const code of [62, 87]) assert.equal(austriaPalette.get(code), '#F4F4F1');
+for (const code of [63, 84]) assert.equal(austriaPalette.get(code), '#F0F0EE');
+assert.match(layerSource, /'fill-color': '#d7d7d3'/, 'Österreichische Gebäude sollen neutral sein; Rot bleibt der Auswahl vorbehalten.');
 assert.equal(AUSTRIA_USAGE_COLOR.at(-1), '#FFFDEE');
 
 function fakeElement({ dataset = {} } = {}) {

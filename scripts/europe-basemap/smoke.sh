@@ -303,6 +303,7 @@ PY
   TILE_STATUS=$(curl \
     --silent \
     --show-error \
+    --header 'Accept-Encoding: gzip' \
     --dump-header "${TEMP_DIR}/tile-headers" \
     --output "${TEMP_DIR}/tile.mvt.gz" \
     --write-out '%{http_code}' \
@@ -319,6 +320,17 @@ PY
   grep -Eiq '^content-encoding: gzip[[:space:]]*$' \
     "${TEMP_DIR}/tile-headers.normalized" \
     || ok_die "Europe-Tile ist nicht als gzip gekennzeichnet."
+  python3 - "${TEMP_DIR}/tile.mvt.gz" <<'PY'
+import gzip
+import sys
+from pathlib import Path
+
+compressed = Path(sys.argv[1]).read_bytes()
+if compressed[:2] != b"\x1f\x8b":
+    raise SystemExit("Europe tile body is not gzip data")
+if not gzip.decompress(compressed):
+    raise SystemExit("Europe tile decompresses to an empty MVT payload")
+PY
   grep -Eiq '^cache-control: public, max-age=31536000, immutable[[:space:]]*$' \
     "${TEMP_DIR}/tile-headers.normalized" \
     || ok_die "Versionierter Europe-Tile hat keinen immutable Cache-Header."

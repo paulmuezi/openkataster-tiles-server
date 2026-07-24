@@ -29,6 +29,7 @@ grep -Fq \
   "${SCRIPT_DIR}/constants.sh"
 grep -Fq 'lsof -nP +L1' "${SCRIPT_DIR}/activate-release.sh"
 grep -Fq 'OK_EUROPE_MAX_VERSIONS="2"' "${SCRIPT_DIR}/constants.sh"
+grep -Fq -- "--header 'Accept-Encoding: gzip'" "${SCRIPT_DIR}/smoke.sh"
 
 TEMP_ROOT=$(mktemp -d)
 cleanup() {

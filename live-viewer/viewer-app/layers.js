@@ -10,6 +10,89 @@ const NO_STATE_MASK_FILTER = ['==', 'gen', '__openkataster_no_state__'];
 const GERMANY_BASEMAP_SOURCES = new Set(['smarttiles_de', 'germany_geojson', 'states_geojson', 'state_labels_source']);
 const EUROPE_BASEMAP_SOURCE = 'openkataster_europe';
 
+function sameStyleValue(left, right) {
+  if (Object.is(left, right)) return true;
+  if (
+    (left === null || typeof left !== 'object')
+    && (right === null || typeof right !== 'object')
+  ) return false;
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch (_) {
+    return false;
+  }
+}
+
+export function createMapStyleMutationWriter(map) {
+  function setLayoutProperty(id, property, value) {
+    if (!map.getLayer(id)) return false;
+    if (
+      typeof map.getLayoutProperty === 'function'
+      && sameStyleValue(map.getLayoutProperty(id, property), value)
+    ) return false;
+    map.setLayoutProperty(id, property, value);
+    return true;
+  }
+
+  function setPaintProperty(id, property, value) {
+    if (!map.getLayer(id)) return false;
+    if (
+      typeof map.getPaintProperty === 'function'
+      && sameStyleValue(map.getPaintProperty(id, property), value)
+    ) return false;
+    map.setPaintProperty(id, property, value);
+    return true;
+  }
+
+  function setFilter(id, value) {
+    if (!map.getLayer(id)) return false;
+    if (
+      typeof map.getFilter === 'function'
+      && sameStyleValue(map.getFilter(id), value)
+    ) return false;
+    map.setFilter(id, value);
+    return true;
+  }
+
+  return { setLayoutProperty, setPaintProperty, setFilter };
+}
+
+export function createLatestFrameScheduler(callback, requestFrame = null) {
+  const enqueue = requestFrame
+    || globalThis.requestAnimationFrame?.bind(globalThis)
+    || ((task) => globalThis.setTimeout(task, 0));
+  let queued = false;
+  let latestValue;
+  return (value) => {
+    latestValue = value;
+    if (queued) return;
+    queued = true;
+    enqueue(() => {
+      queued = false;
+      const valueForFrame = latestValue;
+      latestValue = undefined;
+      callback(valueForFrame);
+    });
+  };
+}
+
+export function layerZoomBandSignature({
+  zoom,
+  dataset,
+  deDetailZoom,
+  atDetailZoom,
+  deAerialZoom,
+  atAerialZoom
+}) {
+  return [
+    dataset,
+    zoom >= deDetailZoom,
+    zoom >= atDetailZoom,
+    zoom >= deAerialZoom,
+    zoom >= atAerialZoom
+  ].join(':');
+}
+
 export function resolveLayerFontStack(bold = false, basemapProfile = 'national') {
   if (!bold) return 'Noto Sans Regular';
   return basemapProfile === 'europe' ? 'Noto Sans Medium' : 'Noto Sans Bold';
@@ -122,8 +205,12 @@ export function createLayerController({
   let sourceMetadata = null;
   let activeAerial = '';
   let activeCadastre = '';
+  let lastZoomBand = '';
+  let lastViewportSlug = '';
+  const sourceReadiness = new Map();
   const europeBasemap = basemapRuntime.profile === 'europe';
   const basemapVisibility = { deutschland: true, oesterreich: true, europe: true };
+  const styleWriter = createMapStyleMutationWriter(map);
 
   function updateLayerOverflowHint() {
     if (!layerControl || !layerMenu || layerMenu.hidden) {
@@ -163,8 +250,12 @@ export function createLayerController({
     return aliases[raw] || raw.replaceAll(' ', '-').replaceAll('ü', 'u').replaceAll('ä', 'a').replaceAll('ö', 'o').replaceAll('ß', 'ss');
   }
 
+  function datasetForSlug(slug) {
+    return slug === 'oesterreich' ? 'oesterreich' : 'deutschland';
+  }
+
   function currentDataset() {
-    return currentStateSlug() === 'oesterreich' ? 'oesterreich' : 'deutschland';
+    return datasetForSlug(currentStateSlug());
   }
 
   function currentDetailZoom() {
@@ -199,7 +290,7 @@ export function createLayerController({
   function updateUnavailableStateMask() {
     const layerId = 'State_Overlay_Bavaria_SaxonyAnhalt_GeoJSON';
     if (!map.getLayer(layerId)) return;
-    map.setFilter(layerId, unavailableStateMaskFilter(sourceMetadata));
+    styleWriter.setFilter(layerId, unavailableStateMaskFilter(sourceMetadata));
   }
 
   function addAustriaBasemap() {
@@ -610,7 +701,11 @@ export function createLayerController({
     const aerialZoom = currentAerialZoom();
     const capability = aerialCapability(slug);
     if (!show || !capability) {
-      for (const layer of map.getStyle().layers || []) if (String(layer.id).startsWith('aerial-') && map.getLayer(layer.id)) map.setLayoutProperty(layer.id, 'visibility', 'none');
+      for (const layer of map.getStyle().layers || []) {
+        if (String(layer.id).startsWith('aerial-')) {
+          styleWriter.setLayoutProperty(layer.id, 'visibility', 'none');
+        }
+      }
       activeAerial = '';
       return;
     }
@@ -635,7 +730,15 @@ export function createLayerController({
         paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 }
       }, currentDataset() === 'oesterreich' ? `${AT_LAYER_PREFIX}surface-fills` : 'alkis-surface-fills');
     }
-    for (const layer of map.getStyle().layers || []) if (String(layer.id).startsWith('aerial-') && map.getLayer(layer.id)) map.setLayoutProperty(layer.id, 'visibility', layer.id === sourceId ? 'visible' : 'none');
+    for (const layer of map.getStyle().layers || []) {
+      if (String(layer.id).startsWith('aerial-')) {
+        styleWriter.setLayoutProperty(
+          layer.id,
+          'visibility',
+          layer.id === sourceId ? 'visible' : 'none'
+        );
+      }
+    }
     activeAerial = sourceId;
   }
 
@@ -646,7 +749,7 @@ export function createLayerController({
     if (!show || !capability) {
       for (const layer of map.getStyle().layers || []) {
         if (String(layer.id).startsWith('official-cadastre-') && map.getLayer(layer.id)) {
-          map.setLayoutProperty(layer.id, 'visibility', 'none');
+          styleWriter.setLayoutProperty(layer.id, 'visibility', 'none');
         }
       }
       activeCadastre = '';
@@ -677,8 +780,14 @@ export function createLayerController({
     for (const layer of map.getStyle().layers || []) {
       if (!String(layer.id).startsWith('official-cadastre-') || !map.getLayer(layer.id)) continue;
       const visible = layer.id === sourceId;
-      map.setLayoutProperty(layer.id, 'visibility', visible ? 'visible' : 'none');
-      if (visible) map.setPaintProperty(layer.id, 'raster-opacity', aerialVisible ? .62 : 1);
+      styleWriter.setLayoutProperty(layer.id, 'visibility', visible ? 'visible' : 'none');
+      if (visible) {
+        styleWriter.setPaintProperty(
+          layer.id,
+          'raster-opacity',
+          aerialVisible ? .62 : 1
+        );
+      }
     }
     activeCadastre = sourceId;
     ensureRasterStack();
@@ -697,7 +806,11 @@ export function createLayerController({
       if (!layer.id || !matches) continue;
       if (!map.getLayer(layer.id)) continue;
       if (!baseVisibility.has(layer.id)) baseVisibility.set(layer.id, map.getLayoutProperty(layer.id, 'visibility') || 'visible');
-      map.setLayoutProperty(layer.id, 'visibility', visible ? baseVisibility.get(layer.id) : 'none');
+      styleWriter.setLayoutProperty(
+        layer.id,
+        'visibility',
+        visible ? baseVisibility.get(layer.id) : 'none'
+      );
     }
   }
 
@@ -705,6 +818,42 @@ export function createLayerController({
     if (!sourceId || !map.getSource(sourceId)) return false;
     if (typeof map.isSourceLoaded !== 'function') return true;
     try { return map.isSourceLoaded(sourceId); } catch (_) { return false; }
+  }
+
+  function zoomBandSignature(dataset = null) {
+    const cachedDataset = dataset
+      || (lastViewportSlug
+        ? datasetForSlug(lastViewportSlug)
+        : datasetForSlug(datasetProfile.id));
+    return layerZoomBandSignature({
+      zoom: map.getZoom(),
+      dataset: cachedDataset,
+      deDetailZoom: DE_DETAIL_ZOOM,
+      atDetailZoom: AT_DETAIL_ZOOM,
+      deAerialZoom: DE_AERIAL_ZOOM,
+      atAerialZoom: AT_AERIAL_ZOOM
+    });
+  }
+
+  function relevantSourceId(sourceId) {
+    return [
+      SOURCE_ID,
+      AT_KATASTER_SOURCE_ID,
+      AT_SYMBOL_SOURCE_ID,
+      activeAerial,
+      activeCadastre
+    ].includes(sourceId);
+  }
+
+  function sourceReadinessChanged(event) {
+    const sourceId = event?.sourceId;
+    if (!sourceId || !relevantSourceId(sourceId)) return false;
+    const ready = typeof event.isSourceLoaded === 'boolean'
+      ? event.isSourceLoaded
+      : sourceReady(sourceId);
+    if (sourceReadiness.get(sourceId) === ready) return false;
+    sourceReadiness.set(sourceId, ready);
+    return true;
   }
 
   function apply(state = store.getState()) {
@@ -752,29 +901,37 @@ export function createLayerController({
           germanyDetail,
           fullPresentation
         });
-        map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+        styleWriter.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
       }
     }
     if (map.getLayer('alkis-building-fills')) {
-      map.setPaintProperty(
+      styleWriter.setPaintProperty(
         'alkis-building-fills',
         'fill-color',
         layers.buildingUsage ? ['coalesce', ['get', 'fill_color'], '#CCCCCC'] : '#CCCCCC'
       );
-      map.setPaintProperty('alkis-building-fills', 'fill-opacity', !austria && detail && layers.aerial ? .36 : 1);
+      styleWriter.setPaintProperty(
+        'alkis-building-fills',
+        'fill-opacity',
+        !austria && detail && layers.aerial ? .36 : 1
+      );
     }
     if (map.getLayer(`${AT_LAYER_PREFIX}building-fills`)) {
-      map.setPaintProperty(
+      styleWriter.setPaintProperty(
         `${AT_LAYER_PREFIX}building-fills`,
         'fill-opacity',
         austria && detail && layers.aerial ? .36 : 1
       );
     }
     for (const id of ['alkis-surface-fills', 'alkis-traffic-surface-fills']) {
-      if (map.getLayer(id)) map.setPaintProperty(id, 'fill-opacity', !austria && detail && layers.aerial ? .18 : 1);
+      styleWriter.setPaintProperty(
+        id,
+        'fill-opacity',
+        !austria && detail && layers.aerial ? .18 : 1
+      );
     }
     if (map.getLayer(`${AT_LAYER_PREFIX}surface-fills`)) {
-      map.setPaintProperty(
+      styleWriter.setPaintProperty(
         `${AT_LAYER_PREFIX}surface-fills`,
         'fill-opacity',
         austria && detail && layers.aerial ? .18 : 1
@@ -809,6 +966,26 @@ export function createLayerController({
       const label = input.closest('label');
       if (label && unsupportedInAustria) label.hidden = true;
     }
+    lastViewportSlug = slug;
+    lastZoomBand = zoomBandSignature(activeDataset);
+  }
+
+  const scheduleApply = createLatestFrameScheduler((state) => {
+    apply(state || store.getState());
+  });
+
+  function applyForZoomBand() {
+    const signature = zoomBandSignature();
+    if (signature === lastZoomBand) return;
+    lastZoomBand = signature;
+    scheduleApply();
+  }
+
+  function applyForViewport() {
+    const slug = currentStateSlug();
+    if (slug === lastViewportSlug) return;
+    lastViewportSlug = slug;
+    scheduleApply();
   }
 
   layerButton.addEventListener('click', () => {
@@ -841,12 +1018,14 @@ export function createLayerController({
     addAlkisLayers();
     apply();
   });
-  map.on('zoom', () => apply());
-  map.on('moveend', () => apply());
+  map.on('zoom', applyForZoomBand);
+  map.on('moveend', applyForViewport);
   map.on('sourcedata', (event) => {
-    if ([SOURCE_ID, AT_KATASTER_SOURCE_ID, AT_SYMBOL_SOURCE_ID, EUROPE_BASEMAP_SOURCE, activeAerial, activeCadastre].includes(event.sourceId)) apply();
+    if (sourceReadinessChanged(event)) scheduleApply();
   });
-  store.subscribe((state, reason) => { if (reason === 'layers' || reason === 'restore') apply(state); });
+  store.subscribe((state, reason) => {
+    if (reason === 'layers' || reason === 'restore') scheduleApply(state);
+  });
   return {
     apply,
     currentStateSlug,

@@ -91,7 +91,7 @@ const hoverSection = selectionSource.slice(
 assert.doesNotMatch(hoverSection, /\bapi\./, 'Hover darf keine Serveranfrage auslösen.');
 assert.doesNotMatch(hoverSection, /\bfetch\(/, 'Hover darf keine Netzwerkanfrage auslösen.');
 
-assert.match(appSource, /\.\/layers\.js\?v=20260724-europe3/);
+assert.match(appSource, /\.\/layers\.js\?v=20260724-europe4/);
 assert.match(appSource, /\.\/selection\.js\?v=20260723-table2/);
 assert.match(appSource, /isWelcomeMode: \(\) => shellMode === 'welcome'/);
 assert.match(appSource, /openkataster:welcome-pointer/);

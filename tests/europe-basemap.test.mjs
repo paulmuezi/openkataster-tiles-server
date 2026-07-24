@@ -25,7 +25,7 @@ globalThis.window = {
 const europe = {
   available: true,
   version: 'europe-de-at-20260723-z15',
-  style_url: '/viewer-assets/europe-basemap-style-20260724-bkg3/style.json',
+  style_url: '/viewer-assets/europe-basemap-style-20260724-bkg4/style.json',
   tile_template: '/api/v1/basemap/europe/{z}/{x}/{y}.mvt',
   minzoom: 0,
   maxzoom: 15,
@@ -65,12 +65,26 @@ assert.equal(
 );
 
 const style = JSON.parse(readFileSync(
-  new URL('../live-viewer/europe-basemap-style-20260724-bkg3/style.json', import.meta.url),
+  new URL('../live-viewer/europe-basemap-style-20260724-bkg4/style.json', import.meta.url),
   'utf8'
 ));
 const federalStateLabels = JSON.parse(readFileSync(
   new URL(
     '../live-viewer/viewer-app/overlays/federal-state-labels-de-at.json',
+    import.meta.url
+  ),
+  'utf8'
+));
+const federalStateBoundariesGermany = JSON.parse(readFileSync(
+  new URL(
+    '../live-viewer/viewer-app/overlays/federal-state-boundaries-germany.json',
+    import.meta.url
+  ),
+  'utf8'
+));
+const federalStateBoundariesAustria = JSON.parse(readFileSync(
+  new URL(
+    '../live-viewer/viewer-app/overlays/federal-state-boundaries-austria.json',
     import.meta.url
   ),
   'utf8'
@@ -96,7 +110,7 @@ assert.equal(runtime.profile, 'europe');
 assert.equal(runtime.version, 'europe-de-at-20260723-z15');
 assert.deepEqual(fetchCalls, [
   '/api/v1/basemap/config',
-  '/viewer-assets/europe-basemap-style-20260724-bkg3/style.json'
+  '/viewer-assets/europe-basemap-style-20260724-bkg4/style.json'
 ]);
 assert.deepEqual(runtime.style.sources.openkataster_europe.tiles, [
   'https://tiles.openkataster.de/api/v1/basemap/europe/{z}/{x}/{y}.mvt?v=europe-de-at-20260723-z15'
@@ -120,6 +134,14 @@ assert.equal(
 assert.equal(
   runtime.style.sources.federal_state_labels_de_at.data,
   'https://tiles.openkataster.de/viewer-assets/viewer-app/overlays/federal-state-labels-de-at.json?v=20260724-de-at1'
+);
+assert.equal(
+  runtime.style.sources.federal_state_boundaries_germany.data,
+  'https://tiles.openkataster.de/viewer-assets/viewer-app/overlays/federal-state-boundaries-germany.json?v=20260724-de-at1'
+);
+assert.equal(
+  runtime.style.sources.federal_state_boundaries_austria.data,
+  'https://tiles.openkataster.de/viewer-assets/viewer-app/overlays/federal-state-boundaries-austria.json?v=20260724-de-at1'
 );
 assert.equal(runtime.style.sources.availability_germany, undefined);
 assert.equal(runtime.style.sources.availability_austria, undefined);
@@ -219,7 +241,7 @@ assert.equal(
 dispose();
 
 assert.equal(style.version, 8);
-assert.equal(style.metadata['openkataster:profile'], 'europe-de-at-bkg-v4');
+assert.equal(style.metadata['openkataster:profile'], 'europe-de-at-bkg-v5');
 assert.equal(style.sources.openkataster_europe.type, 'vector');
 assert.deepEqual(style.sources.openkataster_europe.bounds, [5, 45.5, 18, 55.75]);
 assert.equal(
@@ -262,6 +284,11 @@ assert.equal(
   'Ortsteile sollen die Bundeslandansicht nicht überladen.'
 );
 assert.equal(
+  style.layers.find((layer) => layer.id === 'pois')?.minzoom,
+  14,
+  'Restaurants und andere POIs dürfen die Übersichtskarte nicht überladen.'
+);
+assert.equal(
   style.layers.find((layer) => layer.id === 'boundaries')?.minzoom,
   10.5,
   'Generische Detailgrenzen dürfen die orangefarbenen Bundeslandgrenzen nicht doppeln.'
@@ -297,16 +324,28 @@ assert.equal(
   1,
   'Die weiße Verfügbarkeitsmaske darf die darunterliegende Europakarte nicht durchscheinen lassen.'
 );
-const supportedRegionBoundaries = style.layers.find(
-  (layer) => layer.id === 'availability-supported-region-boundaries'
+const supportedRegionBoundariesGermany = style.layers.find(
+  (layer) => layer.id === 'availability-supported-region-boundaries-de'
 );
-assert.equal(supportedRegionBoundaries?.minzoom, 5);
-assert.equal(supportedRegionBoundaries?.maxzoom, 10.5);
-assert.deepEqual(
-  supportedRegionBoundaries?.filter,
-  ['all', ['==', 'kind', 'region'], ['==', 'kind_detail', 4]]
+const supportedRegionBoundariesAustria = style.layers.find(
+  (layer) => layer.id === 'availability-supported-region-boundaries-at'
 );
-assert.equal(supportedRegionBoundaries?.paint['line-color'], '#f86d14');
+for (const boundaryLayer of [
+  supportedRegionBoundariesGermany,
+  supportedRegionBoundariesAustria
+]) {
+  assert.equal(boundaryLayer?.minzoom, 5);
+  assert.equal(boundaryLayer?.maxzoom, 10.5);
+  assert.equal(boundaryLayer?.paint['line-color'], '#f86d14');
+}
+assert.equal(
+  supportedRegionBoundariesGermany?.source,
+  'federal_state_boundaries_germany'
+);
+assert.equal(
+  supportedRegionBoundariesAustria?.source,
+  'federal_state_boundaries_austria'
+);
 const supportedCountriesOutline = style.layers.find(
   (layer) => layer.id === 'availability-supported-countries-outline'
 );
@@ -317,7 +356,12 @@ assert.deepEqual(
   ['in', 'ISO_A3', 'DEU', 'AUT']
 );
 assert.equal(supportedCountriesOutline?.paint['line-color'], '#f86d14');
-const supportedRegionBoundaryIndex = style.layers.indexOf(supportedRegionBoundaries);
+const supportedRegionBoundaryGermanyIndex = style.layers.indexOf(
+  supportedRegionBoundariesGermany
+);
+const supportedRegionBoundaryAustriaIndex = style.layers.indexOf(
+  supportedRegionBoundariesAustria
+);
 const unsupportedCountriesMaskIndex = style.layers.findIndex(
   (layer) => layer.id === 'availability-unavailable-countries-mask'
 );
@@ -343,13 +387,47 @@ assert.equal(
   federalStateLabels.features.some((feature) => feature.properties?.name === 'Niederösterreich'),
   true
 );
+assert.equal(federalStateBoundariesGermany.type, 'FeatureCollection');
+assert.equal(federalStateBoundariesGermany.features.length, 16);
+assert.equal(
+  federalStateBoundariesGermany.features.every(
+    (feature) => feature.properties?.country_code === 'DE'
+  ),
+  true
+);
+assert.equal(federalStateBoundariesGermany.metadata?.license, 'dl-de/by-2-0');
+assert.equal(
+  federalStateBoundariesGermany.metadata?.attribution,
+  '© GeoBasis-DE / BKG'
+);
+assert.equal(federalStateBoundariesAustria.type, 'FeatureCollection');
+assert.equal(federalStateBoundariesAustria.features.length, 9);
+assert.equal(
+  new Set(
+    federalStateBoundariesAustria.features.map((feature) => feature.properties?.name)
+  ).size,
+  9
+);
+assert.equal(
+  federalStateBoundariesAustria.features.every(
+    (feature) => feature.properties?.country_code === 'AT'
+  ),
+  true
+);
+assert.equal(federalStateBoundariesAustria.metadata?.license, 'CC-BY-4.0');
+assert.match(
+  federalStateBoundariesAustria.metadata?.attribution || '',
+  /Datenquelle: Statistik Austria/
+);
+assert.ok(unsupportedCountriesMaskIndex < supportedRegionBoundaryGermanyIndex);
+assert.ok(unsupportedCountriesMaskIndex < supportedRegionBoundaryAustriaIndex);
 assert.ok(
-  supportedRegionBoundaryIndex < unsupportedCountriesMaskIndex,
-  'Regionale Grenzen müssen unter der Maske nicht unterstützter Länder liegen.'
+  supportedRegionBoundaryGermanyIndex < supportedCountriesOutlineIndex,
+  'Die deutsche Ländergrenze muss unter der gemeinsamen Außenkontur liegen.'
 );
 assert.ok(
-  unsupportedCountriesMaskIndex < supportedCountriesOutlineIndex,
-  'Die Außenkontur der unterstützten Länder muss über der weißen Maske liegen.'
+  supportedRegionBoundaryAustriaIndex < supportedCountriesOutlineIndex,
+  'Die österreichische Ländergrenze muss unter der gemeinsamen Außenkontur liegen.'
 );
 assert.equal(style.sources.availability_europe.type, 'geojson');
 assert.deepEqual(
@@ -374,7 +452,9 @@ for (const layer of style.layers) {
     [
       'openkataster_europe',
       'availability_europe',
-      'federal_state_labels_de_at'
+      'federal_state_labels_de_at',
+      'federal_state_boundaries_germany',
+      'federal_state_boundaries_austria'
     ].includes(layer.source),
     `Unerwartete Style-Quelle: ${layer.source}`
   );

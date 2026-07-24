@@ -55,7 +55,7 @@ assert.doesNotMatch(appSource, /'searchButton'|'searchClose'|'searchMode'|'parce
 assert.match(appSource, /\.\/search\.js\?v=20260723-unified1/);
 assert.match(appSource, /\.\/sources\.js\?v=20260724-europe1/);
 assert.match(indexSource, /styles\.css\?v=20260724-europe2/);
-assert.match(indexSource, /app\.js\?v=20260724-europe6/);
+assert.match(indexSource, /app\.js\?v=20260724-europe7/);
 assert.match(indexSource, /id="osmAttribution"[^>]+openstreetmap\.org\/copyright[^>]+hidden/);
 assert.match(
   appSource,

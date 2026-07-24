@@ -18,10 +18,12 @@ const majorLocalityMinZoom = 6.8;
 const mediumLocalityMinZoom = 8;
 const minorLocalityMinZoom = 9.5;
 const subplaceMinZoom = 10.5;
+const overviewPoiMinZoom = 14;
 const brandOrange = '#f86d14';
 const availabilityCountries = ['DEU', 'AUT'];
 const availabilityAssetVersion = '20260724-de-at1';
 const federalStateLabelAssetVersion = '20260724-de-at1';
+const federalStateBoundaryAssetVersion = '20260724-de-at1';
 
 const flavor = {
   ...namedFlavor('light'),
@@ -151,6 +153,10 @@ const subplaceLabels = generatedLayers.find((layer) => layer.id === 'places_subp
 if (subplaceLabels) {
   subplaceLabels.minzoom = subplaceMinZoom;
 }
+const poiLabels = generatedLayers.find((layer) => layer.id === 'pois');
+if (poiLabels) {
+  poiLabels.minzoom = overviewPoiMinZoom;
+}
 const regionBoundaries = generatedLayers.find((layer) => layer.id === 'boundaries');
 if (regionBoundaries) {
   regionBoundaries.minzoom = federalStateMaxZoom;
@@ -217,17 +223,21 @@ if (countryLabelIndex >= 0) {
     countryLabelIndex,
     0,
     {
-      id: 'availability-supported-region-boundaries',
+      id: 'availability-unavailable-countries-mask',
+      type: 'fill',
+      source: 'availability_europe',
+      filter: ['!in', 'ISO_A3', ...availabilityCountries],
+      paint: {
+        'fill-color': '#ffffff',
+        'fill-opacity': 1
+      }
+    },
+    {
+      id: 'availability-supported-region-boundaries-de',
       type: 'line',
-      source: 'openkataster_europe',
-      'source-layer': 'boundaries',
+      source: 'federal_state_boundaries_germany',
       minzoom: overviewMinZoom,
       maxzoom: federalStateMaxZoom,
-      filter: [
-        'all',
-        ['==', 'kind', 'region'],
-        ['==', 'kind_detail', 4]
-      ],
       paint: {
         'line-color': brandOrange,
         'line-width': [
@@ -245,13 +255,25 @@ if (countryLabelIndex >= 0) {
       }
     },
     {
-      id: 'availability-unavailable-countries-mask',
-      type: 'fill',
-      source: 'availability_europe',
-      filter: ['!in', 'ISO_A3', ...availabilityCountries],
+      id: 'availability-supported-region-boundaries-at',
+      type: 'line',
+      source: 'federal_state_boundaries_austria',
+      minzoom: overviewMinZoom,
+      maxzoom: federalStateMaxZoom,
       paint: {
-        'fill-color': '#ffffff',
-        'fill-opacity': 1
+        'line-color': brandOrange,
+        'line-width': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          overviewMinZoom,
+          0.8,
+          7,
+          1.1,
+          federalStateMaxZoom,
+          1.3
+        ],
+        'line-opacity': 0.9
       }
     },
     {
@@ -316,14 +338,16 @@ const style = {
   version: 8,
   name: 'OpenKataster Europa',
   metadata: {
-    'openkataster:profile': 'europe-de-at-bkg-v4',
+    'openkataster:profile': 'europe-de-at-bkg-v5',
     'openkataster:data-build': '20260723',
     'openkataster:available-countries': 'DE,AT',
     'openkataster:style-generator': `@protomaps/basemaps@${packageMetadata.version}`,
     'openkataster:assets': 'basemaps-assets@028c18f713baecad011301ff7a69acc39bcc2ae7',
     'openkataster:license': (
       'OpenStreetMap data © OpenStreetMap contributors, ODbL 1.0; '
-      + 'ESA WorldCover 2020, CC BY 4.0'
+      + 'ESA WorldCover 2020, CC BY 4.0; '
+      + 'GeoBasis-DE / BKG, dl-de/by-2-0; '
+      + 'Statistik Austria Open.data, CC BY 4.0'
     )
   },
   glyphs: '/viewer-assets/europe-basemap-assets-protomaps-028c18f7/fonts/{fontstack}/{range}.pbf',
@@ -354,6 +378,29 @@ const style = {
         '/viewer-assets/viewer-app/overlays/federal-state-labels-de-at.json'
         + `?v=${federalStateLabelAssetVersion}`
       )
+    },
+    federal_state_boundaries_germany: {
+      type: 'geojson',
+      data: (
+        '/viewer-assets/viewer-app/overlays/federal-state-boundaries-germany.json'
+        + `?v=${federalStateBoundaryAssetVersion}`
+      ),
+      attribution: (
+        '<a href="https://www.bkg.bund.de/">© GeoBasis-DE / BKG</a>'
+      )
+    },
+    federal_state_boundaries_austria: {
+      type: 'geojson',
+      data: (
+        '/viewer-assets/viewer-app/overlays/federal-state-boundaries-austria.json'
+        + `?v=${federalStateBoundaryAssetVersion}`
+      ),
+      attribution: (
+        'Datenquelle: <a href="https://data.statistik.gv.at/">'
+        + 'Statistik Austria — data.statistik.gv.at</a>'
+        + ' · bereitgestellt über <a href="https://www.geosphere.at/">'
+        + 'GeoSphere Austria</a>'
+      )
     }
   },
   layers: generatedLayers
@@ -368,7 +415,7 @@ for (const layer of style.layers) {
 
 const outputPath = resolve(
   repositoryRoot,
-  'live-viewer/europe-basemap-style-20260724-bkg3/style.json'
+  'live-viewer/europe-basemap-style-20260724-bkg4/style.json'
 );
 mkdirSync(resolve(outputPath, '..'), { recursive: true });
 writeFileSync(outputPath, `${JSON.stringify(style, null, 2)}\n`);

@@ -10,12 +10,18 @@ const packageMetadata = JSON.parse(readFileSync(
   resolve(scriptDirectory, 'node_modules/@protomaps/basemaps/package.json'),
   'utf8'
 ));
-const regionDetailMinZoom = 6.8;
-const overviewMinZoom = 4.9;
-const overviewBoundaryMaxZoom = 9;
+const overviewMinZoom = 5;
+const countryLabelMaxZoom = 5.8;
+const federalStateLabelMinZoom = 5.55;
+const federalStateMaxZoom = 10.5;
+const majorLocalityMinZoom = 6.8;
+const mediumLocalityMinZoom = 8;
+const minorLocalityMinZoom = 9.5;
+const subplaceMinZoom = 10.5;
 const brandOrange = '#f86d14';
 const availabilityCountries = ['DEU', 'AUT'];
 const availabilityAssetVersion = '20260724-de-at1';
+const federalStateLabelAssetVersion = '20260724-de-at1';
 
 const flavor = {
   ...namedFlavor('light'),
@@ -96,15 +102,58 @@ if (industrialLayerIndex >= 0) {
     }
   });
 }
-const regionLabels = generatedLayers.find((layer) => layer.id === 'places_region');
-if (regionLabels) regionLabels.minzoom = regionDetailMinZoom;
-for (const placeLayerId of ['places_locality', 'places_subplace']) {
-  const placeLayer = generatedLayers.find((layer) => layer.id === placeLayerId);
-  if (placeLayer) placeLayer.minzoom = regionDetailMinZoom;
+const regionLabelIndex = generatedLayers.findIndex((layer) => layer.id === 'places_region');
+if (regionLabelIndex >= 0) {
+  generatedLayers.splice(regionLabelIndex, 1);
+}
+const localityIndex = generatedLayers.findIndex((layer) => layer.id === 'places_locality');
+if (localityIndex >= 0) {
+  const originalLocality = generatedLayers[localityIndex];
+  const cloneLocality = () => JSON.parse(JSON.stringify(originalLocality));
+  const majorLocality = cloneLocality();
+  majorLocality.id = 'places_locality-major';
+  majorLocality.minzoom = majorLocalityMinZoom;
+  majorLocality.filter = [
+    'all',
+    originalLocality.filter,
+    ['>=', 'population_rank', 10]
+  ];
+  const mediumLocality = cloneLocality();
+  mediumLocality.id = 'places_locality-medium';
+  mediumLocality.minzoom = mediumLocalityMinZoom;
+  mediumLocality.filter = [
+    'all',
+    originalLocality.filter,
+    ['>=', 'population_rank', 7],
+    ['<', 'population_rank', 10]
+  ];
+  const minorLocality = cloneLocality();
+  minorLocality.id = 'places_locality-minor';
+  minorLocality.minzoom = minorLocalityMinZoom;
+  minorLocality.filter = [
+    'all',
+    originalLocality.filter,
+    [
+      'any',
+      ['!has', 'population_rank'],
+      ['<', 'population_rank', 7]
+    ]
+  ];
+  generatedLayers.splice(
+    localityIndex,
+    1,
+    majorLocality,
+    mediumLocality,
+    minorLocality
+  );
+}
+const subplaceLabels = generatedLayers.find((layer) => layer.id === 'places_subplace');
+if (subplaceLabels) {
+  subplaceLabels.minzoom = subplaceMinZoom;
 }
 const regionBoundaries = generatedLayers.find((layer) => layer.id === 'boundaries');
 if (regionBoundaries) {
-  regionBoundaries.minzoom = regionDetailMinZoom;
+  regionBoundaries.minzoom = federalStateMaxZoom;
   regionBoundaries.paint['line-color'] = '#e8e8e8';
 }
 const buildings = generatedLayers.find((layer) => layer.id === 'buildings');
@@ -154,6 +203,7 @@ if (earthLayerIndex >= 0) {
 }
 const countryLabels = generatedLayers.find((layer) => layer.id === 'places_country');
 if (countryLabels) {
+  countryLabels.maxzoom = countryLabelMaxZoom;
   countryLabels.filter = [
     'all',
     countryLabels.filter,
@@ -172,7 +222,7 @@ if (countryLabelIndex >= 0) {
       source: 'openkataster_europe',
       'source-layer': 'boundaries',
       minzoom: overviewMinZoom,
-      maxzoom: overviewBoundaryMaxZoom,
+      maxzoom: federalStateMaxZoom,
       filter: [
         'all',
         ['==', 'kind', 'region'],
@@ -188,7 +238,7 @@ if (countryLabelIndex >= 0) {
           0.8,
           7,
           1.1,
-          overviewBoundaryMaxZoom,
+          federalStateMaxZoom,
           1.3
         ],
         'line-opacity': 0.9
@@ -209,7 +259,7 @@ if (countryLabelIndex >= 0) {
       type: 'line',
       source: 'availability_europe',
       minzoom: overviewMinZoom,
-      maxzoom: overviewBoundaryMaxZoom,
+      maxzoom: federalStateMaxZoom,
       filter: ['in', 'ISO_A3', ...availabilityCountries],
       paint: {
         'line-color': brandOrange,
@@ -221,10 +271,42 @@ if (countryLabelIndex >= 0) {
           1,
           7,
           1.35,
-          overviewBoundaryMaxZoom,
+          federalStateMaxZoom,
           1.6
         ],
         'line-opacity': 0.95
+      }
+    },
+    {
+      id: 'availability-supported-region-labels',
+      type: 'symbol',
+      source: 'federal_state_labels_de_at',
+      minzoom: federalStateLabelMinZoom,
+      maxzoom: federalStateMaxZoom,
+      layout: {
+        'text-field': ['get', 'name'],
+        'text-font': ['Noto Sans Medium'],
+        'text-size': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          federalStateLabelMinZoom,
+          10,
+          7,
+          11.5,
+          federalStateMaxZoom,
+          13
+        ],
+        'text-letter-spacing': 0.02,
+        'text-max-width': 10,
+        'text-allow-overlap': false,
+        'text-ignore-placement': false
+      },
+      paint: {
+        'text-color': '#333333',
+        'text-halo-color': '#ffffff',
+        'text-halo-width': 1.5,
+        'text-halo-blur': 0.35
       }
     }
   );
@@ -234,7 +316,7 @@ const style = {
   version: 8,
   name: 'OpenKataster Europa',
   metadata: {
-    'openkataster:profile': 'europe-de-at-bkg-v3',
+    'openkataster:profile': 'europe-de-at-bkg-v4',
     'openkataster:data-build': '20260723',
     'openkataster:available-countries': 'DE,AT',
     'openkataster:style-generator': `@protomaps/basemaps@${packageMetadata.version}`,
@@ -254,7 +336,7 @@ const style = {
       ],
       minzoom: 0,
       maxzoom: 15,
-      bounds: [-25, 34, 45, 72],
+      bounds: [5, 45.5, 18, 55.75],
       attribution: [
         '<a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a>',
         '<a href="https://esa-worldcover.org/">© ESA WorldCover project 2020</a>',
@@ -265,6 +347,13 @@ const style = {
     availability_europe: {
       type: 'geojson',
       data: `/viewer-assets/viewer-app/overlays/europe-countries.json?v=${availabilityAssetVersion}`
+    },
+    federal_state_labels_de_at: {
+      type: 'geojson',
+      data: (
+        '/viewer-assets/viewer-app/overlays/federal-state-labels-de-at.json'
+        + `?v=${federalStateLabelAssetVersion}`
+      )
     }
   },
   layers: generatedLayers
@@ -279,7 +368,7 @@ for (const layer of style.layers) {
 
 const outputPath = resolve(
   repositoryRoot,
-  'live-viewer/europe-basemap-style-20260724-bkg2/style.json'
+  'live-viewer/europe-basemap-style-20260724-bkg3/style.json'
 );
 mkdirSync(resolve(outputPath, '..'), { recursive: true });
 writeFileSync(outputPath, `${JSON.stringify(style, null, 2)}\n`);

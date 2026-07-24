@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/lib.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  activate-release.sh --version europe-YYYYMMDD-z15
+  activate-release.sh --version europe[-de-at]-YYYYMMDD-z15
       [--mode preview|on|off]
       [--root PATH] [--tools-root PATH]
       [--api-url URL] [--public-url URL | --no-public-smoke]

@@ -10,13 +10,13 @@ usage() {
   cat <<'EOF'
 Usage:
   adopt-extract.sh --input PATH --build-date YYYYMMDD
-                   --confirm-version europe-YYYYMMDD-z15
+                   --confirm-version europe-de-at-YYYYMMDD-z15
                    [--root PATH] [--tools-root PATH] [--dry-run]
 
 Einmaliger, strikter Übernahmepfad für einen bereits vollständig geladenen
 manuellen Extract unter ROOT/.incoming:
 
-  ROOT/.incoming/europe-YYYYMMDD-z15.pmtiles.part
+  ROOT/.incoming/europe-de-at-YYYYMMDD-z15.pmtiles.part
 
 Das Kommando lädt nichts erneut herunter und aktiviert nichts. Es verweigert
 die Übernahme, solange ein Prozess die Datei geöffnet hat. Danach prüft es:

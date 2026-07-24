@@ -10,8 +10,8 @@ usage() {
   cat <<'EOF'
 Usage:
   migrate-legacy-manifest.sh
-    --version europe-YYYYMMDD-z15
-    --confirm-version europe-YYYYMMDD-z15
+    --version europe[-de-at]-YYYYMMDD-z15
+    --confirm-version europe[-de-at]-YYYYMMDD-z15
     [--root PATH] [--tools-root PATH] [--api-url URL]
 
 Einmalige, kontrollierte Migration eines noch nie aktivierten schema-1-
@@ -169,8 +169,7 @@ NEW_MANIFEST="${TEMP_PARENT}/manifest.json"
 ok_run_io_niced "$PMTILES" verify "$ARCHIVE_PATH"
 ok_run_io_niced "$PMTILES" show --header-json "$ARCHIVE_PATH" >"$HEADER_PATH"
 ok_run_io_niced "$PMTILES" show --metadata "$ARCHIVE_PATH" >"$METADATA_PATH"
-BUILD_DATE=${VERSION#europe-}
-BUILD_DATE=${BUILD_DATE%-z15}
+BUILD_DATE=$(ok_build_date_for_version "$VERSION")
 SOURCE_URL=$(ok_source_url_for_build_date "$BUILD_DATE")
 ok_run_io_niced python3 "${SCRIPT_DIR}/validate-release.py" create \
   --pmtiles "$ARCHIVE_PATH" \

@@ -102,7 +102,9 @@ export function createPlannerMap({
 }) {
   const hashView = parseHashView(window.location.hash);
   const view = hashView || savedView || datasetProfile.defaultView;
-  const mapLimits = resolvePlannerMapLimits(basemapRuntime);
+  const mapLimits = resolvePlannerMapLimits(basemapRuntime, {
+    mobile: window.matchMedia?.('(max-width: 760px)').matches === true
+  });
   const map = new maplibregl.Map({
     container,
     style: basemapRuntime?.style || '/viewer-assets/viewer-app/bkg-style.json?v=20260724-europe3',
@@ -145,20 +147,20 @@ export function createPlannerMap({
   return map;
 }
 
-export function resolvePlannerMapLimits(basemapRuntime) {
+export function resolvePlannerMapLimits(basemapRuntime, { mobile = false } = {}) {
   if (basemapRuntime?.profile !== 'europe') {
     return { minZoom: 3.2, maxBounds: undefined };
+  }
+  if (mobile) {
+    return {
+      minZoom: 4.35,
+      maxBounds: [[-10.0, 35.0], [32.0, 66.0]]
+    };
   }
   return {
     minZoom: 4.9,
     maxBounds: [[-4.0, 41.5], [27.0, 59.0]]
   };
-}
-
-export function shouldShowBasemapAvailability(basemapRuntime, zoom) {
-  return basemapRuntime?.profile === 'europe'
-    && Number.isFinite(Number(zoom))
-    && Number(zoom) <= 7;
 }
 
 function parseHashView(hash) {

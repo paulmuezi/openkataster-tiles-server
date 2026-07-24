@@ -12,14 +12,15 @@ Usage:
   build-release.sh [--build-date YYYYMMDD] [--root PATH]
                    [--tools-root PATH] [--dry-run]
 
-Erstellt einen reproduzierbaren Protomaps-v4-Europe-Extract:
-  bbox      -25,34,45,72
+Erstellt einen reproduzierbaren Protomaps-v4-Extract für Deutschland und
+Österreich mit einem kontrollierten Randpuffer:
+  bbox      5,45.5,18,55.75
   zoom      0-15
   pmtiles   CLI 1.31.2 (geprüfter Binary-SHA-256)
 
 Die Quelldatei wird nie als "latest" aufgelöst. Aus YYYYMMDD entsteht fest:
   https://build.protomaps.com/YYYYMMDD.pmtiles
-  europe-YYYYMMDD-z15
+  europe-de-at-YYYYMMDD-z15
 
 Der Build wird unter ROOT/.incoming erzeugt, vollständig geprüft und erst
 danach atomar nach ROOT/versions verschoben. Er aktiviert die Version nicht.

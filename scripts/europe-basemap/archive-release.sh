@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/lib.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  archive-release.sh --version europe-YYYYMMDD-z15 --confirm VERSION
+  archive-release.sh --version europe[-de-at]-YYYYMMDD-z15 --confirm VERSION
                      --archive-root ABSOLUTE_PATH
                      [--root PATH] [--tools-root PATH] [--dry-run]
 

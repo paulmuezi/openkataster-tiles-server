@@ -11,7 +11,7 @@ usage() {
 Usage:
   smoke.sh --base-url URL --expected-mode off|preview|on
            [--expected-configured-mode off|preview|on]
-           [--expected-version europe-YYYYMMDD-z15]
+           [--expected-version europe[-de-at]-YYYYMMDD-z15]
 
 Read-only Produktions-Smoke:
   * GET /health
@@ -29,6 +29,7 @@ BASE_URL=$OK_EUROPE_DEFAULT_API_URL
 EXPECTED_MODE=""
 EXPECTED_CONFIGURED_MODE=""
 EXPECTED_VERSION=""
+EXPECTED_BBOX=""
 TEMP_DIR=""
 
 cleanup() {
@@ -115,6 +116,7 @@ fi
 if [[ $EXPECTED_MODE != "off" ]]; then
   [[ -n $EXPECTED_VERSION ]] || ok_die "--expected-version ist für preview/on erforderlich."
   ok_validate_version "$EXPECTED_VERSION"
+  EXPECTED_BBOX=$(ok_bbox_for_version "$EXPECTED_VERSION")
 fi
 
 ok_require_command curl
@@ -165,6 +167,7 @@ python3 - \
   "$EXPECTED_MODE" \
   "$EXPECTED_CONFIGURED_MODE" \
   "$EXPECTED_VERSION" \
+  "$EXPECTED_BBOX" \
   "${TEMP_DIR}/config.json" \
   "${TEMP_DIR}/style-url.txt" <<'PY'
 import json
@@ -175,6 +178,7 @@ from pathlib import Path
     expected_mode,
     expected_configured_mode,
     expected_version,
+    expected_bbox,
     path,
     style_url_path,
 ) = sys.argv[1:]
@@ -206,7 +210,8 @@ else:
         )
     if europe.get("minzoom") != 0 or europe.get("maxzoom") != 15:
         raise SystemExit("unexpected Europe basemap zoom range")
-    if europe.get("bounds") != [-25.0, 34.0, 45.0, 72.0]:
+    expected_bounds = [float(value) for value in expected_bbox.split(",")]
+    if europe.get("bounds") != expected_bounds:
         raise SystemExit(f"unexpected Europe basemap bounds: {europe.get('bounds')!r}")
     attribution = europe.get("attribution")
     if (

@@ -14,9 +14,14 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION_RE = re.compile(r"^europe-(20\d{6})-z15$")
+VERSION_RE = re.compile(
+    r"^europe(?P<regional>-de-at)?-(?P<build_date>20\d{6})-z15$"
+)
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
-EXPECTED_BOUNDS = (-25.0, 34.0, 45.0, 72.0)
+DE_AT_COVERAGE_PROFILE = "de-at-buffer-v1"
+DE_AT_BOUNDS = (5.0, 45.5, 18.0, 55.75)
+LEGACY_COVERAGE_PROFILE = "legacy-europe-v1"
+LEGACY_BOUNDS = (-25.0, 34.0, 45.0, 72.0)
 BOUNDS_TOLERANCE = 1e-6
 EXPECTED_MIN_ZOOM = 0
 EXPECTED_MAX_ZOOM = 15
@@ -90,10 +95,26 @@ def _regular_file(path: Path, *, nonempty: bool = True) -> None:
 
 
 def _validate_version(version: str) -> str:
+    return _version_contract(version)[0]
+
+
+def _version_contract(
+    version: str,
+) -> tuple[str, str, tuple[float, float, float, float]]:
     match = VERSION_RE.fullmatch(version)
     if match is None:
         raise ValidationError(f"invalid version: {version}")
-    return match.group(1)
+    if match.group("regional"):
+        return (
+            match.group("build_date"),
+            DE_AT_COVERAGE_PROFILE,
+            DE_AT_BOUNDS,
+        )
+    return (
+        match.group("build_date"),
+        LEGACY_COVERAGE_PROFILE,
+        LEGACY_BOUNDS,
+    )
 
 
 def _number(value: object, *, label: str) -> float:
@@ -112,6 +133,7 @@ def _validated_archive(
     header: dict[str, Any],
     metadata: dict[str, Any],
     *,
+    expected_bounds: tuple[float, float, float, float],
     expected_build_date: str | None = None,
 ) -> tuple[list[float], str]:
     if str(header.get("tile_type", "")).lower() != "mvt":
@@ -129,11 +151,11 @@ def _validated_archive(
     bounds = [_number(value, label=f"bounds[{index}]") for index, value in enumerate(raw_bounds)]
     if any(
         abs(actual - expected) > BOUNDS_TOLERANCE
-        for actual, expected in zip(bounds, EXPECTED_BOUNDS)
+        for actual, expected in zip(bounds, expected_bounds)
     ):
         raise ValidationError(
             f"PMTiles bounds {bounds!r} differ from the configured exact "
-            f"Europe bbox {EXPECTED_BOUNDS!r}"
+            f"release bbox {expected_bounds!r}"
         )
 
     metadata_name = str(metadata.get("name", ""))
@@ -205,7 +227,7 @@ def _atomic_json_write(path: Path, value: dict[str, Any]) -> None:
 def create_manifest(args: argparse.Namespace) -> None:
     pmtiles = args.pmtiles.resolve(strict=True)
     _regular_file(pmtiles)
-    build_date = _validate_version(args.version)
+    build_date, coverage_profile, expected_bounds = _version_contract(args.version)
     if args.build_date != build_date:
         raise ValidationError(
             f"version build date {build_date} does not match {args.build_date}"
@@ -228,6 +250,7 @@ def create_manifest(args: argparse.Namespace) -> None:
     bounds, schema_version = _validated_archive(
         header,
         metadata,
+        expected_bounds=expected_bounds,
         expected_build_date=args.build_date,
     )
     size_bytes = pmtiles.stat().st_size
@@ -239,14 +262,15 @@ def create_manifest(args: argparse.Namespace) -> None:
         "size_bytes": size_bytes,
         "minzoom": EXPECTED_MIN_ZOOM,
         "maxzoom": EXPECTED_MAX_ZOOM,
-        "bounds": list(EXPECTED_BOUNDS),
+        "bounds": list(expected_bounds),
         "attribution": ATTRIBUTION,
         "source": f"Protomaps Basemap v4 daily build {args.build_date}",
         "provenance": {
             "build_date": args.build_date,
+            "coverage_profile": coverage_profile,
             "source_url": args.source_url,
             "source_schema": schema_version,
-            "extract_bbox": list(EXPECTED_BOUNDS),
+            "extract_bbox": list(expected_bounds),
             "extract_minzoom": EXPECTED_MIN_ZOOM,
             "extract_maxzoom": EXPECTED_MAX_ZOOM,
             "pmtiles_cli_version": args.pmtiles_cli_version,
@@ -284,6 +308,9 @@ def _validated_manifest(release_dir: Path, *, skip_hash: bool) -> dict[str, Any]
     pmtiles_path = release_dir / "basemap.pmtiles"
     manifest = _load_json(manifest_path)
     _regular_file(pmtiles_path)
+    build_date, coverage_profile, expected_bounds = _version_contract(
+        release_dir.name
+    )
     if manifest.get("schema_version") != 1:
         raise ValidationError("manifest schema_version must be 1")
     if manifest.get("version") != release_dir.name:
@@ -311,9 +338,9 @@ def _validated_manifest(release_dir: Path, *, skip_hash: bool) -> dict[str, Any]
     )
     if any(
         abs(actual - expected) > BOUNDS_TOLERANCE
-        for actual, expected in zip(bounds, EXPECTED_BOUNDS)
+        for actual, expected in zip(bounds, expected_bounds)
     ):
-        raise ValidationError(f"manifest bounds differ from {EXPECTED_BOUNDS!r}")
+        raise ValidationError(f"manifest bounds differ from {expected_bounds!r}")
     if manifest.get("attribution") != ATTRIBUTION:
         raise ValidationError(
             "manifest attribution must name OpenStreetMap and ESA WorldCover"
@@ -335,14 +362,19 @@ def _validated_manifest(release_dir: Path, *, skip_hash: bool) -> dict[str, Any]
         )
     if provenance.get("data_licenses") != DATA_LICENSES:
         raise ValidationError("manifest data-license inventory is incomplete")
-    build_date = _validate_version(release_dir.name)
     if provenance.get("build_date") != build_date:
         raise ValidationError("manifest provenance build_date differs from version")
     if provenance.get("source_url") != (
         f"https://build.protomaps.com/{build_date}.pmtiles"
     ):
         raise ValidationError("manifest provenance source_url is not pinned")
-    if provenance.get("extract_bbox") != list(EXPECTED_BOUNDS):
+    manifest_profile = provenance.get("coverage_profile")
+    if coverage_profile == LEGACY_COVERAGE_PROFILE:
+        if manifest_profile not in (None, LEGACY_COVERAGE_PROFILE):
+            raise ValidationError("legacy manifest coverage_profile is unexpected")
+    elif manifest_profile != coverage_profile:
+        raise ValidationError("regional manifest coverage_profile is missing or unexpected")
+    if provenance.get("extract_bbox") != list(expected_bounds):
         raise ValidationError("manifest provenance extract_bbox is unexpected")
     if provenance.get("extract_minzoom") != EXPECTED_MIN_ZOOM:
         raise ValidationError("manifest provenance extract_minzoom is unexpected")
@@ -375,10 +407,13 @@ def inspect_release(args: argparse.Namespace) -> None:
     manifest = _validated_manifest(release_dir, skip_hash=args.skip_hash)
     header = _load_json(args.header_json)
     metadata = _load_json(args.metadata_json)
-    build_date = _validate_version(release_dir.name)
+    build_date, _coverage_profile, expected_bounds = _version_contract(
+        release_dir.name
+    )
     bounds, schema_version = _validated_archive(
         header,
         metadata,
+        expected_bounds=expected_bounds,
         expected_build_date=build_date,
     )
     if any(

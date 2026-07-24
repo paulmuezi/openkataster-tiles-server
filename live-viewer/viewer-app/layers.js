@@ -727,14 +727,14 @@ export function createLayerController({
     if (layerZoomNote) {
       layerZoomNote.hidden = detail && (!aerial || aerialDetail);
       if (fullPresentation) {
-        layerZoomNote.textContent = 'Amtliche Gesamtdarstellung und Luftbild sind ab Zoom 17 verfügbar.';
+        layerZoomNote.textContent = 'Katasterlayer und Luftbilder sind ab Zoomstufe 17 verfügbar.';
       } else if (austria && aerial && aerialZoom !== detailZoom) {
         const unavailable = [];
         if (!aerialDetail) unavailable.push(`Luftbild ab Zoom ${aerialZoom}`);
         if (!detail) unavailable.push(`Kataster ab Zoom ${detailZoom}`);
         layerZoomNote.textContent = `${unavailable.join(' · ')}.`;
       } else {
-        layerZoomNote.textContent = `${austria ? 'Kataster' : 'ALKIS'} und Luftbild sind ab Zoom ${detailZoom} verfügbar.`;
+        layerZoomNote.textContent = `Katasterlayer und Luftbilder sind ab Zoomstufe ${detailZoom} verfügbar.`;
       }
     }
     if (layerMenu) layerMenu.dataset.detailUnavailable = detail || aerialDetail ? 'false' : 'true';

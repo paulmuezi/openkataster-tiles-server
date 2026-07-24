@@ -38,13 +38,43 @@ ok_validate_build_date() {
 }
 
 ok_validate_version() {
-  [[ $1 =~ ^europe-20[0-9]{6}-z15$ ]] \
+  [[ $1 =~ ^europe(-de-at)?-20[0-9]{6}-z15$ ]] \
     || ok_die "Ungültige Europe-Basemap-Version '$1'."
 }
 
 ok_version_for_build_date() {
   ok_validate_build_date "$1"
-  printf 'europe-%s-z15\n' "$1"
+  printf 'europe-de-at-%s-z15\n' "$1"
+}
+
+ok_build_date_for_version() {
+  local version=$1
+  ok_validate_version "$version"
+  if [[ $version =~ ^europe(-de-at)?-(20[0-9]{6})-z15$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[2]}"
+    return 0
+  fi
+  ok_die "Build-Datum konnte nicht aus der Version gelesen werden: $version"
+}
+
+ok_coverage_profile_for_version() {
+  local version=$1
+  ok_validate_version "$version"
+  if [[ $version =~ ^europe-de-at-20[0-9]{6}-z15$ ]]; then
+    printf '%s\n' "$OK_EUROPE_COVERAGE_PROFILE"
+  else
+    printf '%s\n' "$OK_EUROPE_LEGACY_COVERAGE_PROFILE"
+  fi
+}
+
+ok_bbox_for_version() {
+  local version=$1
+  ok_validate_version "$version"
+  if [[ $version =~ ^europe-de-at-20[0-9]{6}-z15$ ]]; then
+    printf '%s\n' "$OK_EUROPE_BBOX"
+  else
+    printf '%s\n' "$OK_EUROPE_LEGACY_BBOX"
+  fi
 }
 
 ok_source_url_for_build_date() {
@@ -258,17 +288,22 @@ ok_link_version() {
   local name=$2
   local link_path="${root}/${name}"
   local target
+  local version
   [[ $name == "active" || $name == "previous" ]] \
     || ok_die "Interner Fehler: unbekannter Pointer $name"
   if [[ ! -L $link_path ]]; then
     return 1
   fi
   target=$(readlink -- "$link_path")
-  [[ $target =~ ^versions/(europe-20[0-9]{6}-z15)$ ]] \
+  [[ $target == versions/* ]] \
     || ok_die "Unsicherer ${name}-Pointer: $target"
+  version=${target#versions/}
+  [[ $target == "versions/${version}" ]] \
+    || ok_die "Unsicherer ${name}-Pointer: $target"
+  ok_validate_version "$version"
   [[ -d ${root}/${target} && ! -L ${root}/${target} ]] \
     || ok_die "${name}-Pointer zeigt nicht auf eine reguläre Version: $target"
-  printf '%s\n' "${BASH_REMATCH[1]}"
+  printf '%s\n' "$version"
 }
 
 ok_capture_link_version() {
@@ -294,7 +329,8 @@ ok_count_versions() {
     return 0
   fi
   find "${root}/versions" -mindepth 1 -maxdepth 1 -type d \
-    -name 'europe-????????-z15' -printf '.' | wc -c | tr -d ' '
+    \( -name 'europe-????????-z15' -o -name 'europe-de-at-????????-z15' \) \
+    -printf '.' | wc -c | tr -d ' '
 }
 
 ok_preflight_disk() {
@@ -347,7 +383,9 @@ ok_assert_version_capacity() {
     )
   fi
   if [[ -d ${root}/archive ]] && find "${root}/archive" -mindepth 1 -maxdepth 1 \
-    -type d -name 'europe-????????-z15' -print -quit | grep -q .; then
+    -type d \
+    \( -name 'europe-????????-z15' -o -name 'europe-de-at-????????-z15' \) \
+    -print -quit | grep -q .; then
     ok_die "Unter ${root}/archive liegt mindestens eine weitere Runtime auf demselben Volume. Archive müssen auf ein anderes Dateisystem verschoben werden."
   fi
   if [[ -d ${root}/versions/${requested_version} ]]; then

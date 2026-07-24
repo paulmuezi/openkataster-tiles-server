@@ -1,9 +1,9 @@
 # Europe-Basemap: reproduzierbarer Produktionsbetrieb
 
-Diese Skripte bauen und betreiben die selbst gehostete, europaweit
-einheitliche OpenKataster-Grundkarte. Sie verändern weder ALKIS-Runtimes noch
-die nationalen Grundkarten. Der nationale Bestand bleibt in allen Modi der
-technische Rückfall.
+Diese Skripte bauen und betreiben die selbst gehostete, einheitliche
+OpenKataster-Grundkarte für Deutschland und Österreich. Sie verändern weder
+ALKIS-Runtimes noch die nationalen Grundkarten. Der nationale Bestand bleibt
+in allen Modi der technische Rückfall.
 
 ## Fest definierte Eingaben
 
@@ -12,8 +12,10 @@ technische Rückfall.
 | Datensatz | Protomaps Basemap v4, täglicher Build |
 | Reproduzierter Stand | `20260723` |
 | Quell-URL | `https://build.protomaps.com/20260723.pmtiles` |
-| Ausschnitt | `-25,34,45,72` |
+| Abdeckungsprofil | `de-at-buffer-v1` |
+| Ausschnitt | `5,45.5,18,55.75` |
 | Zoomstufen | `0` bis `15` |
+| Versionsname | `europe-de-at-YYYYMMDD-z15` |
 | Werkzeug | `pmtiles 1.31.2`, Linux x86_64 |
 | Releasearchiv SHA-256 | `3ed7dbf4ec2e6dfe5e25b6f70d1ffc932729f93c86db353bf514dd71010a312f` |
 | Binary SHA-256 | `a7e9ae10184d109c83f456ccdf6df4f3e2a64ba6cf69d9ed0f9f1840305055c1` |
@@ -23,6 +25,15 @@ Es gibt bewusst kein `latest`. Für ein späteres Update wird ein konkretes,
 bereits veröffentlichtes Tagesdatum über `--build-date YYYYMMDD` angegeben.
 URL, Versionsname und Manifest leiten sich deterministisch daraus ab. Der
 resultierende Archiv-Hash wird im Manifest festgeschrieben.
+
+Der Ausschnitt enthält Deutschland und Österreich mit einem kontrollierten
+Randpuffer von ungefähr 55 bis 100 Kilometern. `pmtiles extract` übernimmt
+ganze Rand-Tiles; Staatsgrenzen, Straßen und Beschriftungen werden daher nicht
+an der Landesgrenze abgeschnitten. Die früher gebaute Version
+`europe-YYYYMMDD-z15` mit dem Ausschnitt `-25,34,45,72` bleibt als
+`legacy-europe-v1` vollständig validier- und rollbackfähig. Neue Builds
+verwenden ausschließlich das regionale, im Versionsnamen unveränderlich
+erkennbare Profil.
 
 Die Daten sind aus OpenStreetMap abgeleitet. In der Karte muss die sichtbare
 Attribution `© OpenStreetMap contributors` erhalten bleiben. Die Basemap-Tiles
@@ -38,9 +49,9 @@ mitgelieferten Style-/Asset-Lizenzen werden separat im Viewer-Release geführt.
 │   ├── europe-20260723-z15/
 │   │   ├── basemap.pmtiles
 │   │   └── manifest.json
-│   └── europe-YYYYMMDD-z15/
-├── active   -> versions/europe-…-z15
-├── previous -> versions/europe-…-z15
+│   └── europe-de-at-YYYYMMDD-z15/
+├── active   -> versions/europe[-de-at]-…-z15
+├── previous -> versions/europe[-de-at]-…-z15
 └── mode                                # off | preview | on
 ```
 
@@ -134,7 +145,7 @@ Der direkte Prozess darf nicht durch Abbruch der SSH-Session beendet werden.
 ```bash
 sudo bash scripts/europe-basemap/verify-release.sh \
   --release-dir \
-  /srv/openkataster-tiles/basemaps/europe/versions/europe-20260723-z15
+  /srv/openkataster-tiles/basemaps/europe/versions/europe-de-at-20260723-z15
 ```
 
 Die Standardprüfung liest die gesamte Datei für den SHA-256 und prüft
@@ -161,9 +172,9 @@ erneuten Download übernommen werden:
 ```bash
 sudo bash scripts/europe-basemap/adopt-extract.sh \
   --input \
-  /srv/openkataster-tiles/basemaps/europe/.incoming/europe-20260723-z15.pmtiles.part \
+  /srv/openkataster-tiles/basemaps/europe/.incoming/europe-de-at-20260723-z15.pmtiles.part \
   --build-date 20260723 \
-  --confirm-version europe-20260723-z15
+  --confirm-version europe-de-at-20260723-z15
 ```
 
 Das Kommando verweigert eine noch geöffnete Datei, prüft das OSM-
@@ -195,7 +206,7 @@ Erstaktivierung erlaubt.
 
 ```bash
 sudo bash scripts/europe-basemap/activate-release.sh \
-  --version europe-20260723-z15 \
+  --version europe-de-at-20260723-z15 \
   --mode preview
 ```
 
@@ -255,7 +266,8 @@ sudo bash scripts/europe-basemap/rollback-release.sh --dry-run
 ## 8. Dritte Version vorbereiten
 
 Bei zwei vorhandenen Versionen bricht ein neuer Build vor dem Download ab.
-Eine nicht aktive Version wird ausdrücklich archiviert:
+Nach Abnahme der regionalen Version kann die nicht aktive Legacy-Version
+ausdrücklich archiviert werden:
 
 ```bash
 sudo bash scripts/europe-basemap/archive-release.sh \

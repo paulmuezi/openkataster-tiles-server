@@ -60,32 +60,40 @@ class EuropeBasemapTests(unittest.TestCase):
         self,
         root: Path,
         dataset: _FakeDataset,
+        *,
+        version: str | None = None,
+        bounds: list[float] | None = None,
+        coverage_profile: str | None = None,
     ) -> main.EuropeBasemapRuntime:
-        version_dir = root / "versions" / self.version
+        version = version or self.version
+        bounds = bounds or [-25.0, 34.0, 45.0, 72.0]
+        version_dir = root / "versions" / version
         version_dir.mkdir(parents=True)
         pmtiles_path = version_dir / "basemap.pmtiles"
         pmtiles_path.write_bytes(b"PMTiles test fixture")
         manifest = {
             "schema_version": 1,
-            "version": self.version,
+            "version": version,
             "pmtiles": "basemap.pmtiles",
             "sha256": "a" * 64,
             "size_bytes": pmtiles_path.stat().st_size,
             "minzoom": 0,
             "maxzoom": 15,
-            "bounds": [-25.0, 34.0, 45.0, 72.0],
+            "bounds": bounds,
             "attribution": main.EUROPE_BASEMAP_ATTRIBUTION,
             "source": "Protomaps Basemap v4",
             "provenance": {
                 "data_licenses": main.EUROPE_BASEMAP_DATA_LICENSES,
             },
         }
+        if coverage_profile is not None:
+            manifest["provenance"]["coverage_profile"] = coverage_profile
         (version_dir / "manifest.json").write_text(
             json.dumps(manifest),
             encoding="utf-8",
         )
         (root / "active").symlink_to(
-            Path("versions") / self.version,
+            Path("versions") / version,
             target_is_directory=True,
         )
         with (
@@ -93,6 +101,36 @@ class EuropeBasemapTests(unittest.TestCase):
             patch.object(main, "load_europe_basemap_dataset", return_value=dataset),
         ):
             return main._resolve_europe_basemap_runtime()
+
+    def test_runtime_accepts_regional_contract_and_rejects_mislabeled_bounds(self) -> None:
+        version = "europe-de-at-20260723-z15"
+        regional_bounds = [5.0, 45.5, 18.0, 55.75]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._runtime_fixture(
+                Path(temp_dir),
+                _FakeDataset(),
+                version=version,
+                bounds=regional_bounds,
+                coverage_profile=main.EUROPE_BASEMAP_DE_AT_PROFILE,
+            )
+        self.assertEqual(runtime.version, version)
+        self.assertEqual(runtime.bounds, tuple(regional_bounds))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(ValueError):
+                self._runtime_fixture(
+                    Path(temp_dir),
+                    _FakeDataset(),
+                    version=version,
+                    bounds=[-25.0, 34.0, 45.0, 72.0],
+                    coverage_profile=main.EUROPE_BASEMAP_DE_AT_PROFILE,
+                )
+
+    def test_runtime_keeps_legacy_manifest_without_profile_compatible(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._runtime_fixture(Path(temp_dir), _FakeDataset())
+        self.assertEqual(runtime.version, self.version)
+        self.assertEqual(runtime.bounds, main.EUROPE_BASEMAP_LEGACY_BOUNDS)
 
     def test_mode_file_overrides_environment_and_invalid_file_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -168,7 +206,7 @@ class EuropeBasemapTests(unittest.TestCase):
         self.assertEqual(payload["europe"]["version"], self.version)
         self.assertEqual(
             payload["europe"]["style_url"],
-            "/viewer-assets/europe-basemap-style-20260724-bkg2/style.json",
+            "/viewer-assets/europe-basemap-style-20260724-bkg3/style.json",
         )
         self.assertEqual(
             payload["europe"]["tile_template"],

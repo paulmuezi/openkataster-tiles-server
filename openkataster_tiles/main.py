@@ -79,7 +79,7 @@ EUROPE_BASEMAP_ROOT = Path(
 EUROPE_BASEMAP_ENV_MODE = os.environ.get("OPENKATASTER_EUROPE_BASEMAP_MODE", "off")
 EUROPE_BASEMAP_STYLE_URL = os.environ.get(
     "OPENKATASTER_EUROPE_BASEMAP_STYLE_URL",
-    "/viewer-assets/europe-basemap-style-20260724-bkg2/style.json",
+    "/viewer-assets/europe-basemap-style-20260724-bkg3/style.json",
 ).strip()
 EUROPE_BASEMAP_ATTRIBUTION = (
     "© OpenStreetMap contributors · "
@@ -142,8 +142,14 @@ SEARCH_CACHE_SECONDS = int(os.environ.get("OPENKATASTER_TILE_SEARCH_CACHE_SECOND
 _SEARCH_RESPONSE_CACHE: dict[tuple, tuple[float, dict]] = {}
 _SEARCH_RESPONSE_CACHE_MAX = int(os.environ.get("OPENKATASTER_TILE_SEARCH_CACHE_MAX", "512"))
 DATASET_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,80}$")
-EUROPE_BASEMAP_VERSION_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,80}$")
+EUROPE_BASEMAP_VERSION_RE = re.compile(
+    r"^europe(?P<regional>-de-at)?-(?P<build_date>20[0-9]{6})-z15$"
+)
 EUROPE_BASEMAP_SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+EUROPE_BASEMAP_DE_AT_PROFILE = "de-at-buffer-v1"
+EUROPE_BASEMAP_DE_AT_BOUNDS = (5.0, 45.5, 18.0, 55.75)
+EUROPE_BASEMAP_LEGACY_PROFILE = "legacy-europe-v1"
+EUROPE_BASEMAP_LEGACY_BOUNDS = (-25.0, 34.0, 45.0, 72.0)
 VIEWER_VERSION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,80}$")
 # MapLibre expands ``{fontstack}`` to URL-decoded asset segments such as
 # ``Noto Sans Regular`` and, for fallback stacks, comma-separated names.
@@ -1684,6 +1690,17 @@ def _europe_basemap_number(value: object, *, minimum: float, maximum: float) -> 
     return number
 
 
+def _europe_basemap_version_contract(
+    version: str,
+) -> tuple[str, tuple[float, float, float, float]]:
+    match = EUROPE_BASEMAP_VERSION_RE.fullmatch(version)
+    if match is None:
+        raise ValueError("invalid Europe basemap version")
+    if match.group("regional"):
+        return EUROPE_BASEMAP_DE_AT_PROFILE, EUROPE_BASEMAP_DE_AT_BOUNDS
+    return EUROPE_BASEMAP_LEGACY_PROFILE, EUROPE_BASEMAP_LEGACY_BOUNDS
+
+
 def _resolve_europe_basemap_runtime() -> EuropeBasemapRuntime:
     root = EUROPE_BASEMAP_ROOT.resolve(strict=True)
     versions_root = (root / "versions").resolve(strict=True)
@@ -1709,8 +1726,9 @@ def _resolve_europe_basemap_runtime() -> EuropeBasemapRuntime:
         raise ValueError("unsupported Europe basemap manifest")
 
     version = str(manifest.get("version") or "")
-    if not EUROPE_BASEMAP_VERSION_RE.fullmatch(version) or version != version_dir.name:
+    if version != version_dir.name:
         raise ValueError("invalid Europe basemap version")
+    coverage_profile, expected_bounds = _europe_basemap_version_contract(version)
     filename = str(manifest.get("pmtiles") or "")
     if filename != "basemap.pmtiles":
         raise ValueError("invalid Europe basemap PMTiles filename")
@@ -1746,6 +1764,11 @@ def _resolve_europe_basemap_runtime() -> EuropeBasemapRuntime:
     )
     if bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
         raise ValueError("invalid Europe basemap bounds order")
+    if any(
+        abs(actual - expected) > 1e-6
+        for actual, expected in zip(bounds, expected_bounds)
+    ):
+        raise ValueError("Europe basemap bounds do not match the version contract")
     attribution = str(manifest.get("attribution") or "").strip()
     if attribution != EUROPE_BASEMAP_ATTRIBUTION:
         raise ValueError("incomplete Europe basemap attribution")
@@ -1755,6 +1778,12 @@ def _resolve_europe_basemap_runtime() -> EuropeBasemapRuntime:
         or provenance.get("data_licenses") != EUROPE_BASEMAP_DATA_LICENSES
     ):
         raise ValueError("incomplete Europe basemap data-license inventory")
+    manifest_profile = provenance.get("coverage_profile")
+    if coverage_profile == EUROPE_BASEMAP_LEGACY_PROFILE:
+        if manifest_profile not in (None, EUROPE_BASEMAP_LEGACY_PROFILE):
+            raise ValueError("invalid legacy Europe basemap coverage profile")
+    elif manifest_profile != coverage_profile:
+        raise ValueError("invalid regional Europe basemap coverage profile")
     source = str(manifest.get("source") or "").strip()
     if len(source) > 200:
         raise ValueError("invalid Europe basemap source")

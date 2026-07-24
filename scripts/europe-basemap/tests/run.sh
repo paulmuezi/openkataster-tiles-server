@@ -21,7 +21,9 @@ for script in \
   bash "${SCRIPT_DIR}/${script}" --help >/dev/null
 done
 
-grep -Fq 'OK_EUROPE_BBOX="-25,34,45,72"' "${SCRIPT_DIR}/constants.sh"
+grep -Fq 'OK_EUROPE_COVERAGE_PROFILE="de-at-buffer-v1"' "${SCRIPT_DIR}/constants.sh"
+grep -Fq 'OK_EUROPE_BBOX="5,45.5,18,55.75"' "${SCRIPT_DIR}/constants.sh"
+grep -Fq 'OK_EUROPE_LEGACY_BBOX="-25,34,45,72"' "${SCRIPT_DIR}/constants.sh"
 grep -Fq 'OK_EUROPE_MAX_ZOOM="15"' "${SCRIPT_DIR}/constants.sh"
 grep -Fq 'OK_PMTILES_VERSION="1.31.2"' "${SCRIPT_DIR}/constants.sh"
 grep -Fq \
@@ -38,12 +40,12 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "${TEMP_ROOT}/runtime/.incoming"
-FAILED_PART="${TEMP_ROOT}/runtime/.incoming/europe-20260723-z15.pmtiles.part"
+FAILED_PART="${TEMP_ROOT}/runtime/.incoming/europe-de-at-20260723-z15.pmtiles.part"
 : >"$FAILED_PART"
 if ADOPT_OUTPUT=$(bash "${SCRIPT_DIR}/adopt-extract.sh" \
   --input "$FAILED_PART" \
   --build-date 20260723 \
-  --confirm-version europe-20260723-z15 \
+  --confirm-version europe-de-at-20260723-z15 \
   --root "${TEMP_ROOT}/runtime" \
   --tools-root "${TEMP_ROOT}/tools" \
   --dry-run 2>&1); then
@@ -51,6 +53,54 @@ if ADOPT_OUTPUT=$(bash "${SCRIPT_DIR}/adopt-extract.sh" \
   exit 1
 fi
 grep -Fq 'zu klein' <<<"$ADOPT_OUTPUT"
+
+(
+  # shellcheck source=../lib.sh
+  source "${SCRIPT_DIR}/lib.sh"
+  [[ $(ok_version_for_build_date 20260723) == "europe-de-at-20260723-z15" ]]
+  [[ $(ok_build_date_for_version europe-20260723-z15) == "20260723" ]]
+  [[ $(ok_build_date_for_version europe-de-at-20260723-z15) == "20260723" ]]
+  [[ $(ok_coverage_profile_for_version europe-20260723-z15) == "legacy-europe-v1" ]]
+  [[ $(ok_coverage_profile_for_version europe-de-at-20260723-z15) == "de-at-buffer-v1" ]]
+  [[ $(ok_bbox_for_version europe-20260723-z15) == "-25,34,45,72" ]]
+  [[ $(ok_bbox_for_version europe-de-at-20260723-z15) == "5,45.5,18,55.75" ]]
+  ok_validate_version europe-20260723-z15
+  ok_validate_version europe-de-at-20260723-z15
+)
+if (
+  # shellcheck source=../lib.sh
+  source "${SCRIPT_DIR}/lib.sh"
+  ok_validate_version europe-de-at-20260723-z15/../../outside
+) 2>/dev/null; then
+  printf 'Unsafe regional version was unexpectedly accepted.\n' >&2
+  exit 1
+fi
+
+if [[ $(uname -s) == "Linux" ]]; then
+  POINTER_ROOT="${TEMP_ROOT}/pointer-runtime"
+  mkdir -p \
+    "${POINTER_ROOT}/versions/europe-20260723-z15" \
+    "${POINTER_ROOT}/versions/europe-de-at-20260723-z15"
+  ln -s "versions/europe-20260723-z15" "${POINTER_ROOT}/active"
+  ln -s "versions/europe-de-at-20260723-z15" "${POINTER_ROOT}/previous"
+  (
+    # shellcheck source=../lib.sh
+    source "${SCRIPT_DIR}/lib.sh"
+    [[ $(ok_link_version "$POINTER_ROOT" active) == "europe-20260723-z15" ]]
+    [[ $(ok_link_version "$POINTER_ROOT" previous) == "europe-de-at-20260723-z15" ]]
+    [[ $(ok_count_versions "$POINTER_ROOT") == "2" ]]
+  )
+  unlink "${POINTER_ROOT}/active"
+  ln -s "versions/europe-de-at-20260723-z15/../../outside" "${POINTER_ROOT}/active"
+  if (
+    # shellcheck source=../lib.sh
+    source "${SCRIPT_DIR}/lib.sh"
+    ok_link_version "$POINTER_ROOT" active
+  ) >/dev/null 2>&1; then
+    printf 'Unsafe active pointer was unexpectedly accepted.\n' >&2
+    exit 1
+  fi
+fi
 
 python3 -m unittest -v "${TEST_DIR}/test_validate_release.py"
 bash "${TEST_DIR}/test_smoke_health.sh"

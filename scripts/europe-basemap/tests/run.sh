@@ -59,6 +59,7 @@ grep -Fq 'zu klein' <<<"$ADOPT_OUTPUT"
 (
   # shellcheck source=../lib.sh
   source "${SCRIPT_DIR}/lib.sh"
+  # shellcheck disable=SC2317 # Test double invoked indirectly by ok_preflight_disk.
   df() {
     printf '%s\n' \
       'Filesystem 1024-blocks Used Available Capacity Mounted on' \

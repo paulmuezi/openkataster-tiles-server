@@ -1,5 +1,5 @@
 import { createUnifiedApi } from './api.js?v=20260723-unified1';
-import { installEuropeBasemapFailover, resolvePlannerBasemap } from './basemap.js?v=20260724-europe1';
+import { installEuropeBasemapFailover, resolvePlannerBasemap } from './basemap.js?v=20260724-europe2';
 import { createExportController } from './export.js?v=20260724-europe1';
 import { createLayerController } from './layers.js?v=20260724-europe1';
 import { createLayout } from './layout.js?v=20260719-table-autofit1';

@@ -89,8 +89,52 @@ assert.deepEqual(fetchCalls, [
   '/viewer-assets/europe-basemap-style-20260724/style.json'
 ]);
 assert.deepEqual(runtime.style.sources.openkataster_europe.tiles, [
-  '/api/v1/basemap/europe/{z}/{x}/{y}.mvt?v=europe-20260723-z15'
+  'https://tiles.openkataster.de/api/v1/basemap/europe/{z}/{x}/{y}.mvt?v=europe-20260723-z15'
 ]);
+assert.equal(
+  runtime.style.glyphs,
+  'https://tiles.openkataster.de/viewer-assets/europe-basemap-assets-protomaps-028c18f7/fonts/{fontstack}/{range}.pbf'
+);
+assert.equal(
+  runtime.style.sprite,
+  'https://tiles.openkataster.de/viewer-assets/europe-basemap-assets-protomaps-028c18f7/sprites/v4/light'
+);
+
+const resolveUnsafeRuntime = async ({ europeOverride = {}, styleOverride = {} }) => (
+  resolvePlannerBasemap({
+    locationObject: new URL('https://tiles.openkataster.de/planer?basemap=europe'),
+    fetchImpl: async (url) => {
+      if (String(url) === BASEMAP_RUNTIME_CONSTANTS.configUrl) {
+        return new Response(JSON.stringify({
+          mode: 'on',
+          europe: { ...europe, ...europeOverride }
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        ...structuredClone(style),
+        ...styleOverride
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  })
+);
+assert.equal(
+  (await resolveUnsafeRuntime({
+    europeOverride: { tile_template: 'https://example.invalid/{z}/{x}/{y}.mvt' }
+  })).profile,
+  'national'
+);
+assert.equal(
+  (await resolveUnsafeRuntime({
+    styleOverride: { glyphs: 'https://example.invalid/fonts/{fontstack}/{range}.pbf' }
+  })).profile,
+  'national'
+);
+assert.equal(
+  (await resolveUnsafeRuntime({
+    styleOverride: { sprite: 'https://example.invalid/sprites/light' }
+  })).profile,
+  'national'
+);
 
 const failedRuntime = await resolvePlannerBasemap({
   locationObject: new URL('https://tiles.openkataster.de/planer'),

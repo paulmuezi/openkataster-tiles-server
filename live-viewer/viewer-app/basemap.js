@@ -20,15 +20,41 @@ export function selectBasemapProfile(config, search = '') {
 
 function sameOriginPath(value, locationObject) {
   const candidate = new URL(String(value || ''), locationObject.origin);
-  if (candidate.origin !== locationObject.origin) throw new Error('Basemap asset must be same-origin.');
+  if (
+    candidate.origin !== locationObject.origin
+    || candidate.username
+    || candidate.password
+    || candidate.hash
+  ) throw new Error('Basemap asset must be same-origin.');
   return `${candidate.pathname}${candidate.search}`
     .replace(/%7B([zxy])%7D/gi, '{$1}');
+}
+
+function sameOriginUrl(value, locationObject, placeholders = []) {
+  const candidate = new URL(String(value || ''), locationObject.origin);
+  if (
+    candidate.origin !== locationObject.origin
+    || candidate.username
+    || candidate.password
+    || candidate.hash
+  ) throw new Error('Basemap asset must be same-origin.');
+  const allowed = new Set(placeholders);
+  const absolute = candidate.href.replace(
+    /%7B([A-Za-z][A-Za-z0-9_-]*)%7D/gi,
+    (match, placeholder) => (
+      allowed.has(String(placeholder).toLowerCase())
+        ? `{${String(placeholder).toLowerCase()}}`
+        : match
+    )
+  );
+  if (/%7B|%7D/i.test(absolute)) throw new Error('Basemap asset contains an invalid placeholder.');
+  return absolute;
 }
 
 function europeRuntime(config, style, locationObject) {
   const europe = config.europe;
   const version = String(europe.version);
-  const tileTemplate = sameOriginPath(europe.tile_template, locationObject);
+  const tileTemplate = sameOriginUrl(europe.tile_template, locationObject, ['z', 'x', 'y']);
   if (!tileTemplate.includes('{z}') || !tileTemplate.includes('{x}') || !tileTemplate.includes('{y}')) {
     throw new Error('Europe basemap tile template is incomplete.');
   }
@@ -39,6 +65,9 @@ function europeRuntime(config, style, locationObject) {
   if (!source || source.type !== 'vector') {
     throw new Error('Europe basemap style source is missing.');
   }
+  if (typeof style.glyphs !== 'string' || typeof style.sprite !== 'string') {
+    throw new Error('Europe basemap style assets are incomplete.');
+  }
   const separator = tileTemplate.includes('?') ? '&' : '?';
   source.tiles = [`${tileTemplate}${separator}v=${encodeURIComponent(version)}`];
   source.minzoom = Number.isFinite(Number(europe.minzoom)) ? Number(europe.minzoom) : 0;
@@ -46,6 +75,8 @@ function europeRuntime(config, style, locationObject) {
   if (Array.isArray(europe.bounds) && europe.bounds.length === 4) {
     source.bounds = europe.bounds.map(Number);
   }
+  style.glyphs = sameOriginUrl(style.glyphs, locationObject, ['fontstack', 'range']);
+  style.sprite = sameOriginUrl(style.sprite, locationObject);
   style.metadata = {
     ...(style.metadata || {}),
     'openkataster:runtime-version': version

@@ -11,7 +11,7 @@ const layers = new Map(style.layers.map((layer) => [layer.id, layer]));
 
 function assetVersion(source, asset) {
   const escaped = asset.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = source.match(new RegExp(`${escaped}\\?v=([A-Za-z0-9._-]+)`));
+  const match = source.match(new RegExp(`(?:^|/)${escaped}\\?v=([A-Za-z0-9._-]+)`));
   assert.ok(match, `${asset} muss mit einem Cache-Buster referenziert werden.`);
   return match[1];
 }

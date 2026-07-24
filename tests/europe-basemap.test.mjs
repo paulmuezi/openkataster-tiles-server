@@ -26,7 +26,7 @@ globalThis.window = {
 const europe = {
   available: true,
   version: 'europe-20260723-z15',
-  style_url: '/viewer-assets/europe-basemap-style-20260724-bkg1/style.json',
+  style_url: '/viewer-assets/europe-basemap-style-20260724-bkg2/style.json',
   tile_template: '/api/v1/basemap/europe/{z}/{x}/{y}.mvt',
   minzoom: 0,
   maxzoom: 15,
@@ -66,7 +66,7 @@ assert.equal(
 );
 
 const style = JSON.parse(readFileSync(
-  new URL('../live-viewer/europe-basemap-style-20260724-bkg1/style.json', import.meta.url),
+  new URL('../live-viewer/europe-basemap-style-20260724-bkg2/style.json', import.meta.url),
   'utf8'
 ));
 const fetchCalls = [];
@@ -90,7 +90,7 @@ assert.equal(runtime.profile, 'europe');
 assert.equal(runtime.version, 'europe-20260723-z15');
 assert.deepEqual(fetchCalls, [
   '/api/v1/basemap/config',
-  '/viewer-assets/europe-basemap-style-20260724-bkg1/style.json'
+  '/viewer-assets/europe-basemap-style-20260724-bkg2/style.json'
 ]);
 assert.deepEqual(runtime.style.sources.openkataster_europe.tiles, [
   'https://tiles.openkataster.de/api/v1/basemap/europe/{z}/{x}/{y}.mvt?v=europe-20260723-z15'
@@ -205,6 +205,7 @@ assert.equal(
 dispose();
 
 assert.equal(style.version, 8);
+assert.equal(style.metadata['openkataster:profile'], 'europe-de-at-bkg-v3');
 assert.equal(style.sources.openkataster_europe.type, 'vector');
 assert.equal(
   style.sources.openkataster_europe.tiles[0],
@@ -259,14 +260,67 @@ assert.deepEqual(
   style.layers.find((layer) => layer.id === 'availability-unavailable-countries-mask')?.filter,
   ['!in', 'ISO_A3', 'DEU', 'AUT']
 );
+assert.equal(
+  style.layers.find((layer) => layer.id === 'availability-unavailable-countries-mask')
+    ?.paint['fill-color'],
+  '#ffffff',
+  'Nicht unterstützte Länder müssen vollständig weiß maskiert sein.'
+);
+assert.equal(
+  style.layers.find((layer) => layer.id === 'availability-unavailable-countries-mask')
+    ?.paint['fill-opacity'],
+  1,
+  'Die weiße Verfügbarkeitsmaske darf die darunterliegende Europakarte nicht durchscheinen lassen.'
+);
+const supportedRegionBoundaries = style.layers.find(
+  (layer) => layer.id === 'availability-supported-region-boundaries'
+);
+assert.equal(supportedRegionBoundaries?.minzoom, 4.9);
+assert.equal(supportedRegionBoundaries?.maxzoom, 9);
+assert.deepEqual(
+  supportedRegionBoundaries?.filter,
+  ['all', ['==', 'kind', 'region'], ['==', 'kind_detail', 4]]
+);
+assert.equal(supportedRegionBoundaries?.paint['line-color'], '#f86d14');
+const supportedCountriesOutline = style.layers.find(
+  (layer) => layer.id === 'availability-supported-countries-outline'
+);
+assert.equal(supportedCountriesOutline?.minzoom, 4.9);
+assert.equal(supportedCountriesOutline?.maxzoom, 9);
+assert.deepEqual(
+  supportedCountriesOutline?.filter,
+  ['in', 'ISO_A3', 'DEU', 'AUT']
+);
+assert.equal(supportedCountriesOutline?.paint['line-color'], '#f86d14');
+const supportedRegionBoundaryIndex = style.layers.indexOf(supportedRegionBoundaries);
+const unsupportedCountriesMaskIndex = style.layers.findIndex(
+  (layer) => layer.id === 'availability-unavailable-countries-mask'
+);
+const supportedCountriesOutlineIndex = style.layers.indexOf(supportedCountriesOutline);
+assert.ok(
+  supportedRegionBoundaryIndex < unsupportedCountriesMaskIndex,
+  'Regionale Grenzen müssen unter der Maske nicht unterstützter Länder liegen.'
+);
+assert.ok(
+  unsupportedCountriesMaskIndex < supportedCountriesOutlineIndex,
+  'Die Außenkontur der unterstützten Länder muss über der weißen Maske liegen.'
+);
 assert.equal(style.sources.availability_europe.type, 'geojson');
 assert.deepEqual(
   style.layers.find((layer) => layer.id === 'availability-germany-fill')?.filter,
   ['==', 'ISO_A3', 'DEU']
 );
+assert.equal(
+  style.layers.find((layer) => layer.id === 'availability-germany-fill')?.paint['fill-color'],
+  '#fffdee'
+);
 assert.deepEqual(
   style.layers.find((layer) => layer.id === 'availability-austria-fill')?.filter,
   ['==', 'ISO_A3', 'AUT']
+);
+assert.equal(
+  style.layers.find((layer) => layer.id === 'availability-austria-fill')?.paint['fill-color'],
+  '#fffdee'
 );
 for (const layer of style.layers) {
   if (!('source' in layer)) continue;

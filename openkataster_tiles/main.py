@@ -79,7 +79,7 @@ EUROPE_BASEMAP_ROOT = Path(
 EUROPE_BASEMAP_ENV_MODE = os.environ.get("OPENKATASTER_EUROPE_BASEMAP_MODE", "off")
 EUROPE_BASEMAP_STYLE_URL = os.environ.get(
     "OPENKATASTER_EUROPE_BASEMAP_STYLE_URL",
-    "/viewer-assets/europe-basemap-style-20260724-bkg1/style.json",
+    "/viewer-assets/europe-basemap-style-20260724-bkg2/style.json",
 ).strip()
 EUROPE_BASEMAP_ATTRIBUTION = (
     "© OpenStreetMap contributors · "
@@ -337,18 +337,18 @@ BEV_VECTOR_TILE_CONFIGS = {
         "url": "https://kataster.bev.gv.at/tiles/kataster/{z}/{x}/{y}.pbf",
         "minzoom": 0,
         "maxzoom": 16,
-        "attribution": "© BEV",
+        "attribution": "© BEV · Darstellung durch OpenKataster verändert · CC BY 4.0",
         "revision": "bev-kataster-live-v1",
     },
     "symbole": {
         "url": "https://kataster.bev.gv.at/tiles/symbole/{z}/{x}/{y}.pbf",
         "minzoom": 13,
         "maxzoom": 16,
-        "attribution": "© BEV",
+        "attribution": "© BEV · Darstellung durch OpenKataster verändert · CC BY 4.0",
         "revision": "bev-symbole-live-v1",
     },
 }
-BEV_ATTRIBUTION = "© BEV"
+BEV_ATTRIBUTION = "© BEV · Darstellung durch OpenKataster verändert · CC BY 4.0"
 BEV_LICENSE_NAME = "Creative Commons Namensnennung 4.0 International (CC BY 4.0)"
 BEV_LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/"
 AUSTRIA_OBJECT_DATA_STATUS = (
@@ -716,7 +716,7 @@ LOCAL_STATE_METADATA = {
         "country_code": "AT",
         "datenstand": "Darstellung tagesaktuell",
         "objektdatenstand": AUSTRIA_OBJECT_DATA_STATUS,
-        "quellenvermerk": "© BEV",
+        "quellenvermerk": BEV_ATTRIBUTION,
         "lizenz": BEV_LICENSE_NAME,
         "lizenz_url": BEV_LICENSE_URL,
         "source_url": "https://kataster.bev.gv.at/",

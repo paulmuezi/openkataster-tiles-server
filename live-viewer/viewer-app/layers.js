@@ -25,33 +25,33 @@ export const COUNTRY_OVERVIEW_LABELS = Object.freeze({
 });
 export const AUSTRIA_USAGE_COLOR = Object.freeze([
   'match', ['to-number', ['get', 'ns']],
-  40, '#FFF5BF',
+  40, '#FFFDEE',
   42, '#FFFFFF',
-  48, '#FFF5BF',
-  52, '#EAFFD3',
-  53, '#FFF5BF',
-  54, '#EAFFD3',
-  55, '#DFF0B6',
-  56, '#DFF0B6',
-  57, '#EAFFD3',
+  48, '#FFFDEE',
+  52, '#F1F8EC',
+  53, '#FFFDEE',
+  54, '#F1F8EC',
+  55, '#EAF5E4',
+  56, '#EAF5E4',
+  57, '#F1F8EC',
   58, '#FFFFFF',
-  59, '#DCEFFF',
-  60, '#DCEFFF',
-  61, '#EAFFD3',
-  62, '#F2F2EE',
-  63, '#EDEDED',
-  64, '#DCEFFF',
+  59, '#E8F5FA',
+  60, '#E8F5FA',
+  61, '#F1F8EC',
+  62, '#F4F4F1',
+  63, '#F0F0EE',
+  64, '#E8F5FA',
   65, '#FFFFFF',
-  71, '#EDEDED',
-  72, '#E0FFD8',
-  76, '#E0FFD8',
-  83, '#FFEAF4',
-  84, '#EDEDED',
-  87, '#F2F2EE',
-  88, '#DCEFFF',
+  71, '#F0F0EE',
+  72, '#EDF8E8',
+  76, '#EDF8E8',
+  83, '#FDF1F6',
+  84, '#F0F0EE',
+  87, '#F4F4F1',
+  88, '#E8F5FA',
   92, '#FFFFFF',
   95, '#FFFFFF',
-  96, '#E0FFD8',
+  96, '#EDF8E8',
   '#FFFDEE'
 ]);
 
@@ -421,7 +421,7 @@ export function createLayerController({
       source: AT_SYMBOL_SOURCE_ID,
       'source-layer': 'sli',
       minzoom: 15,
-      paint: { 'line-color': '#466278', 'line-width': ['interpolate', ['linear'], ['zoom'], 15, .45, 20, 1] }
+      paint: { 'line-color': '#74797d', 'line-width': ['interpolate', ['linear'], ['zoom'], 15, .45, 20, 1] }
     });
     add({
       id: `${AT_LAYER_PREFIX}building-fills`,
@@ -430,7 +430,7 @@ export function createLayerController({
       'source-layer': 'nfl',
       minzoom: AT_DETAIL_ZOOM,
       filter: ['==', ['to-number', ['get', 'ns']], 41],
-      paint: { 'fill-color': '#f3b4ae', 'fill-opacity': 1 }
+      paint: { 'fill-color': '#d7d7d3', 'fill-opacity': 1 }
     });
     add({
       id: `${AT_LAYER_PREFIX}building-lines`,
@@ -440,7 +440,7 @@ export function createLayerController({
       minzoom: AT_DETAIL_ZOOM,
       filter: ['==', ['to-number', ['get', 'ns']], 41],
       paint: {
-        'line-color': '#8a4b46',
+        'line-color': '#4e5054',
         'line-width': ['interpolate', ['linear'], ['zoom'], 14, .45, 20, 1.35],
         'line-opacity': 1
       }

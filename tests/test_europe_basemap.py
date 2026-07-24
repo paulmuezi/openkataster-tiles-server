@@ -168,7 +168,7 @@ class EuropeBasemapTests(unittest.TestCase):
         self.assertEqual(payload["europe"]["version"], self.version)
         self.assertEqual(
             payload["europe"]["style_url"],
-            "/viewer-assets/europe-basemap-style-20260724-bkg1/style.json",
+            "/viewer-assets/europe-basemap-style-20260724-bkg2/style.json",
         )
         self.assertEqual(
             payload["europe"]["tile_template"],

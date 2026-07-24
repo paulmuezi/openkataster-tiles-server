@@ -82,7 +82,7 @@ jobs:
         run: |
           npm ci
           npm run build-style
-          git diff --exit-code -- ../../live-viewer/europe-basemap-style-20260724-bkg1/style.json
+          git diff --exit-code -- ../../live-viewer/europe-basemap-style-20260724-bkg2/style.json
 
   image:
     runs-on: ubuntu-latest

@@ -11,6 +11,9 @@ const packageMetadata = JSON.parse(readFileSync(
   'utf8'
 ));
 const regionDetailMinZoom = 6.8;
+const overviewMinZoom = 4.9;
+const overviewBoundaryMaxZoom = 9;
+const brandOrange = '#f86d14';
 const availabilityCountries = ['DEU', 'AUT'];
 const availabilityAssetVersion = '20260724-de-at1';
 
@@ -160,23 +163,78 @@ if (countryLabels) {
 }
 const countryLabelIndex = generatedLayers.findIndex((layer) => layer.id === 'places_country');
 if (countryLabelIndex >= 0) {
-  generatedLayers.splice(countryLabelIndex, 0, {
-    id: 'availability-unavailable-countries-mask',
-    type: 'fill',
-    source: 'availability_europe',
-    filter: ['!in', 'ISO_A3', ...availabilityCountries],
-    paint: {
-      'fill-color': '#f3f3f1',
-      'fill-opacity': 0.94
+  generatedLayers.splice(
+    countryLabelIndex,
+    0,
+    {
+      id: 'availability-supported-region-boundaries',
+      type: 'line',
+      source: 'openkataster_europe',
+      'source-layer': 'boundaries',
+      minzoom: overviewMinZoom,
+      maxzoom: overviewBoundaryMaxZoom,
+      filter: [
+        'all',
+        ['==', 'kind', 'region'],
+        ['==', 'kind_detail', 4]
+      ],
+      paint: {
+        'line-color': brandOrange,
+        'line-width': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          overviewMinZoom,
+          0.8,
+          7,
+          1.1,
+          overviewBoundaryMaxZoom,
+          1.3
+        ],
+        'line-opacity': 0.9
+      }
+    },
+    {
+      id: 'availability-unavailable-countries-mask',
+      type: 'fill',
+      source: 'availability_europe',
+      filter: ['!in', 'ISO_A3', ...availabilityCountries],
+      paint: {
+        'fill-color': '#ffffff',
+        'fill-opacity': 1
+      }
+    },
+    {
+      id: 'availability-supported-countries-outline',
+      type: 'line',
+      source: 'availability_europe',
+      minzoom: overviewMinZoom,
+      maxzoom: overviewBoundaryMaxZoom,
+      filter: ['in', 'ISO_A3', ...availabilityCountries],
+      paint: {
+        'line-color': brandOrange,
+        'line-width': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          overviewMinZoom,
+          1,
+          7,
+          1.35,
+          overviewBoundaryMaxZoom,
+          1.6
+        ],
+        'line-opacity': 0.95
+      }
     }
-  });
+  );
 }
 
 const style = {
   version: 8,
   name: 'OpenKataster Europa',
   metadata: {
-    'openkataster:profile': 'europe-de-at-bkg-v2',
+    'openkataster:profile': 'europe-de-at-bkg-v3',
     'openkataster:data-build': '20260723',
     'openkataster:available-countries': 'DE,AT',
     'openkataster:style-generator': `@protomaps/basemaps@${packageMetadata.version}`,
@@ -221,7 +279,7 @@ for (const layer of style.layers) {
 
 const outputPath = resolve(
   repositoryRoot,
-  'live-viewer/europe-basemap-style-20260724-bkg1/style.json'
+  'live-viewer/europe-basemap-style-20260724-bkg2/style.json'
 );
 mkdirSync(resolve(outputPath, '..'), { recursive: true });
 writeFileSync(outputPath, `${JSON.stringify(style, null, 2)}\n`);

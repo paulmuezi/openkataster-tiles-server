@@ -115,6 +115,7 @@ export function createExportController({
   elements,
   datasetProfile = { terminology: {} },
   countryResolver = null,
+  basemapRuntime = { profile: 'national', version: '' },
   onOfficeMode = false,
   onWorkspaceChange = () => {}
 }) {
@@ -601,6 +602,8 @@ export function createExportController({
       version: 2,
       countries,
       dataset: countries.length > 1 ? 'deutschland-oesterreich' : countries[0] === 'AT' ? 'oesterreich' : 'deutschland',
+      basemap_profile: basemapRuntime.profile,
+      basemap_revision: basemapRuntime.version,
       layers: state.layers,
       selection: highlight ? {
         parcels: state.selection.parcels.map((item) => selectedFeature(item, 'parcel')),

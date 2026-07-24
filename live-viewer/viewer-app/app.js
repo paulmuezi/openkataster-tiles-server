@@ -1,13 +1,14 @@
 import { createUnifiedApi } from './api.js?v=20260723-unified1';
-import { createExportController } from './export.js?v=20260723-unified1';
-import { createLayerController } from './layers.js?v=20260724-bounds1';
+import { installEuropeBasemapFailover, resolvePlannerBasemap } from './basemap.js?v=20260724-europe1';
+import { createExportController } from './export.js?v=20260724-europe1';
+import { createLayerController } from './layers.js?v=20260724-europe1';
 import { createLayout } from './layout.js?v=20260719-table-autofit1';
-import { createPlannerMap } from './map.js?v=20260723-unified1';
+import { createPlannerMap } from './map.js?v=20260724-europe1';
 import { createMeasureController } from './measure.js?v=20260719-free-preview-controls1';
 import { createPersistence, readPersistedState } from './persistence.js?v=20260723-unified1';
 import { createSearchController } from './search.js?v=20260723-unified1';
 import { createSelectionController } from './selection.js?v=20260723-table2';
-import { createSourceController } from './sources.js?v=20260723-country1';
+import { createSourceController } from './sources.js?v=20260724-europe1';
 import { createStore } from './store.js';
 import {
   applyDatasetTerminology,
@@ -61,17 +62,26 @@ applyDatasetTerminology(datasetProfile);
 app.dataset.shellTransitioning = 'false';
 const headerAccountLink = document.getElementById('headerAccountLink');
 const welcomeDefaultView = { lng: 9.84841, lat: 52.32984, zoom: 16.5 };
+const basemapRuntime = await resolvePlannerBasemap();
 const map = createPlannerMap({
   container: document.getElementById('map'),
   savedView: (initialFocusDataset === 'oesterreich' ? { lng: 14.20, lat: 47.60, zoom: 6.6 } : null)
     || saved?.view
     || (shellMode === 'welcome' ? welcomeDefaultView : null),
+  basemapRuntime,
   datasetProfile
 });
+installEuropeBasemapFailover(map, basemapRuntime);
 window.__openKatasterPlannerMap = map;
 window.__okMap = map;
+window.__openKatasterBasemap = {
+  profile: basemapRuntime.profile,
+  mode: basemapRuntime.mode,
+  version: basemapRuntime.version
+};
 document.body.dataset.surface = surface;
 document.body.dataset.preview = preview ? 'true' : 'false';
+document.body.dataset.basemapProfile = basemapRuntime.profile;
 document.documentElement.dataset.onoffice = onOfficeMode ? 'true' : 'false';
 document.body.dataset.onoffice = onOfficeMode ? 'true' : 'false';
 document.documentElement.dataset.shellMode = shellMode;
@@ -122,7 +132,14 @@ if (onOfficeMode) {
 }
 
 const layout = createLayout({ app, map, store, elements });
-const layers = createLayerController({ map, store, elements, datasetProfile, countryResolver });
+const layers = createLayerController({
+  map,
+  store,
+  elements,
+  datasetProfile,
+  countryResolver,
+  basemapRuntime
+});
 let exportController = null;
 function applyStateExportCapabilities(state) {
   exportController?.setStateCapabilities(state);
@@ -134,8 +151,9 @@ const sources = createSourceController({
   elements,
   layerController: layers,
   datasetProfile,
+  basemapRuntime,
   onStateCapabilities: applyStateExportCapabilities,
-  showCompactAttribution: () => false
+  showCompactAttribution: () => basemapRuntime.profile === 'europe'
 });
 const selection = createSelectionController({
   map,
@@ -165,6 +183,7 @@ exportController = createExportController({
   elements,
   datasetProfile,
   countryResolver,
+  basemapRuntime,
   onOfficeMode,
   onWorkspaceChange: scheduleWorkspaceChanged
 });

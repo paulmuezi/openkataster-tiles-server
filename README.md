@@ -18,6 +18,7 @@ Production layout on the tiles server:
 /opt/openkataster-tiles                 # Git checkout and Docker Compose
 /srv/openkataster-tiles/data            # active PMTiles and SQLite feature/search files
 /srv/openkataster-tiles/active          # version manifests and active state
+/srv/openkataster-tiles/basemaps/europe # versioned Europe basemap and feature mode
 /srv/openkataster-tiles/cache           # PMTiles, mosaic, raster and runtime caches
 /srv/openkataster-tiles/geocoder        # optional central geocoder databases
 /srv/openkataster-tiles/plz             # optional postcode/OpenPLZ databases
@@ -61,8 +62,48 @@ Important variables:
 - `OPENKATASTER_TILE_DATA_DIR`
 - `OPENKATASTER_TILE_ACTIVE_VOLUME_ROOT`
 - `OPENKATASTER_VIEWER_ROOT`
+- `OPENKATASTER_EUROPE_BASEMAP_ROOT`
+- `OPENKATASTER_EUROPE_BASEMAP_MODE`
+- `OPENKATASTER_EUROPE_BASEMAP_STYLE_URL`
 - `OPENKATASTER_TILE_ADMIN_KEYS`
 - `OPENKATASTER_TILE_PRO_TOKENS`
+
+## Europe basemap runtime
+
+The self-hosted Europe map is independent from the cadastral state runtimes.
+Its production directory has this layout:
+
+```text
+basemaps/europe/
+├── versions/
+│   └── europe-YYYYMMDD-z15/
+│       ├── basemap.pmtiles
+│       └── manifest.json
+├── active -> versions/europe-YYYYMMDD-z15
+└── mode
+```
+
+`manifest.json` uses schema version 1 and contains `version`, `pmtiles`,
+`sha256`, `size_bytes`, `minzoom`, `maxzoom`, `bounds`, `attribution`,
+`source`, and a pinned source/license inventory. The current daily archive
+contains OpenStreetMap data and an unrendered Daylight/Overture `landcover`
+layer derived from ESA WorldCover 2020. Both attributions are retained in the
+manifest, public configuration, style and source panel even though OpenKataster
+does not render that layer. The service accepts only an `active` symlink whose target and both
+runtime files remain below the configured `versions` directory. Verify the
+archive hash before activation, create a replacement symlink, and rename it
+over `active`; never modify an active version in place.
+Restart every tiles API worker after the switch and verify with `lsof +L1`
+before deleting the previous archive. The runtime cache is bounded to two
+readers, keyed by resolved path, inode, modification time, and size, and all
+readers are closed during graceful shutdown.
+
+The feature mode is `off`, `preview`, or `on`. A root-level `mode` file
+overrides the environment and is also changed through write-and-rename. An
+invalid mode, pointer, manifest, file size, or PMTiles header fails closed and
+leaves the national maps as fallback. Runtime state is public at
+`GET /api/v1/basemap/config`; versioned tiles are served from
+`GET /api/v1/basemap/europe/{z}/{x}/{y}.mvt?v=VERSION`.
 
 ## Viewer
 

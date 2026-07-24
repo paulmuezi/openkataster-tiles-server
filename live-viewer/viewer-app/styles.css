@@ -65,6 +65,10 @@ html[data-shell-mode="welcome"] .source-button,
 html[data-shell-mode="welcome"] .source-panel { display: none !important; }
 html[data-shell-mode="welcome"] .osm-attribution,
 html[data-shell-mode="welcome"] .poi-search-marker { display: none !important; }
+html[data-preview="true"] body[data-basemap-profile="europe"] .osm-attribution,
+html[data-shell-mode="welcome"] body[data-basemap-profile="europe"] .osm-attribution {
+  display: block !important;
+}
 html[data-shell-mode="welcome"] .planner-app {
   --sidebar-width: 0px !important;
   --table-height: 0px !important;

@@ -94,12 +94,17 @@ export function enableMiddleMousePan(map, {
   return cleanup;
 }
 
-export function createPlannerMap({ container, savedView, datasetProfile = { id: 'deutschland', defaultView: { lng: 10.45, lat: 51.16, zoom: 4.05 } } }) {
+export function createPlannerMap({
+  container,
+  savedView,
+  basemapRuntime = null,
+  datasetProfile = { id: 'deutschland', defaultView: { lng: 10.45, lat: 51.16, zoom: 4.05 } }
+}) {
   const hashView = parseHashView(window.location.hash);
   const view = hashView || savedView || datasetProfile.defaultView;
   const map = new maplibregl.Map({
     container,
-    style: '/viewer-assets/viewer-app/bkg-style.json?v=20260723-unified1',
+    style: basemapRuntime?.style || '/viewer-assets/viewer-app/bkg-style.json?v=20260724-europe1',
     center: [view.lng, view.lat],
     zoom: view.zoom,
     bearing: 0,

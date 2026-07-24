@@ -1,0 +1,11 @@
+{
+  "name": "openkataster-europe-basemap-build",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build-style": "node generate-style.mjs"
+  },
+  "dependencies": {
+    "@protomaps/basemaps": "5.7.2"
+  }
+}

@@ -12,6 +12,8 @@ env:
   PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/openkataster_tiles
   OPENKATASTER_TILE_DATA_DIR: ${{ github.workspace }}/.ci/data
   OPENKATASTER_VIEWER_ROOT: ${{ github.workspace }}/live-viewer
+  OPENKATASTER_EUROPE_BASEMAP_ROOT: ${{ github.workspace }}/.ci/basemaps/europe
+  OPENKATASTER_EUROPE_BASEMAP_MODE: "off"
   OPENKATASTER_POSTCODE_AREAS_DB: ${{ github.workspace }}/.ci/plz/postcode_areas.sqlite
   OPENKATASTER_OPENPLZ_DB: ${{ github.workspace }}/.ci/plz/openplz.sqlite
   OPENKATASTER_TILE_ACTIVE_VOLUME_ROOT: ${{ github.workspace }}/.ci/active
@@ -28,9 +30,9 @@ jobs:
       - name: Install runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pillow cryptography
+          python -m pip install -r requirements.txt pillow cryptography httpx==0.28.1
       - name: Prepare isolated runtime paths
-        run: mkdir -p .ci/data .ci/plz .ci/active
+        run: mkdir -p .ci/data .ci/plz .ci/active .ci/basemaps/europe
       - name: Run runtime regressions
         run: >-
           python -m unittest -v
@@ -40,6 +42,7 @@ jobs:
           tests.test_austria_feature_normalization
           tests.test_cadastre_wms_proxy
           tests.test_luftbild_proxy
+          tests.test_europe_basemap
 
   producer-python:
     runs-on: ubuntu-latest
@@ -54,7 +57,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pillow cryptography
       - name: Prepare isolated runtime paths
-        run: mkdir -p .ci/data .ci/plz .ci/active
+        run: mkdir -p .ci/data .ci/plz .ci/active .ci/basemaps/europe
       - name: Run upload and producer regressions
         run: >-
           python -m unittest -v
@@ -72,6 +75,14 @@ jobs:
           node-version: "22"
       - name: Run viewer regressions
         run: node --test tests/*.test.mjs
+      - name: Verify Europe basemap operations contract
+        run: bash scripts/europe-basemap/tests/run.sh
+      - name: Verify generated Europe basemap style
+        working-directory: scripts/europe-basemap
+        run: |
+          npm ci
+          npm run build-style
+          git diff --exit-code -- ../../live-viewer/europe-basemap-style-20260724/style.json
 
   image:
     runs-on: ubuntu-latest

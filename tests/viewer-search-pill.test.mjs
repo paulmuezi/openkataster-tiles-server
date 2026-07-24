@@ -53,11 +53,15 @@ assert.match(stylesSource, /html\[data-shell-mode="welcome"\] \.search-control/)
 assert.match(appSource, /'searchControl','searchPanel','searchModeButton','addressFields','parcelFields'/);
 assert.doesNotMatch(appSource, /'searchButton'|'searchClose'|'searchMode'|'parcelModeLabel'/);
 assert.match(appSource, /\.\/search\.js\?v=20260723-unified1/);
-assert.match(appSource, /\.\/sources\.js\?v=20260723-country1/);
-assert.match(indexSource, /styles\.css\?v=20260723-unified1/);
-assert.match(indexSource, /app\.js\?v=20260724-unified7/);
+assert.match(appSource, /\.\/sources\.js\?v=20260724-europe1/);
+assert.match(indexSource, /styles\.css\?v=20260724-europe1/);
+assert.match(indexSource, /app\.js\?v=20260724-europe1/);
 assert.match(indexSource, /id="osmAttribution"[^>]+openstreetmap\.org\/copyright[^>]+hidden/);
-assert.match(appSource, /showCompactAttribution: \(\) => false/, 'the production viewer must never reveal compact OSM attribution');
+assert.match(
+  appSource,
+  /showCompactAttribution: \(\) => basemapRuntime\.profile === 'europe'/,
+  'Die OSM-Namensnennung muss ausschließlich mit der Europa-Grundkarte dauerhaft sichtbar sein.'
+);
 assert.match(sourcesSource, /showCompactAttribution = \(\) => false/, 'future source-controller instances default to hidden attribution');
 assert.match(sourcesSource, /compactAttributionDurationMs = 5000/);
 assert.match(sourcesSource, /compactAttributionCollapsed/);

@@ -5,6 +5,7 @@ export function createSourceController({
   elements,
   layerController,
   datasetProfile = { detailZoom: 17 },
+  basemapRuntime = { profile: 'national' },
   onStateCapabilities = () => {},
   showCompactAttribution = () => false,
   compactAttributionDurationMs = 5000
@@ -15,6 +16,12 @@ export function createSourceController({
   let compactAttributionTimer = 0;
 
   function activeOsmAttribution() {
+    if (basemapRuntime.profile === 'europe') {
+      return {
+        text: '© OpenStreetMap-Mitwirkende',
+        href: 'https://www.openstreetmap.org/copyright'
+      };
+    }
     return (metadata?.attributions || []).find((attribution) => (
       attribution?.text
       && attribution?.href
@@ -43,6 +50,7 @@ export function createSourceController({
   }
 
   function collapseCompactAttribution() {
+    if (basemapRuntime.profile === 'europe') return;
     if (!activeOsmAttribution() || !showCompactAttribution()) return;
     clearCompactAttributionTimer();
     compactAttributionCollapsed = true;
@@ -110,7 +118,17 @@ export function createSourceController({
       { text: ' 2026 ' },
       { text: 'CC BY 4.0', href: 'https://creativecommons.org/licenses/by/4.0/' }
     ]);
-    if (datasetProfile.unified) {
+    if (basemapRuntime.profile === 'europe' && bkgVisible) {
+      appendSource([
+        { text: '© OpenStreetMap-Mitwirkende', href: 'https://www.openstreetmap.org/copyright' },
+        { text: ' · ' },
+        { text: 'Protomaps Basemap', href: 'https://github.com/protomaps/basemaps' },
+        { text: ' · ' },
+        { text: '© ESA WorldCover project 2020', href: 'https://esa-worldcover.org/' },
+        { text: ' / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium · ' },
+        { text: 'CC BY 4.0', href: 'https://creativecommons.org/licenses/by/4.0/' }
+      ]);
+    } else if (datasetProfile.unified) {
       // Both bounded national basemaps can be visible in the same viewport.
       // Listing both is intentionally conservative and avoids missing a
       // mandatory credit along the German-Austrian border.
@@ -154,6 +172,10 @@ export function createSourceController({
     }
     for (const attribution of metadata?.attributions || []) {
       if (!attribution?.text || !attribution?.href) continue;
+      if (
+        basemapRuntime.profile === 'europe'
+        && String(attribution.href).startsWith('https://www.openstreetmap.org/')
+      ) continue;
       appendSource([{ text: attribution.text, href: attribution.href }]);
     }
     appendRow(parts);

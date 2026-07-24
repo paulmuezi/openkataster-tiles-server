@@ -8,6 +8,13 @@ const AT_STREET_LABEL_LAYER_ID = `${AT_LAYER_PREFIX}street-names`;
 const AUSTRIA_SOURCE_BOUNDS = [9.35, 46.3, 17.2, 49.1];
 const NO_STATE_MASK_FILTER = ['==', 'gen', '__openkataster_no_state__'];
 const GERMANY_BASEMAP_SOURCES = new Set(['smarttiles_de', 'germany_geojson', 'states_geojson', 'state_labels_source']);
+const EUROPE_BASEMAP_SOURCE = 'openkataster_europe';
+
+export function resolveLayerFontStack(bold = false, basemapProfile = 'national') {
+  if (!bold) return 'Noto Sans Regular';
+  return basemapProfile === 'europe' ? 'Noto Sans Medium' : 'Noto Sans Bold';
+}
+
 export const COUNTRY_OVERVIEW_MAX_ZOOM = 5.8;
 export const COUNTRY_OVERVIEW_LABELS = Object.freeze({
   type: 'FeatureCollection',
@@ -101,7 +108,8 @@ export function createLayerController({
   store,
   elements,
   datasetProfile = { id: 'deutschland', detailZoom: 17, nationalRegion: '' },
-  countryResolver = null
+  countryResolver = null,
+  basemapRuntime = { profile: 'national' }
 }) {
   const { layerButton, layerMenu, layerInputs, layerZoomNote, layerPresentationNote } = elements;
   const DE_DETAIL_ZOOM = Number(datasetProfile.detailZoomByRegion?.deutschland || datasetProfile.detailZoom || 17);
@@ -114,7 +122,8 @@ export function createLayerController({
   let sourceMetadata = null;
   let activeAerial = '';
   let activeCadastre = '';
-  const basemapVisibility = { deutschland: true, oesterreich: true };
+  const europeBasemap = basemapRuntime.profile === 'europe';
+  const basemapVisibility = { deutschland: true, oesterreich: true, europe: true };
 
   function updateLayerOverflowHint() {
     if (!layerControl || !layerMenu || layerMenu.hidden) {
@@ -194,6 +203,7 @@ export function createLayerController({
   }
 
   function addAustriaBasemap() {
+    if (europeBasemap) return;
     if (!map.getSource('openkataster-austria-overview')) {
       map.addSource('openkataster-austria-overview', {
         type: 'geojson',
@@ -258,7 +268,7 @@ export function createLayerController({
         maxzoom: COUNTRY_OVERVIEW_MAX_ZOOM,
         layout: {
           'text-field': ['get', 'name'],
-          'text-font': ['Noto Sans Bold'],
+          'text-font': [resolveLayerFontStack(true, basemapRuntime.profile)],
           'text-size': ['interpolate', ['linear'], ['zoom'], 3.2, 15, COUNTRY_OVERVIEW_MAX_ZOOM, 21],
           'text-letter-spacing': .04,
           'text-allow-overlap': true,
@@ -455,7 +465,7 @@ export function createLayerController({
       minzoom: 16,
       layout: {
         'text-field': ['coalesce', ['get', 'gnr'], ''],
-        'text-font': ['Noto Sans Bold'],
+        'text-font': [resolveLayerFontStack(true, basemapRuntime.profile)],
         'text-size': ['interpolate', ['linear'], ['zoom'], 16, 9, 20, 13],
         'text-rotate': ['*', -1, ['coalesce', ['to-number', ['get', 'rot']], 0]],
         'text-allow-overlap': true,
@@ -554,7 +564,7 @@ export function createLayerController({
       id, type: 'symbol', source: SOURCE_ID, 'source-layer': 'labels', minzoom: DE_DETAIL_ZOOM, filter,
       layout: {
         'text-field': ['coalesce', ['get', 'text_content'], ''],
-        'text-font': [bold ? 'Noto Sans Bold' : 'Noto Sans Regular'],
+        'text-font': [resolveLayerFontStack(bold, basemapRuntime.profile)],
         'text-size': ['interpolate', ['linear'], ['zoom'], 17, baseSize, 19, baseSize + 2, 20, baseSize + 4],
         'text-rotation-alignment': 'map',
         'text-rotate': ['*', -1, ['coalesce', ['to-number', ['get', 'render_rotation']], 0]],
@@ -679,7 +689,9 @@ export function createLayerController({
     basemapVisibility[dataset] = visible;
     for (const layer of map.getStyle().layers || []) {
       const source = String(layer.source || '');
-      const matches = dataset === 'oesterreich'
+      const matches = dataset === 'europe'
+        ? source === EUROPE_BASEMAP_SOURCE
+        : dataset === 'oesterreich'
         ? source === 'basemap-at'
         : GERMANY_BASEMAP_SOURCES.has(source);
       if (!layer.id || !matches) continue;
@@ -774,8 +786,12 @@ export function createLayerController({
     const detailBackground = (detail && (
       (layers.alkis && sourceReady(activeCadastre || (austria ? AT_KATASTER_SOURCE_ID : SOURCE_ID)))
     )) || (aerialDetail && layers.aerial && sourceReady(activeAerial));
-    setBasemapVisible('deutschland', !(!austria && detailBackground));
-    setBasemapVisible('oesterreich', !(austria && aerialDetail && layers.aerial && sourceReady(activeAerial)));
+    if (europeBasemap) {
+      setBasemapVisible('europe', !detailBackground);
+    } else {
+      setBasemapVisible('deutschland', !(!austria && detailBackground));
+      setBasemapVisible('oesterreich', !(austria && aerialDetail && layers.aerial && sourceReady(activeAerial)));
+    }
     for (const input of layerInputs) {
       input.checked = !!layers[input.dataset.layer];
       const isSublayer = !['alkis', 'aerial'].includes(input.dataset.layer);
@@ -828,7 +844,7 @@ export function createLayerController({
   map.on('zoom', () => apply());
   map.on('moveend', () => apply());
   map.on('sourcedata', (event) => {
-    if ([SOURCE_ID, AT_KATASTER_SOURCE_ID, AT_SYMBOL_SOURCE_ID, activeAerial, activeCadastre].includes(event.sourceId)) apply();
+    if ([SOURCE_ID, AT_KATASTER_SOURCE_ID, AT_SYMBOL_SOURCE_ID, EUROPE_BASEMAP_SOURCE, activeAerial, activeCadastre].includes(event.sourceId)) apply();
   });
   store.subscribe((state, reason) => { if (reason === 'layers' || reason === 'restore') apply(state); });
   return {
@@ -839,7 +855,7 @@ export function createLayerController({
     currentAerialZoom,
     viewportIntersectsAustria: () => countryResolver?.intersectsAustria?.(map.getBounds()) === true,
     viewportInsideAustria: () => countryResolver?.containsAustria?.(map.getBounds()) === true,
-    isBasemapVisible: () => basemapVisibility[currentDataset()],
+    isBasemapVisible: () => basemapVisibility[europeBasemap ? 'europe' : currentDataset()],
     setSourceMetadata(metadata) {
       sourceMetadata = metadata || null;
       apply();

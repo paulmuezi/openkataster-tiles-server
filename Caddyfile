@@ -6,7 +6,7 @@ tiles.openkataster.de {
 
 
 :8081 {
-	@trusted remote_ip 46.224.214.20 127.0.0.1 ::1
+	@trusted remote_ip 46.224.214.20 127.0.0.1 172.18.0.1 ::1
 	handle @trusted {
 		encode gzip zstd
 		reverse_proxy tiles-api:8080

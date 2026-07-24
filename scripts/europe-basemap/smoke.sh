@@ -121,7 +121,7 @@ ok_require_command curl
 ok_require_command python3
 TEMP_DIR=$(mktemp -d)
 
-curl \
+HEALTH_STATUS=$(curl \
   --fail \
   --silent \
   --show-error \
@@ -131,7 +131,23 @@ curl \
   --connect-timeout 5 \
   --max-time 20 \
   --output "${TEMP_DIR}/health.json" \
-  "${BASE_URL}/health"
+  --write-out '%{http_code}' \
+  "${BASE_URL}/health")
+[[ $HEALTH_STATUS == "200" ]] \
+  || ok_die "Health-Endpunkt muss HTTP 200 liefern, erhielt $HEALTH_STATUS."
+python3 - "${TEMP_DIR}/health.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"health response is not valid JSON: {exc}") from exc
+if not isinstance(payload, dict) or payload.get("status") != "ok":
+    raise SystemExit("health response must be a JSON object with status='ok'")
+PY
 
 curl \
   --fail \

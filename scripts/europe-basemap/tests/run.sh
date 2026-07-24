@@ -53,6 +53,7 @@ fi
 grep -Fq 'zu klein' <<<"$ADOPT_OUTPUT"
 
 python3 -m unittest -v "${TEST_DIR}/test_validate_release.py"
+bash "${TEST_DIR}/test_smoke_health.sh"
 
 if [[ $(uname -s) == "Linux" ]]; then
   bash "${TEST_DIR}/test_mode_state.sh"
@@ -73,6 +74,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     "${SCRIPT_DIR}/smoke.sh" \
     "${SCRIPT_DIR}/verify-release.sh" \
     "${TEST_DIR}/run.sh" \
+    "${TEST_DIR}/test_smoke_health.sh" \
     "${TEST_DIR}/test_mode_state.sh"
 fi
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# lib.sh is checked separately; the tests source it through a canonical runtime path.
+# shellcheck disable=SC1091
 set -Eeuo pipefail
 IFS=$'\n\t'
 export PYTHONDONTWRITEBYTECODE=1

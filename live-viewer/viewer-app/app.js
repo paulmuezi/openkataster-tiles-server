@@ -1,6 +1,6 @@
 import { createUnifiedApi } from './api.js?v=20260723-unified1';
 import { createExportController } from './export.js?v=20260723-unified1';
-import { createLayerController } from './layers.js?v=20260724-opacity1';
+import { createLayerController } from './layers.js?v=20260724-bounds1';
 import { createLayout } from './layout.js?v=20260719-table-autofit1';
 import { createPlannerMap } from './map.js?v=20260723-unified1';
 import { createMeasureController } from './measure.js?v=20260719-free-preview-controls1';
@@ -605,7 +605,9 @@ window.addEventListener('message', (event) => {
 
 if (onOfficeMode) window.addEventListener('pagehide', publishWorkspaceChanged);
 
-const mapReady = new Promise((resolve) => map.once('load', resolve));
+const mapReady = map.loaded()
+  ? Promise.resolve()
+  : new Promise((resolve) => map.once('load', resolve));
 mapReady.then(() => {
   mapLoaded = true;
   elements.zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`;

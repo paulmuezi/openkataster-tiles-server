@@ -79,6 +79,12 @@ assert.deepEqual(
 );
 assert.match(layerSource, /id: AT_STREET_OVERLAY_LAYER_ID,[\s\S]*source: AT_STREET_OVERLAY_SOURCE_ID/);
 assert.match(layerSource, /bmapoverlay\/normal\/google3857/);
+assert.match(layerSource, /const AUSTRIA_SOURCE_BOUNDS = \[9\.35, 46\.3, 17\.2, 49\.1\]/);
+assert.equal(
+  (layerSource.match(/bounds: AUSTRIA_SOURCE_BOUNDS/g) || []).length,
+  2,
+  'Both BEV vector sources must be constrained to Austria.'
+);
 assert.match(layerSource, /id: AT_STREET_LABEL_LAYER_ID,[\s\S]*\['get', 'text'\][\s\S]*\['get', 'rot_nr'\]/);
 assert.match(
   layerSource,

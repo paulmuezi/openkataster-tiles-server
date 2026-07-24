@@ -9,7 +9,7 @@ const stylesSource = readFileSync(new URL('../live-viewer/viewer-app/styles.css'
 assert.match(indexSource, /dataset\.preview = okParams\.get\('preview'\) === '1' \? 'true' : 'false'/);
 assert.match(indexSource, /dataset\.shellMode = okParams\.get\('welcome'\) === '1' \? 'welcome' : 'planner'/);
 assert.match(indexSource, /styles\.css\?v=20260723-unified1/);
-assert.match(indexSource, /app\.js\?v=20260724-unified6/);
+assert.match(indexSource, /app\.js\?v=20260724-unified7/);
 
 // The old preview contract remains isolated and non-persistent.
 assert.match(appSource, /const preview = params\.get\('preview'\) === '1'/);
@@ -45,7 +45,8 @@ assert.match(appSource, /message\.version === WORKSPACE_VERSION && message\.data
 assert.match(appSource, /if \(!hasCurrentParentContract\(message\)\) return;/);
 assert.match(appSource, /mapLoaded = true/);
 assert.match(appSource, /app\.dataset\.ready = 'true'/);
-assert.match(appSource, /if \(!mapLoaded\) return;/);
+assert.match(appSource, /function publishShellMode[\s\S]*if \(!mapLoaded\) return;/);
+assert.match(appSource, /const mapReady = map\.loaded\(\)[\s\S]*Promise\.resolve\(\)[\s\S]*map\.once\('load', resolve\)/);
 assert.match(appSource, /selection\.setWelcomeMode\(mode === 'welcome'\)/);
 assert.match(appSource, /app\.dataset\.shellTransitioning = 'true'/);
 assert.match(appSource, /publishShellMode\(\{ settleLayout: true \}\)/);

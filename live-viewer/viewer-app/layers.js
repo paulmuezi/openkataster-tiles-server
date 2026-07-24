@@ -7,6 +7,7 @@ const AT_LAYER_PREFIX = 'at-kataster-';
 const AT_STREET_OVERLAY_SOURCE_ID = 'basemap-at-overlay';
 const AT_STREET_OVERLAY_LAYER_ID = `${AT_LAYER_PREFIX}street-overlay`;
 const AT_STREET_LABEL_LAYER_ID = `${AT_LAYER_PREFIX}street-names`;
+const AUSTRIA_SOURCE_BOUNDS = [9.35, 46.3, 17.2, 49.1];
 const NO_STATE_MASK_FILTER = ['==', 'gen', '__openkataster_no_state__'];
 const GERMANY_BASEMAP_SOURCES = new Set(['smarttiles_de', 'germany_geojson', 'states_geojson', 'state_labels_source']);
 export const COUNTRY_OVERVIEW_MAX_ZOOM = 5.8;
@@ -377,13 +378,15 @@ export function createLayerController({
       type: 'vector',
       tiles: [`${window.location.origin}/api/v1/bev/tiles/kataster/{z}/{x}/{y}.pbf?v=bev-kataster-live-v1`],
       minzoom: 0,
-      maxzoom: 16
+      maxzoom: 16,
+      bounds: AUSTRIA_SOURCE_BOUNDS
     });
     map.addSource(AT_SYMBOL_SOURCE_ID, {
       type: 'vector',
       tiles: [`${window.location.origin}/api/v1/bev/tiles/symbole/{z}/{x}/{y}.pbf?v=bev-symbole-live-v1`],
       minzoom: 13,
-      maxzoom: 16
+      maxzoom: 16,
+      bounds: AUSTRIA_SOURCE_BOUNDS
     });
     const before = firstToolLayer();
     const add = (layer) => map.addLayer(layer, before);

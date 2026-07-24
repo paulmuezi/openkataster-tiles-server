@@ -107,7 +107,7 @@ export function createPlannerMap({
   });
   const map = new maplibregl.Map({
     container,
-    style: basemapRuntime?.style || '/viewer-assets/viewer-app/bkg-style.json?v=20260724-europe3',
+    style: basemapRuntime?.style || '/viewer-assets/viewer-app/bkg-style.json?v=20260724-europe4',
     center: [view.lng, view.lat],
     zoom: view.zoom,
     bearing: 0,

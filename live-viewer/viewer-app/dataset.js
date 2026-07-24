@@ -308,14 +308,6 @@ export function austriaBasemapStyle() {
         minzoom: 0,
         maxzoom: 19,
         attribution: 'Grundkarte: basemap.at'
-      },
-      'basemap-at-overlay': {
-        type: 'raster',
-        tiles: ['https://mapsneu.wien.gv.at/basemap/bmapoverlay/normal/google3857/{z}/{y}/{x}.png'],
-        tileSize: 256,
-        minzoom: 0,
-        maxzoom: 20,
-        attribution: 'Datenquelle: basemap.at'
       }
     },
     layers: [

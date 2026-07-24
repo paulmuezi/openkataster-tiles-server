@@ -52,7 +52,6 @@ OLD_ACTIVE=""
 OLD_PREVIOUS=""
 OLD_MODE="off"
 OLD_MODE_FILE_PRESENT=0
-OLD_MODE_SOURCE=""
 
 restart_runtime() {
   local deadline
@@ -272,7 +271,7 @@ RELEASE_DIR="${ROOT}/versions/${VERSION}"
 ok_capture_link_version "$ROOT" active OLD_ACTIVE
 ok_capture_link_version "$ROOT" previous OLD_PREVIOUS
 ok_capture_runtime_mode_state \
-  "$ROOT" "$API_URL" OLD_MODE OLD_MODE_FILE_PRESENT OLD_MODE_SOURCE
+  "$ROOT" "$API_URL" OLD_MODE OLD_MODE_FILE_PRESENT
 
 if [[ -n $EXPECT_ACTIVE ]]; then
   if [[ $EXPECT_ACTIVE == "none" ]]; then

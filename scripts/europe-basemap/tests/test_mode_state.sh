@@ -4,7 +4,7 @@ IFS=$'\n\t'
 
 TEST_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 SCRIPT_DIR="$(cd -- "${TEST_DIR}/.." && pwd -P)"
-# shellcheck source=../lib.sh
+# shellcheck source=lib.sh
 source "${SCRIPT_DIR}/lib.sh"
 
 TEMP_ROOT=$(mktemp -d)
@@ -52,9 +52,9 @@ ok_capture_runtime_mode_state \
 [[ $RUNTIME_FILE_PRESENT == "0" ]]
 [[ $RUNTIME_MODE_SOURCE == "environment" ]]
 
-grep -Fq -- '--expect-mode "$MODE"' "${SCRIPT_DIR}/rollback-release.sh"
-grep -Fq 'smoke_mode "$OLD_MODE" "$ACTIVE"' "${SCRIPT_DIR}/set-mode.sh"
-grep -Fq 'smoke_all off "" "$OLD_MODE" || restore_failed=1' \
+grep -Fq -- "--expect-mode \"\$MODE\"" "${SCRIPT_DIR}/rollback-release.sh"
+grep -Fq "smoke_mode \"\$OLD_MODE\" \"\$ACTIVE\"" "${SCRIPT_DIR}/set-mode.sh"
+grep -Fq "smoke_all off \"\" \"\$OLD_MODE\" || restore_failed=1" \
   "${SCRIPT_DIR}/activate-release.sh"
 
 printf 'europe-basemap-mode-state-tests=ok\n'

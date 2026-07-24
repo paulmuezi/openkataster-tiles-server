@@ -208,8 +208,8 @@ ok_capture_runtime_mode_state() {
   local root=$1
   local base_url=$2
   local mode_variable=$3
-  local file_present_variable=$4
-  local source_variable=$5
+  local file_present_variable=${4:-}
+  local source_variable=${5:-}
   local local_mode=""
   local local_file_present=0
   local runtime_mode=""
@@ -224,8 +224,12 @@ ok_capture_runtime_mode_state() {
       || ok_die "Tiles-API meldet unerwartet eine Mode-Datei."
   fi
   printf -v "$mode_variable" '%s' "$runtime_mode"
-  printf -v "$file_present_variable" '%s' "$local_file_present"
-  printf -v "$source_variable" '%s' "$runtime_source"
+  if [[ -n $file_present_variable ]]; then
+    printf -v "$file_present_variable" '%s' "$local_file_present"
+  fi
+  if [[ -n $source_variable ]]; then
+    printf -v "$source_variable" '%s' "$runtime_source"
+  fi
 }
 
 ok_restore_mode_state() {

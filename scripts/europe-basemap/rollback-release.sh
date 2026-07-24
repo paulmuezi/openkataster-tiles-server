@@ -95,10 +95,7 @@ PREVIOUS=""
 ok_capture_link_version "$ROOT" active ACTIVE
 ok_capture_link_version "$ROOT" previous PREVIOUS
 MODE=""
-MODE_FILE_PRESENT=0
-MODE_SOURCE=""
-ok_capture_runtime_mode_state \
-  "$ROOT" "$API_URL" MODE MODE_FILE_PRESENT MODE_SOURCE
+ok_capture_runtime_mode_state "$ROOT" "$API_URL" MODE
 [[ -n $ACTIVE ]] || ok_die "Kein aktiver Europe-Basemap-Release vorhanden."
 [[ -n $PREVIOUS ]] || ok_die "Kein previous-Release für einen Rollback vorhanden."
 [[ $ACTIVE != "$PREVIOUS" ]] || ok_die "active und previous zeigen auf dieselbe Version."

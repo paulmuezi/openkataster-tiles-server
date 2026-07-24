@@ -40,8 +40,7 @@ restore_on_error() {
     set +e
     restore_temp="${RELEASE_DIR}/.manifest.json.restore.$$"
     install -m 0644 -- "$BACKUP_PATH" "$restore_temp"
-    mv -Tf -- "$restore_temp" "${RELEASE_DIR}/manifest.json"
-    if [[ $? != "0" ]]; then
+    if ! mv -Tf -- "$restore_temp" "${RELEASE_DIR}/manifest.json"; then
       ok_warn "KRITISCH: Das alte Manifest konnte nicht automatisch wiederhergestellt werden."
       exit_code=2
     else
@@ -109,12 +108,9 @@ ok_acquire_lock "$ROOT"
 ACTIVE=""
 PREVIOUS=""
 MODE=""
-MODE_FILE_PRESENT=0
-MODE_SOURCE=""
 ok_capture_link_version "$ROOT" active ACTIVE
 ok_capture_link_version "$ROOT" previous PREVIOUS
-ok_capture_runtime_mode_state \
-  "$ROOT" "$API_URL" MODE MODE_FILE_PRESENT MODE_SOURCE
+ok_capture_runtime_mode_state "$ROOT" "$API_URL" MODE
 [[ $MODE == "off" ]] || ok_die "Manifestmigration ist ausschließlich im live bestätigten Modus off erlaubt."
 [[ $ACTIVE != "$VERSION" ]] || ok_die "Das Manifest einer aktiven Version darf nicht migriert werden."
 [[ $PREVIOUS != "$VERSION" ]] || ok_die "Das Manifest einer previous-Version darf nicht migriert werden."

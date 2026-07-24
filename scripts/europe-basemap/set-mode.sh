@@ -80,9 +80,8 @@ ok_assert_safe_root "$ROOT"
 ok_acquire_lock "$ROOT"
 OLD_MODE=""
 OLD_MODE_FILE_PRESENT=0
-OLD_MODE_SOURCE=""
 ok_capture_runtime_mode_state \
-  "$ROOT" "$API_URL" OLD_MODE OLD_MODE_FILE_PRESENT OLD_MODE_SOURCE
+  "$ROOT" "$API_URL" OLD_MODE OLD_MODE_FILE_PRESENT
 ACTIVE=""
 ok_capture_link_version "$ROOT" active ACTIVE
 

@@ -1,4 +1,4 @@
-const LEGACY_STYLE_URL = '/viewer-assets/viewer-app/bkg-style.json?v=20260724-europe1';
+const LEGACY_STYLE_URL = '/viewer-assets/viewer-app/bkg-style.json?v=20260724-europe3';
 const CONFIG_URL = '/api/v1/basemap/config';
 const EUROPE_SOURCE_ID = 'openkataster_europe';
 const VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
@@ -74,6 +74,10 @@ function europeRuntime(config, style, locationObject) {
   source.maxzoom = Number.isFinite(Number(europe.maxzoom)) ? Number(europe.maxzoom) : 15;
   if (Array.isArray(europe.bounds) && europe.bounds.length === 4) {
     source.bounds = europe.bounds.map(Number);
+  }
+  for (const candidate of Object.values(style.sources || {})) {
+    if (candidate?.type !== 'geojson' || typeof candidate.data !== 'string') continue;
+    candidate.data = sameOriginUrl(candidate.data, locationObject);
   }
   style.glyphs = sameOriginUrl(style.glyphs, locationObject, ['fontstack', 'range']);
   style.sprite = sameOriginUrl(style.sprite, locationObject);

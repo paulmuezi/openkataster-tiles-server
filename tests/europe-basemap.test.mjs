@@ -11,6 +11,10 @@ import {
   selectBasemapProfile
 } from '../live-viewer/viewer-app/basemap.js';
 import { resolveLayerFontStack } from '../live-viewer/viewer-app/layers.js';
+import {
+  resolvePlannerMapLimits,
+  shouldShowBasemapAvailability
+} from '../live-viewer/viewer-app/map.js';
 
 globalThis.window = {
   location: new URL('https://tiles.openkataster.de/planer'),
@@ -22,7 +26,7 @@ globalThis.window = {
 const europe = {
   available: true,
   version: 'europe-20260723-z15',
-  style_url: '/viewer-assets/europe-basemap-style-20260724/style.json',
+  style_url: '/viewer-assets/europe-basemap-style-20260724-bkg1/style.json',
   tile_template: '/api/v1/basemap/europe/{z}/{x}/{y}.mvt',
   minzoom: 0,
   maxzoom: 15,
@@ -62,7 +66,7 @@ assert.equal(
 );
 
 const style = JSON.parse(readFileSync(
-  new URL('../live-viewer/europe-basemap-style-20260724/style.json', import.meta.url),
+  new URL('../live-viewer/europe-basemap-style-20260724-bkg1/style.json', import.meta.url),
   'utf8'
 ));
 const fetchCalls = [];
@@ -86,7 +90,7 @@ assert.equal(runtime.profile, 'europe');
 assert.equal(runtime.version, 'europe-20260723-z15');
 assert.deepEqual(fetchCalls, [
   '/api/v1/basemap/config',
-  '/viewer-assets/europe-basemap-style-20260724/style.json'
+  '/viewer-assets/europe-basemap-style-20260724-bkg1/style.json'
 ]);
 assert.deepEqual(runtime.style.sources.openkataster_europe.tiles, [
   'https://tiles.openkataster.de/api/v1/basemap/europe/{z}/{x}/{y}.mvt?v=europe-20260723-z15'
@@ -99,6 +103,12 @@ assert.equal(
   runtime.style.sprite,
   'https://tiles.openkataster.de/viewer-assets/europe-basemap-assets-protomaps-028c18f7/sprites/v4/light'
 );
+assert.equal(
+  runtime.style.sources.availability_europe.data,
+  'https://tiles.openkataster.de/viewer-assets/viewer-app/overlays/europe-countries.json?v=20260724-de-at1'
+);
+assert.equal(runtime.style.sources.availability_germany, undefined);
+assert.equal(runtime.style.sources.availability_austria, undefined);
 
 const resolveUnsafeRuntime = async ({ europeOverride = {}, styleOverride = {} }) => (
   resolvePlannerBasemap({
@@ -132,6 +142,20 @@ assert.equal(
 assert.equal(
   (await resolveUnsafeRuntime({
     styleOverride: { sprite: 'https://example.invalid/sprites/light' }
+  })).profile,
+  'national'
+);
+assert.equal(
+  (await resolveUnsafeRuntime({
+    styleOverride: {
+      sources: {
+        ...style.sources,
+        availability_europe: {
+          ...style.sources.availability_europe,
+          data: 'https://example.invalid/europe.json'
+        }
+      }
+    }
   })).profile,
   'national'
 );
@@ -198,12 +222,22 @@ assert.equal(
 );
 assert.equal(
   style.layers.find((layer) => layer.id === 'places_region')?.minzoom,
-  5.8,
+  6.8,
   'Regionen/Bundesländer dürfen in der Länderübersicht nicht beschriften.'
 );
 assert.equal(
+  style.layers.find((layer) => layer.id === 'places_locality')?.minzoom,
+  6.8,
+  'Ortsnamen dürfen die Länderübersicht nicht überladen.'
+);
+assert.equal(
+  style.layers.find((layer) => layer.id === 'places_subplace')?.minzoom,
+  6.8,
+  'Ortsteile dürfen die Länderübersicht nicht überladen.'
+);
+assert.equal(
   style.layers.find((layer) => layer.id === 'boundaries')?.minzoom,
-  5.8,
+  6.8,
   'Regionale Grenzen dürfen in der Länderübersicht nicht erscheinen.'
 );
 assert.equal(
@@ -211,9 +245,55 @@ assert.equal(
   undefined,
   'Staatsgrenzen müssen in der Länderübersicht sichtbar bleiben.'
 );
+assert.equal(style.metadata['openkataster:available-countries'], 'DE,AT');
+assert.equal(style.layers.find((layer) => layer.id === 'background')?.paint['background-color'], '#ffffff');
+assert.equal(style.layers.find((layer) => layer.id === 'earth')?.paint['fill-color'], '#ffffff');
+assert.equal(style.layers.find((layer) => layer.id === 'water')?.paint['fill-color'], '#e2ffff');
+assert.equal(style.layers.find((layer) => layer.id === 'buildings')?.paint['fill-color'], '#aaa9a7');
+assert.equal(style.layers.find((layer) => layer.id === 'landuse_residential')?.paint['fill-color'], '#ffeaf4');
+assert.deepEqual(
+  style.layers.find((layer) => layer.id === 'places_country')?.filter,
+  ['all', ['==', 'kind', 'country'], ['in', 'wikidata', 'Q183', 'Q40']]
+);
+assert.deepEqual(
+  style.layers.find((layer) => layer.id === 'availability-unavailable-countries-mask')?.filter,
+  ['!in', 'ISO_A3', 'DEU', 'AUT']
+);
+assert.equal(style.sources.availability_europe.type, 'geojson');
+assert.deepEqual(
+  style.layers.find((layer) => layer.id === 'availability-germany-fill')?.filter,
+  ['==', 'ISO_A3', 'DEU']
+);
+assert.deepEqual(
+  style.layers.find((layer) => layer.id === 'availability-austria-fill')?.filter,
+  ['==', 'ISO_A3', 'AUT']
+);
 for (const layer of style.layers) {
-  if ('source' in layer) assert.equal(layer.source, 'openkataster_europe');
+  if (!('source' in layer)) continue;
+  assert.ok(
+    ['openkataster_europe', 'availability_europe'].includes(layer.source),
+    `Unerwartete Style-Quelle: ${layer.source}`
+  );
 }
+
+assert.deepEqual(resolvePlannerMapLimits({ profile: 'national' }), {
+  minZoom: 3.2,
+  maxBounds: undefined
+});
+assert.deepEqual(resolvePlannerMapLimits({ profile: 'europe' }), {
+  minZoom: 4.9,
+  maxBounds: [[-4.0, 41.5], [27.0, 59.0]]
+});
+assert.equal(shouldShowBasemapAvailability({ profile: 'europe' }, 4.9), true);
+assert.equal(shouldShowBasemapAvailability({ profile: 'europe' }, 7), true);
+assert.equal(shouldShowBasemapAvailability({ profile: 'europe' }, 7.01), false);
+assert.equal(shouldShowBasemapAvailability({ profile: 'national' }, 4.9), false);
+
+const viewerIndex = readFileSync(
+  new URL('../live-viewer/viewer-app/index.html', import.meta.url),
+  'utf8'
+);
+assert.match(viewerIndex, /Verfügbar in Deutschland und Österreich/);
 
 const assetRoot = new URL(
   '../live-viewer/europe-basemap-assets-protomaps-028c18f7/',

@@ -1,9 +1,12 @@
 import { createUnifiedApi } from './api.js?v=20260723-unified1';
-import { installEuropeBasemapFailover, resolvePlannerBasemap } from './basemap.js?v=20260724-europe2';
+import { installEuropeBasemapFailover, resolvePlannerBasemap } from './basemap.js?v=20260724-europe3';
 import { createExportController } from './export.js?v=20260724-europe1';
 import { createLayerController } from './layers.js?v=20260724-europe1';
 import { createLayout } from './layout.js?v=20260719-table-autofit1';
-import { createPlannerMap } from './map.js?v=20260724-europe1';
+import {
+  createPlannerMap,
+  shouldShowBasemapAvailability
+} from './map.js?v=20260724-europe3';
 import { createMeasureController } from './measure.js?v=20260719-free-preview-controls1';
 import { createPersistence, readPersistedState } from './persistence.js?v=20260723-unified1';
 import { createSearchController } from './search.js?v=20260723-unified1';
@@ -122,7 +125,7 @@ const elements = Object.fromEntries([
   'layerButton','layerMenu','layerZoomNote','layerPresentationNote','searchControl','searchPanel','searchModeButton','addressFields','parcelFields','addressInput','gemarkungInput','flurInput','parcelInput','searchSuggestions','gemarkungSuggestions','searchSubmit','searchResults','searchStatus',
   'measurePanel','measureValues','measureLocked','measureDistance','measureAngleLabel','measureAngle','measureLongitude','measureLatitude','measureCumulative','measureArea','osmAttribution','sourceButton','sourcePanel','sourceList',
   'exportFrame','exportPageBox','exportFrameBox','exportCenterMarker','exportOutput','exportPaper','exportOrientationField','exportOrientation','exportScale','exportLayout','exportHighlight','exportSummary','exportStatus','exportPreview','exportClose','mobileExportSettings','mobileExportBackdrop',
-  'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge','exportProBadge','exportLocked'
+  'noticePanel','noticeClose','noticeTitle','noticeText','zoomBadge','basemapAvailability','exportProBadge','exportLocked'
 ].map((id) => [id, document.getElementById(id)]));
 elements.layerInputs = [...document.querySelectorAll('[data-layer]')];
 if (onOfficeMode) {
@@ -225,7 +228,19 @@ store.subscribe((state, reason) => {
   }
 });
 
-map.on('zoom', () => { elements.zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`; });
+function updateBasemapAvailability() {
+  if (!elements.basemapAvailability) return;
+  elements.basemapAvailability.hidden = !shouldShowBasemapAvailability(
+    basemapRuntime,
+    map.getZoom()
+  );
+}
+map.on('zoom', () => {
+  elements.zoomBadge.textContent = `Zoom ${map.getZoom().toFixed(2)}`;
+  updateBasemapAvailability();
+});
+map.on('load', updateBasemapAvailability);
+updateBasemapAvailability();
 map.on('moveend', scheduleWorkspaceChanged);
 function postToParent(type, payload = {}) {
   if (!window.parent || window.parent === window) return;

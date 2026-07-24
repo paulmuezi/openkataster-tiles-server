@@ -79,7 +79,7 @@ EUROPE_BASEMAP_ROOT = Path(
 EUROPE_BASEMAP_ENV_MODE = os.environ.get("OPENKATASTER_EUROPE_BASEMAP_MODE", "off")
 EUROPE_BASEMAP_STYLE_URL = os.environ.get(
     "OPENKATASTER_EUROPE_BASEMAP_STYLE_URL",
-    "/viewer-assets/europe-basemap-style-20260724/style.json",
+    "/viewer-assets/europe-basemap-style-20260724-bkg1/style.json",
 ).strip()
 EUROPE_BASEMAP_ATTRIBUTION = (
     "© OpenStreetMap contributors · "

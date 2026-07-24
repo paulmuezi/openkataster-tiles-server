@@ -38,6 +38,7 @@ html[data-preview="true"] .tool-stack,
 html[data-preview="true"] .measure-panel,
 html[data-preview="true"] .layer-control,
 html[data-preview="true"] .zoom-badge,
+html[data-preview="true"] .basemap-availability,
 html[data-preview="true"] .brand-mark,
 html[data-preview="true"] .export-frame,
 html[data-preview="true"] .selection-dock,
@@ -54,6 +55,7 @@ html[data-shell-mode="welcome"] .tool-stack,
 html[data-shell-mode="welcome"] .measure-panel,
 html[data-shell-mode="welcome"] .layer-control,
 html[data-shell-mode="welcome"] .zoom-badge,
+html[data-shell-mode="welcome"] .basemap-availability,
 html[data-shell-mode="welcome"] .brand-mark,
 html[data-shell-mode="welcome"] .export-frame,
 html[data-shell-mode="welcome"] .selection-dock,
@@ -312,6 +314,34 @@ select:focus, input:focus { border-color: rgba(248,109,20,.72); box-shadow: 0 0 
 .swatch.aerial > span { position: absolute; z-index: 1; left: 4px; bottom: 1px; width: 1px; height: 6px; background: #fff; transform: rotate(-36deg); transform-origin: bottom; }
 
 .zoom-badge { position: absolute; z-index: 15; left: 50%; bottom: 10px; transform: translateX(-50%); padding: 6px 11px; border-radius: 999px; background: rgba(255,255,255,.95); box-shadow: 0 3px 12px rgba(24,30,39,.1); font-size: 12px; font-weight: 450; pointer-events: none; }
+.basemap-availability {
+  position: absolute;
+  z-index: 15;
+  left: 50%;
+  bottom: 48px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 7px 12px;
+  border: 1px solid rgba(90, 94, 98, .18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .93);
+  box-shadow: 0 3px 12px rgba(24, 30, 39, .1);
+  color: #4f5660;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.basemap-availability span {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border: 1px solid #b9b7a7;
+  border-radius: 2px;
+  background: #fffdee;
+  vertical-align: -1px;
+}
 .source-control { position: absolute; z-index: 25; right: 0; bottom: 2px; }
 .osm-attribution { position: absolute; right: 28px; bottom: 5px; width: max-content; max-width: calc(100vw - 150px); padding: 1px 5px; border-radius: 2px; background: rgba(255,255,255,.88); color: #59616c; font-size: 10px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .source-button { position: absolute; right: 5px; bottom: 0; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: rgba(255,255,255,.96); box-shadow: 0 2px 8px rgba(24,30,39,.13); cursor: pointer; font-size: 12px; font-weight: 600; }
@@ -435,6 +465,12 @@ fieldset input { width: 16px; height: 16px; padding: 0; accent-color: var(--ok-o
   :root { --sidebar-open: 0px; --table-height-open: min(42vh, 300px); --mobile-export-bar-height: 142px; --mobile-measure-bar-height: 117px; --mobile-measure-lock-row-height: 34px; }
   .planner-app[data-measure-panel-locked="true"] { --mobile-measure-bar-height: calc(117px + var(--mobile-measure-lock-row-height)); }
   .maplibregl-ctrl-bottom-left, .zoom-badge { bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+  .basemap-availability {
+    bottom: calc(62px + env(safe-area-inset-bottom, 0px));
+    max-width: calc(100% - 24px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .source-control,
   .brand-mark { bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
   .planner-app,

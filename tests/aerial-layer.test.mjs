@@ -42,7 +42,7 @@ assert.match(exportSource, /stateDxfAllowed = !onOfficeMode && state\?\.export\?
 assert.match(exportSource, /option\.hidden = !allowed/);
 assert.match(exportSource, /countryResolver\?\.intersectsAustria\?\.\(frame\) === true/);
 assert.match(appSource, /\.\/layers\.js\?v=20260724-europe1/);
-assert.match(indexSource, /app\.js\?v=20260724-europe2/);
-assert.match(indexSource, /styles\.css\?v=20260724-europe1/);
+assert.match(indexSource, /app\.js\?v=20260724-europe4/);
+assert.match(indexSource, /styles\.css\?v=20260724-europe2/);
 
 console.log('aerial-layer-tests=ok');

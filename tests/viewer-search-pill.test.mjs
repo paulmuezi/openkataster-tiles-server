@@ -12,20 +12,20 @@ assert.match(indexSource, /id="searchPanel"[^>]*data-advanced="false"[^>]*role="
 assert.doesNotMatch(indexSource, /id="searchPanel"[^>]*hidden/, 'the planner search surface is always expanded');
 assert.doesNotMatch(indexSource, /id="(searchButton|searchClose|searchMode|parcelModeLabel)"/, 'there is no separate open button or search mode');
 assert.match(indexSource, /class="search-leading-icon" aria-hidden="true"/, 'the magnifier is decorative');
-assert.match(indexSource, /<label class="sr-only" for="addressInput">Adresse, Flurstück oder POI suchen<\/label>/);
-assert.match(indexSource, /id="addressInput"[^>]*placeholder="Adresse, Flurstück oder POI suchen"[^>]*role="combobox"/);
-assert.match(indexSource, /id="searchModeButton"[^>]*aria-label="Flurstückssuche mit Feldern öffnen"[^>]*aria-controls="parcelFields"[^>]*aria-expanded="false"/);
+assert.match(indexSource, /<label class="sr-only" for="addressInput">Adresse, Flurstück, Grundstück oder POI suchen<\/label>/);
+assert.match(indexSource, /id="addressInput"[^>]*placeholder="Adresse, Flurstück, Grundstück oder POI suchen"[^>]*role="combobox"/);
+assert.match(indexSource, /id="searchModeButton"[^>]*aria-label="Katasterreferenz mit Feldern öffnen"[^>]*aria-controls="parcelFields"[^>]*aria-expanded="false"/);
 assert.match(indexSource, /id="searchSuggestions"[^>]*role="listbox"[^>]*aria-label="Suchvorschläge"[^>]*hidden/);
 assert.equal((indexSource.match(/role="listbox"/g) || []).length, 1, 'address and parcel suggestions share one listbox');
-assert.match(indexSource, /id="parcelFields"[^>]*role="group"[^>]*aria-label="Flurstückssuche"[^>]*hidden/);
-assert.match(indexSource, /id="parcelFields"[\s\S]*id="searchSubmit"[\s\S]*Flurstück suchen/, 'structured fallback stays within the same surface');
+assert.match(indexSource, /id="parcelFields"[^>]*role="group"[^>]*aria-label="Flurstücks- oder Grundstückssuche"[^>]*hidden/);
+assert.match(indexSource, /id="parcelFields"[\s\S]*id="searchSubmit"[\s\S]*Katasterreferenz suchen/, 'structured fallback stays within the same surface');
 
 assert.match(searchSource, /function setAdvanced\(open\)/);
 assert.match(searchSource, /searchPanel\.dataset\.advanced = advancedOpen \? 'true' : 'false'/);
 assert.match(searchSource, /searchPanel\.dataset\.suggestionsOpen = 'false'/);
 assert.match(searchSource, /searchPanel\.dataset\.suggestionsOpen = results\.length \? 'true' : 'false'/);
 assert.match(searchSource, /searchModeButton\.setAttribute\('aria-expanded', advancedOpen \? 'true' : 'false'\)/);
-assert.match(searchSource, /advancedOpen \? 'Flurstückssuche mit Feldern schließen' : 'Flurstückssuche mit Feldern öffnen'/);
+assert.match(searchSource, /advancedOpen \? 'Katasterreferenz mit Feldern schließen' : 'Katasterreferenz mit Feldern öffnen'/);
 assert.match(searchSource, /searchModeButton\.addEventListener\('click', \(\) => setAdvanced\(!advancedOpen\)\)/);
 assert.match(searchSource, /suggestedResults\[activeSuggestion >= 0 \? activeSuggestion : 0\]/);
 assert.match(searchSource, /else requestSuggestions\(addressInput\.value\.trim\(\), \{ pickFirst: true \}\)/, 'Enter also chooses the first result while autocomplete is still loading');
@@ -52,10 +52,10 @@ assert.match(stylesSource, /html\[data-shell-mode="welcome"\] \.search-control/)
 
 assert.match(appSource, /'searchControl','searchPanel','searchModeButton','addressFields','parcelFields'/);
 assert.doesNotMatch(appSource, /'searchButton'|'searchClose'|'searchMode'|'parcelModeLabel'/);
-assert.match(appSource, /\.\/search\.js\?v=20260722-schwerin-selection1/);
-assert.match(appSource, /\.\/sources\.js\?v=20260722-hybrid-layers1/);
-assert.match(indexSource, /styles\.css\?v=20260722-land-register-table1/);
-assert.match(indexSource, /app\.js\?v=20260722-schwerin-selection1/);
+assert.match(appSource, /\.\/search\.js\?v=20260723-unified1/);
+assert.match(appSource, /\.\/sources\.js\?v=20260723-country1/);
+assert.match(indexSource, /styles\.css\?v=20260723-unified1/);
+assert.match(indexSource, /app\.js\?v=20260724-unified7/);
 assert.match(indexSource, /id="osmAttribution"[^>]+openstreetmap\.org\/copyright[^>]+hidden/);
 assert.match(appSource, /showCompactAttribution: \(\) => false/, 'the production viewer must never reveal compact OSM attribution');
 assert.match(sourcesSource, /showCompactAttribution = \(\) => false/, 'future source-controller instances default to hidden attribution');

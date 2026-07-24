@@ -2,17 +2,22 @@ import { addressLabel, escapeHtml, featureKey, formatArea, polygonAreaMeters } f
 import { normalizeSelectionReferences, selectionFromPayload } from './workspace.js?v=20260722-land-register-table1';
 
 const HIDDEN_DYNAMIC_FIELDS = new Set([
-  'source_db', 'gml_id', 'id', 'geometry', 'bbox', 'center', 'addresses', 'address',
+  'source_db', 'gml_id', 'id', 'preview_id', 'state', 'dataset', 'country', 'country_code',
+  'kind', 'type', 'label', 'subtitle', 'geometry', 'bbox', 'center', 'addresses', 'address',
   'address_relation_count', 'address_relation_limit', 'address_relations_truncated', 'lage',
   'flurstueckskennzeichen',
   'gebaeudekennzeichen',
   'zaehler', 'nenner', 'flurstuecksfolge', 'nutzungen', 'nutzung_haupt',
   'formal_land_register_entries', 'land_register_office_authority',
-  'gemeinde', 'gemeindenummer', 'kreis', 'kreisnummer', 'land', 'landnummer', 'regierungsbezirk'
+  'gemeinde', 'gemeindenummer', 'kreis', 'kreisnummer', 'bezirk', 'bezirksnummer',
+  'bundesland', 'bundeslandnummer', 'land', 'landnummer', 'regierungsbezirk',
+  'anlegungsmassstab', 'flaechenindikator', 'rechtsstatus'
 ]);
 
 const FIELD_LABELS = {
-  gemeindeteil: 'Gemeindeteil'
+  gemeindeteil: 'Gemeindeteil',
+  flaechenbestimmung: 'Flächenbestimmung',
+  rechtsstatus_text: 'Rechtsstatus'
 };
 
 const BUILDING_OFFICIAL_AREA_KEYS = ['amtliche_flaeche_m2', 'grundflaeche_m2'];
@@ -40,6 +45,15 @@ function normalizedDisplayText(value) {
   if (Array.isArray(value)) return value.map(normalizedDisplayText).filter(Boolean).join(', ');
   if (typeof value !== 'string' && typeof value !== 'number') return '';
   return String(value).replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/gi, '').trim();
+}
+
+export function parcelDisplayNumber(item) {
+  return normalizedDisplayText(
+    item?.flurstueck
+      || item?.grundstueck
+      || item?.grundstuecksnummer
+      || [item?.zaehler, item?.nenner].filter(hasValue).join('/')
+  );
 }
 
 function buildingName(item) {
@@ -347,10 +361,92 @@ export function createSelectionController({
   store,
   layout,
   elements,
+  datasetProfile = {
+    id: 'deutschland',
+    terminology: {
+      cadastralDistrict: 'Gemarkung',
+      parcel: 'Flurstück',
+      parcelPlural: 'Flurstücke',
+      parcelNumber: 'Flurstücksnummer',
+      district: 'Flur'
+    }
+  },
   isWelcomeMode = () => false,
   onWelcomePointer = () => {}
 }) {
   const { selectionContent, selectionCount, selectTool, selectionDock } = elements;
+  const terms = datasetProfile.terminology;
+  function isAustriaParcel(item = {}) {
+    const source = String(item.source_db || '').trim().toLocaleLowerCase('de-DE');
+    const state = String(item.state || item.dataset || '').trim().toLocaleLowerCase('de-DE');
+    const available = new Set(Array.isArray(item.available_fields) ? item.available_fields : []);
+    return source === 'austria-bev'
+      || state === 'oesterreich'
+      || state === 'österreich'
+      || available.has('katastralgemeindenummer')
+      || available.has('grundstuecksnummer');
+  }
+
+  function parcelCollectionMode(items = []) {
+    if (!items.length) return 'deutschland';
+    const austriaCount = items.filter(isAustriaParcel).length;
+    if (austriaCount === items.length) return 'oesterreich';
+    return austriaCount ? 'mixed' : 'deutschland';
+  }
+
+  function parcelSectionCopy(items = []) {
+    const mode = parcelCollectionMode(items);
+    if (mode === 'oesterreich') {
+      return {
+        title: 'Grundstücke',
+        lockedMessage: 'Grundstücksinformationen sind im Pro-Plan verfügbar.'
+      };
+    }
+    if (mode === 'mixed') {
+      return {
+        title: 'Flurstücke und Grundstücke',
+        lockedMessage: 'Flurstücks- und Grundstücksinformationen sind im Pro-Plan verfügbar.'
+      };
+    }
+    return {
+      title: 'Flurstücke',
+      lockedMessage: 'Flurstücksinfos sind im Pro-Plan verfügbar.'
+    };
+  }
+
+  function parcelDistrictColumns(items = []) {
+    const mode = parcelCollectionMode(items);
+    const mixed = mode === 'mixed';
+    const austria = mode === 'oesterreich';
+    const columns = [];
+    if (!austria) {
+      columns.push({
+        label: 'Gem.-Schl.',
+        title: 'Gemarkungsschlüssel',
+        keys: ['gemarkungsschluessel', 'gemarkung_key'],
+        compact: true
+      });
+    }
+    columns.push({
+      label: austria ? 'Katastralgemeinde' : mixed ? 'Gemarkung / Katastralgemeinde' : 'Gemarkung',
+      keys: ['gemarkung', 'gemarkungsname', 'gemarkungsnummer', 'katastralgemeinde', 'katastralgemeindenummer'],
+      value: (item) => {
+        const name = normalizedDisplayText(item.gemarkung || item.gemarkungsname || item.katastralgemeinde);
+        if (!isAustriaParcel(item)) return name || normalizedDisplayText(item.gemarkungsnummer);
+        const number = normalizedDisplayText(item.gemarkungsnummer || item.katastralgemeindenummer);
+        return name && number && !name.endsWith(`(${number})`) ? `${name} (${number})` : name || number;
+      },
+      compact: true
+    });
+    if (!austria) columns.push({ label: 'Flur', keys: ['flur'], compact: true });
+    columns.push({
+      label: austria ? 'Grundstück' : mixed ? 'Flurstück / Grundstück' : 'Flurstück',
+      keys: ['flurstueck', 'grundstueck', 'grundstuecksnummer', 'zaehler', 'nenner'],
+      value: parcelDisplayNumber,
+      compact: true
+    });
+    return columns;
+  }
   let request = null;
   let restoreRequest = null;
   let geometryRequest = null;
@@ -721,11 +817,11 @@ export function createSelectionController({
         { kind: 'geometric', label: 'Geometrische Fläche', keys: BUILDING_GEOMETRIC_AREA_KEYS, visible: buildingAreas.showGeometric }
       ])
     ], 'building', 'Gebäudeinfos sind im Pro-Plan verfügbar.'));
-    if (parcels.length) sections.push(lockedPreviewTable('Flurstücke', parcels, [
-      { label: 'Gem.-Schl.', title: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'], compact: true },
-      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], compact: true },
-      { label: 'Flur', keys: ['flur'], compact: true },
-      { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], compact: true },
+    if (parcels.length) {
+      const copy = parcelSectionCopy(parcels);
+      const austriaOnly = parcelCollectionMode(parcels) === 'oesterreich';
+      sections.push(lockedPreviewTable(copy.title, parcels, [
+      ...parcelDistrictColumns(parcels),
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'] },
       { label: 'Lage', keys: ['lage'] },
       { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
@@ -733,12 +829,15 @@ export function createSelectionController({
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'] },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'] },
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], compact: true },
+      { label: 'Rechtsstatus', keys: ['rechtsstatus_text'], compact: austriaOnly },
+      { label: 'Flächenbestimmung', keys: ['flaechenbestimmung'], compact: austriaOnly },
       landRegisterColumn({ preview: true }),
       { label: 'Adressen', keys: ['addresses', 'address'], alwaysVisible: true, slot: 'address' },
       areaColumn([
         { kind: 'official', label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
       ])
-    ], 'parcel', 'Flurstücksinfos sind im Pro-Plan verfügbar.'));
+      ], 'parcel', copy.lockedMessage));
+    }
     return sections.join('');
   }
 
@@ -782,9 +881,9 @@ export function createSelectionController({
     const sampleIndex = (rowIndex * 3 + columnIndex) % 3;
     if (column.slot === 'address') return ['Musterstraße 12', 'Beispielweg 8', 'Am Markt 4'][sampleIndex];
     if (/Gebäudefunktion/i.test(label)) return ['Wohngebäude', 'Nebengebäude', 'Garage'][sampleIndex];
-    if (/Gemarkungsschlüssel|Gem\.-Schl\./i.test(label)) return ['032410', '051230', '160510'][sampleIndex];
-    if (/Gemarkung/i.test(label)) return ['Musterfeld', 'Innenstadt', 'Nord'][sampleIndex];
-    if (/Flurstück/i.test(label)) return ['123/4', '77/9', '4752'][sampleIndex];
+    if (/Gemarkungsschlüssel|Gem\.-Schl\.|Katastralgemeindenummer|KG-Nr\./i.test(label)) return ['032410', '051230', '160510'][sampleIndex];
+    if (/Gemarkung|Katastralgemeinde/i.test(label)) return ['Musterfeld', 'Innenstadt', 'Nord'][sampleIndex];
+    if (/Flurstück|Grundstück/i.test(label)) return ['123/4', '77/9', '4752'][sampleIndex];
     if (/Flur\b/i.test(label)) return ['7', '15', '0'][sampleIndex];
     if (/Baujahr|Entstehung/i.test(label)) return ['1998', '2012', '2021'][sampleIndex];
     if (column.compact) return ['2', '4', '7'][sampleIndex];
@@ -796,14 +895,14 @@ export function createSelectionController({
   }
 
   function selectionActionCell(item, kind) {
-    const noun = kind === 'parcel' ? 'Flurstück' : 'Gebäude';
+    const noun = kind === 'parcel' ? terms.parcel : 'Gebäude';
     return `<td class="selection-action-column compact"><button class="selection-item-remove" type="button" data-selection-remove-kind="${kind}" data-selection-remove-key="${escapeHtml(featureKey(item))}" aria-label="${noun} aus Auswahl entfernen" title="Aus Auswahl entfernen">×</button></td>`;
   }
 
   function previewSelectionActionCell(item, kind) {
     const key = typeof item?.preview_id === 'string' ? item.preview_id.trim() : '';
     if (!key) return '<td class="selection-action-column compact"></td>';
-    const noun = kind === 'parcel' ? 'Flurstück' : 'Gebäude';
+    const noun = kind === 'parcel' ? terms.parcel : 'Gebäude';
     return `<td class="selection-action-column compact"><button class="selection-item-remove" type="button" data-selection-remove-kind="${kind}" data-selection-remove-key="${escapeHtml(key)}" aria-label="${noun} aus Auswahl entfernen" title="Aus Auswahl entfernen">×</button></td>`;
   }
 
@@ -1072,11 +1171,10 @@ export function createSelectionController({
   }
 
   function parcelTable(parcels) {
+    const copy = parcelSectionCopy(parcels);
+    const austriaOnly = parcelCollectionMode(parcels) === 'oesterreich';
     const columns = [
-      { label: 'Gem.-Schl.', title: 'Gemarkungsschlüssel', keys: ['gemarkungsschluessel', 'gemarkung_key'], compact: true },
-      { label: 'Gemarkung', keys: ['gemarkung', 'gemarkungsnummer'], value: (item) => item.gemarkung && item.gemarkungsnummer ? `${item.gemarkung} (${item.gemarkungsnummer})` : item.gemarkung || item.gemarkungsnummer, compact: true },
-      { label: 'Flur', keys: ['flur'], compact: true },
-      { label: 'Flurstück', keys: ['flurstueck', 'zaehler', 'nenner'], value: (item) => item.flurstueck || [item.zaehler, item.nenner].filter(Boolean).join('/'), compact: true },
+      ...parcelDistrictColumns(parcels),
       { label: 'Nutzung', keys: ['nutzungen', 'nutzung_haupt', 'nutzung', 'tatsaechliche_nutzung', 'thema'], value: parcelUsage },
       { label: 'Lage', keys: ['lage'], value: parcelDisplayLocation },
       { label: 'Gemeindeteil', keys: ['gemeindeteil'] },
@@ -1084,16 +1182,18 @@ export function createSelectionController({
       { label: 'Rechtsbehelfsverfahren', keys: ['rechtsbehelfsverfahren'], format: 'boolean' },
       { label: 'Zweifelhafter Nachweis', keys: ['zweifelhafter_flurstuecksnachweis'], format: 'boolean' },
       { label: 'Entstehung', keys: ['zeitpunkt_der_entstehung'], format: 'date', compact: true },
+      { label: 'Rechtsstatus', keys: ['rechtsstatus_text'], compact: austriaOnly },
+      { label: 'Flächenbestimmung', keys: ['flaechenbestimmung'], compact: austriaOnly },
       landRegisterColumn(),
       { label: 'Adressen', keys: ['addresses', 'address'], value: selectionAddressLabels, html: (item) => addressChips(item), alwaysVisible: true, slot: 'address' },
       areaColumn([
         { kind: 'official', label: 'Amtliche Fläche', keys: ['amtliche_flaeche_m2'] }
       ])
     ];
-    return dynamicTable('Flurstücke', parcels, columns, 'parcel');
+    return dynamicTable(copy.title, parcels, columns, 'parcel');
   }
 
-  async function selectAt(lngLat, additive = false, preferredKind = null) {
+  async function selectAt(lngLat, additive = false, preferredKind = null, addressHint = null) {
     request?.abort();
     const controller = new AbortController();
     request = controller;
@@ -1106,7 +1206,9 @@ export function createSelectionController({
       const data = await (access.pro ? api.featureAt : api.featurePreviewAt)(
         lngLat.lng,
         lngLat.lat,
-        controller.signal
+        controller.signal,
+        null,
+        addressHint
       );
       if (controller.signal.aborted || request !== controller) return null;
       const next = store.getState();

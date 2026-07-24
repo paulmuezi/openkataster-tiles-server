@@ -8,18 +8,18 @@ const stylesSource = readFileSync(new URL('../live-viewer/viewer-app/styles.css'
 
 assert.match(indexSource, /dataset\.preview = okParams\.get\('preview'\) === '1' \? 'true' : 'false'/);
 assert.match(indexSource, /dataset\.shellMode = okParams\.get\('welcome'\) === '1' \? 'welcome' : 'planner'/);
-assert.match(indexSource, /styles\.css\?v=20260722-land-register-table1/);
-assert.match(indexSource, /app\.js\?v=20260722-schwerin-selection1/);
+assert.match(indexSource, /styles\.css\?v=20260723-unified1/);
+assert.match(indexSource, /app\.js\?v=20260724-unified7/);
 
 // The old preview contract remains isolated and non-persistent.
 assert.match(appSource, /const preview = params\.get\('preview'\) === '1'/);
-assert.match(appSource, /const saved = preview \|\| onOfficeMode \? null : readPersistedState\(\)/);
-assert.match(appSource, /if \(!preview && !onOfficeMode\) createPersistence\(\{ map, store \}\)/);
+assert.match(appSource, /const saved = preview \|\| onOfficeMode \? null : readPersistedState\(workspaceDataset\)/);
+assert.match(appSource, /if \(!preview && !onOfficeMode\) \{[\s\S]*createPersistence\(\{[\s\S]*dataset: workspaceDataset,[\s\S]*exportWorkspace:/);
 
 // Welcome is presentation-only and can switch without recreating the map.
 assert.match(appSource, /let shellMode = params\.get\('welcome'\) === '1' \? 'welcome' : 'planner'/);
 assert.match(appSource, /const welcomeDefaultView = \{ lng: 9\.84841, lat: 52\.32984, zoom: 16\.5 \}/);
-assert.match(appSource, /saved\?\.view \|\| \(shellMode === 'welcome' \? welcomeDefaultView : null\)/);
+assert.match(appSource, /savedView:[\s\S]*initialFocusDataset === 'oesterreich'[\s\S]*\|\| saved\?\.view[\s\S]*\|\| \(shellMode === 'welcome' \? welcomeDefaultView : null\)/);
 assert.match(appSource, /function setShellMode\(mode\)/);
 assert.match(appSource, /if \(mode === 'welcome'\) sources\.closePanel\(\)/);
 assert.match(appSource, /message\.type === 'openkataster:set-shell-mode'/);
@@ -45,7 +45,8 @@ assert.match(appSource, /message\.version === WORKSPACE_VERSION && message\.data
 assert.match(appSource, /if \(!hasCurrentParentContract\(message\)\) return;/);
 assert.match(appSource, /mapLoaded = true/);
 assert.match(appSource, /app\.dataset\.ready = 'true'/);
-assert.match(appSource, /if \(!mapLoaded\) return;/);
+assert.match(appSource, /function publishShellMode[\s\S]*if \(!mapLoaded\) return;/);
+assert.match(appSource, /const mapReady = map\.loaded\(\)[\s\S]*Promise\.resolve\(\)[\s\S]*map\.once\('load', resolve\)/);
 assert.match(appSource, /selection\.setWelcomeMode\(mode === 'welcome'\)/);
 assert.match(appSource, /app\.dataset\.shellTransitioning = 'true'/);
 assert.match(appSource, /publishShellMode\(\{ settleLayout: true \}\)/);

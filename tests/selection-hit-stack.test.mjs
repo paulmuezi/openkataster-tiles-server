@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 
 import { resolveHitStack, withoutSelectionItem } from '../live-viewer/viewer-app/selection.js';
 import {
+  addressSelectionHintForSearchResult,
   selectionCenterForPoiAddress,
   selectionPreferenceForSearchResult,
   structuredPoiAddress
@@ -189,6 +190,29 @@ assert.equal(selectionPreferenceForSearchResult({
   feature: { house_number: '1' }
 }), null);
 assert.equal(selectionPreferenceForSearchResult({ result_type: 'street' }), null);
+assert.deepEqual(
+  addressSelectionHintForSearchResult({
+    kind: 'address',
+    result_type: 'address',
+    label: 'Eyzinggasse 27, 1110 Wien',
+    address: {
+      street: 'Eyzinggasse',
+      house_number: '27',
+      label: 'Eyzinggasse 27, 1110 Wien'
+    },
+    feature: {
+      source_db: 'austria-bev',
+      gml_id: 'address:6833147'
+    }
+  }),
+  {
+    street: 'Eyzinggasse',
+    houseNumber: '27',
+    label: 'Eyzinggasse 27, 1110 Wien',
+    addressId: '6833147'
+  },
+  'an official Austrian address must carry its trusted relation hint into object selection'
+);
 
 const addressedPoi = {
   kind: 'poi',
@@ -205,6 +229,16 @@ assert.deepEqual(structuredPoiAddress(addressedPoi), {
   postCode: '30159',
   city: 'Hannover'
 });
+assert.deepEqual(
+  addressSelectionHintForSearchResult(addressedPoi),
+  {
+    street: 'Ernst-August-Platz',
+    houseNumber: '1',
+    label: '',
+    addressId: ''
+  },
+  'an addressed POI may reuse the same relation-aware selection path'
+);
 assert.deepEqual(
   selectionCenterForPoiAddress(addressedPoi, [{
     address: { street: 'Ernst August Platz', house_number: '1' },

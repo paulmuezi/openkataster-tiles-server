@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+import { unavailableStateMaskFilter } from '../live-viewer/viewer-app/layers.js';
+
 const layersSource = fs.readFileSync(new URL('../live-viewer/viewer-app/layers.js', import.meta.url), 'utf8');
 const sourcesSource = fs.readFileSync(new URL('../live-viewer/viewer-app/sources.js', import.meta.url), 'utf8');
 const mainSource = fs.readFileSync(new URL('../openkataster_tiles/main.py', import.meta.url), 'utf8');
 const maplibreSource = fs.readFileSync(new URL('../live-viewer/viewer-app/maplibre-gl-5.14.0.js', import.meta.url), 'utf8');
+const basemapStyle = JSON.parse(
+  fs.readFileSync(new URL('../live-viewer/viewer-app/bkg-style.json', import.meta.url), 'utf8')
+);
 
 assert.match(
   layersSource,
@@ -31,6 +36,47 @@ assert.match(
 assert.match(layersSource, /setSourceMetadata\(metadata\)/);
 assert.match(sourcesSource, /layerController\.setSourceMetadata\?\.\(data\)/);
 assert.match(sourcesSource, /cadastre_raster\?\.attribution/);
+
+const noStateMask = ['==', 'gen', '__openkataster_no_state__'];
+const initialMaskLayer = basemapStyle.layers.find(
+  (layer) => layer.id === 'State_Overlay_Bavaria_SaxonyAnhalt_GeoJSON'
+);
+assert.deepEqual(
+  initialMaskLayer?.filter,
+  noStateMask,
+  'Beim ersten Kartenframe darf keine alte weiße Ländermaske sichtbar sein.'
+);
+assert.deepEqual(
+  unavailableStateMaskFilter(null),
+  noStateMask,
+  'Solange Quellenmetadaten laden, darf kein Bundesland vorsorglich weiß abgedeckt werden.'
+);
+assert.deepEqual(
+  unavailableStateMaskFilter({
+    states: [
+      { slug: 'bayern', active: true, visual_active: true },
+      {
+        slug: 'sachsen-anhalt',
+        active: true,
+        visual_active: true,
+        rendering: { cadastre_raster: { tile_template: '/katasterbild/sachsen-anhalt/{z}/{x}/{y}.png' } }
+      }
+    ]
+  }),
+  noStateMask
+);
+assert.deepEqual(
+  unavailableStateMaskFilter({ states: [{ slug: 'bayern', active: true, visual_active: true }] }),
+  ['any', ['==', 'gen', 'Sachsen-Anhalt']]
+);
+const applySource = layersSource.slice(
+  layersSource.indexOf('function apply('),
+  layersSource.indexOf('function applyLayerOrder')
+);
+assert.ok(
+  applySource.indexOf('updateUnavailableStateMask();') < applySource.indexOf('if (!map.isStyleLoaded()) return;'),
+  'Die Ländermaske muss auch während eines laufenden Style-Reloads aktualisiert werden.'
+);
 
 assert.match(mainSource, /KATASTER_WMS_CONFIGS = \{/);
 assert.match(mainSource, /"sachsen-anhalt": \{/);

@@ -463,6 +463,47 @@ const usefulLocationSection = sectionFor(renderSelection({
 assert.match(tablePart(usefulLocationSection, 'thead'), />Lage<\/th>/);
 assert.match(usefulLocationSection, />Hinter dem Deich<\/td>/);
 
+const austriaParcelSection = sectionFor(renderSelection({
+  buildings: [],
+  parcels: [{
+    preview_id: 'austria-parcel-clean',
+    source_db: 'austria-bev',
+    state: 'oesterreich',
+    gemarkung: 'St. Pölten (19544)',
+    katastralgemeindenummer: '19544',
+    grundstuecksnummer: '1543/14',
+    anlegungsmassstab: 1,
+    bezirk: 'Sankt Pölten (Stadt)',
+    bezirksnummer: 302,
+    bundesland: 'Niederösterreich',
+    bundeslandnummer: 3,
+    country_code: 'AT',
+    flaechenbestimmung: 'aus Maßzahlen berechnet',
+    flaechenindikator: '*',
+    rechtsstatus: 'G',
+    rechtsstatus_text: 'Grenzkataster',
+    addresses: ['Mühlweg 14, 3100 St. Pölten'],
+    amtliche_flaeche_m2: 409
+  }]
+}), 'parcel');
+const austriaHeaders = [...tablePart(austriaParcelSection, 'thead').matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)]
+  .map((match) => match[1].replace(/<[^>]+>/g, '').trim())
+  .filter(Boolean);
+assert.deepEqual(
+  austriaHeaders,
+  ['Auswahl', 'Katastralgemeinde', 'Grundstück', 'Rechtsstatus', 'Flächenbestimmung', 'Adressen', 'Amtliche Fläche']
+);
+assert.match(austriaParcelSection, />St\. Pölten \(19544\)<\/td>/);
+assert.match(austriaParcelSection, />1543\/14<\/td>/);
+assert.match(austriaParcelSection, /<td class="compact">Grenzkataster<\/td>/);
+assert.match(austriaParcelSection, /<td class="[^"]*\bcompact\b[^"]*">aus Maßzahlen berechnet<\/td>/);
+assert.match(austriaParcelSection, />409 m²</);
+assert.doesNotMatch(
+  austriaParcelSection,
+  /KG-Nr\.|Anlegungsmassstab|Bezirk|Bundesland|Country code|Flaechenindikator|>\*<\/td>/,
+  'Österreichische Verwaltungsduplikate und der rohe Stern-Indikator dürfen nicht als Tabellenspalten erscheinen.'
+);
+
 function assertCompactParcelIdentityBlock(html, mode) {
   const section = html.match(/<section class="selection-section" data-selection-kind="parcel">[\s\S]*?<thead><tr>([\s\S]*?)<\/tr>/);
   assert.ok(section, `Flurstückstabelle für ${mode} fehlt.`);

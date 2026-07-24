@@ -1,4 +1,4 @@
-import { createAnalyticsMarker } from './api.js?v=20260717-osm-poi-search2';
+import { createAnalyticsMarker } from './api.js?v=20260723-unified1';
 import { centerFromResult, debounce, escapeHtml, resultLabel } from './utils.js?v=20260711-search-context1';
 
 export function structuredPoiAddress(result) {
@@ -56,6 +56,37 @@ function addressPartsFromResult(result) {
   };
 }
 
+export function addressSelectionHintForSearchResult(result) {
+  const feature = result?.feature && typeof result.feature === 'object'
+    ? result.feature
+    : {};
+  const address = result?.address && typeof result.address === 'object'
+    ? result.address
+    : (Array.isArray(feature.addresses) ? feature.addresses[0] : null);
+  const poiAddress = structuredPoiAddress(result);
+  const street = String(poiAddress?.street || address?.street || feature.street || '').trim();
+  const houseNumber = String(
+    poiAddress?.houseNumber
+    || address?.house_number
+    || address?.housenumber
+    || feature.house_number
+    || ''
+  ).trim();
+  if (!street || !houseNumber) return null;
+  const sourceGmlId = String(feature.gml_id || result?.gml_id || '').trim();
+  const addressId = String(
+    feature.address_id
+    || address?.address_id
+    || (sourceGmlId.startsWith('address:') ? sourceGmlId.slice('address:'.length) : '')
+  ).trim();
+  return {
+    street,
+    houseNumber,
+    label: String(address?.label || result?.label || '').trim(),
+    addressId
+  };
+}
+
 export function selectionCenterForPoiAddress(result, addressResults, fallbackCenter) {
   const expected = structuredPoiAddress(result);
   if (!expected || !Array.isArray(fallbackCenter) || fallbackCenter.length !== 2) return fallbackCenter;
@@ -83,7 +114,7 @@ export function searchResultScope(result) {
 
 export function searchResultTypeLabel(result) {
   const scope = searchResultScope(result);
-  if (scope === 'parcel') return 'Flurstück';
+  if (scope === 'parcel') return result?.dataset === 'oesterreich' ? 'Grundstück' : 'Flurstück';
   if (scope === 'poi') return 'POI';
   const type = String(result?.result_type || result?.kind || '').trim().toLocaleLowerCase('de-DE');
   if (type === 'place') return 'Ort';
@@ -114,8 +145,10 @@ export function createSearchController({
   api,
   elements,
   selection,
+  datasetProfile = { terminology: { cadastralDistrict: 'Gemarkung', parcel: 'Flurstück', district: 'Flur' } },
   onOsmUse = () => {}
 }) {
+  const terms = datasetProfile.terminology;
   const {
     searchControl, searchPanel, searchModeButton, parcelFields,
     addressInput, gemarkungInput, flurInput, parcelInput,
@@ -152,7 +185,7 @@ export function createSearchController({
     searchModeButton.setAttribute('aria-expanded', advancedOpen ? 'true' : 'false');
     searchModeButton.setAttribute(
       'aria-label',
-      advancedOpen ? 'Flurstückssuche mit Feldern schließen' : 'Flurstückssuche mit Feldern öffnen'
+      advancedOpen ? 'Katasterreferenz mit Feldern schließen' : 'Katasterreferenz mit Feldern öffnen'
     );
     hideSuggestions();
     clearResults();
@@ -199,7 +232,7 @@ export function createSearchController({
     const primaryNormalized = primary.toLocaleLowerCase('de-DE');
     for (const value of parts) {
       const part = String(value || '').trim();
-      if (!part || ['Adresse', 'Straße', 'Ort', 'Flurstück', 'POI'].includes(part)) continue;
+      if (!part || ['Adresse', 'Straße', 'Ort', 'Flurstück', 'Grundstück', 'POI'].includes(part)) continue;
       const normalized = part.toLocaleLowerCase('de-DE');
       if (primaryNormalized.includes(normalized)) continue;
       if (accepted.some((previous) => previous.toLocaleLowerCase('de-DE').includes(normalized))) continue;
@@ -367,7 +400,7 @@ export function createSearchController({
     }
     if (missingFields.length) {
       missingFields[0].focus();
-      setBusy(false, 'Bitte Gemarkung und Flurstück eingeben.');
+      setBusy(false, 'Bitte Gemarkung beziehungsweise Katastralgemeinde und Flurstück beziehungsweise Grundstück eingeben.');
       return;
     }
     setBusy(true);
@@ -378,10 +411,10 @@ export function createSearchController({
         createAnalyticsMarker('parcel')
       )).results || [];
       renderResults(results);
-      const resultMessage = !flur && results.length > 1
+      const resultMessage = terms.district && !flur && results.length > 1
         ? (results.length >= 12
-          ? 'Viele Treffer – bitte Flur zur Eingrenzung eingeben.'
-          : 'Mehrere Treffer – Flur zur Eingrenzung eingeben.')
+          ? `Viele Treffer – bitte ${terms.district} zur Eingrenzung eingeben.`
+          : `Mehrere Treffer – ${terms.district} zur Eingrenzung eingeben.`)
         : '';
       setBusy(false, results.length ? resultMessage : 'Keine Treffer');
     } catch (error) {
@@ -405,7 +438,7 @@ export function createSearchController({
       let resolved;
       if (scope === 'parcel') {
         const parcelSearch = result?.parcel_search || {};
-        if (!parcelSearch.gemarkung || !parcelSearch.flurstueck) throw new Error('Flurstück konnte nicht aufgelöst werden.');
+        if (!parcelSearch.gemarkung || !parcelSearch.flurstueck) throw new Error('Katasterreferenz konnte nicht aufgelöst werden.');
         const data = await api.searchParcel(
           { ...parcelSearch, analyticsQuery: typedQuery },
           searchRequest.signal,
@@ -455,6 +488,7 @@ export function createSearchController({
     }
     else clearPoiMarker();
     const selectionPreference = selectionPreferenceForSearchResult(result);
+    const addressSelectionHint = addressSelectionHintForSearchResult(result);
     const selectionCenterPromise = scope === 'poi' && selectionPreference
       ? resolvePoiSelectionCenter(result, center)
       : Promise.resolve(center);
@@ -465,7 +499,8 @@ export function createSearchController({
       await selection.selectAt(
         { lng: selectionCenter[0], lat: selectionCenter[1] },
         false,
-        selectionPreference === 'all' ? null : selectionPreference
+        selectionPreference === 'all' ? null : selectionPreference,
+        addressSelectionHint
       );
     }
   }
@@ -486,7 +521,7 @@ export function createSearchController({
       }, searchRequest?.signal);
       return selectionCenterForPoiAddress(result, data.results || [], fallbackCenter);
     } catch (error) {
-      if (error?.name !== 'AbortError') console.warn('POI-Adresse konnte nicht mit ALKIS verknüpft werden', error);
+      if (error?.name !== 'AbortError') console.warn(`POI-Adresse konnte nicht mit ${terms.cadastre || 'dem Kataster'} verknüpft werden`, error);
       return fallbackCenter;
     }
   }

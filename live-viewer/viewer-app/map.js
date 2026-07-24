@@ -94,12 +94,12 @@ export function enableMiddleMousePan(map, {
   return cleanup;
 }
 
-export function createPlannerMap({ container, savedView }) {
+export function createPlannerMap({ container, savedView, datasetProfile = { id: 'deutschland', defaultView: { lng: 10.45, lat: 51.16, zoom: 4.05 } } }) {
   const hashView = parseHashView(window.location.hash);
-  const view = hashView || savedView || { lng: 10.45, lat: 51.16, zoom: 4.05 };
+  const view = hashView || savedView || datasetProfile.defaultView;
   const map = new maplibregl.Map({
     container,
-    style: '/viewer-assets/viewer-app/bkg-style.json?v=20260717-middle-mouse-pan1',
+    style: '/viewer-assets/viewer-app/bkg-style.json?v=20260723-unified1',
     center: [view.lng, view.lat],
     zoom: view.zoom,
     bearing: 0,
@@ -141,5 +141,7 @@ export function createPlannerMap({ container, savedView }) {
 function parseHashView(hash) {
   const parts = String(hash || '').replace(/^#/, '').split('/').map(Number);
   if (parts.length < 3 || parts.some((value) => !Number.isFinite(value))) return null;
-  return { zoom: parts[0], lat: parts[1], lng: parts[2] };
+  const [zoom, lat, lng] = parts;
+  if (zoom < 3.2 || zoom > 20 || lng < -180 || lng > 180 || lat < -85.051129 || lat > 85.051129) return null;
+  return { zoom, lat, lng };
 }

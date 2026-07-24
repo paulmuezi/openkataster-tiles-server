@@ -186,6 +186,53 @@ class VolumeUploadVersionTests(unittest.IsolatedAsyncioTestCase):
         for filename, data in files.items():
             self.assertEqual((version_dir / filename).read_bytes(), data)
 
+    async def test_austria_runtime_is_complete_and_active_without_pmtiles(self):
+        self.state_slug = "oesterreich"
+        files = {
+            "features.sqlite": FEATURES_BYTES,
+            "search.sqlite": SEARCH_BYTES,
+        }
+        session = await self.create_session("austria-v1", files)
+        self.assertEqual(session["mode"], "full")
+        self.assertEqual(
+            [item["filename"] for item in session["files"]],
+            ["features.sqlite", "search.sqlite"],
+        )
+
+        await self.upload_files("austria-v1", files)
+        result = await self.complete("austria-v1", files)
+        self.assertEqual(
+            result["validation"]["required_files"],
+            ["features.sqlite", "search.sqlite"],
+        )
+        self.assertEqual(
+            result["validation"]["runtime_kind"],
+            "national-live-vector-hybrid",
+        )
+        version_dir = (
+            self.root
+            / "versions"
+            / "oesterreich"
+            / "austria-v1"
+        )
+        active_dir = self.root / "active"
+        active_dir.mkdir(parents=True)
+        (active_dir / "oesterreich.json").write_text(
+            json.dumps(
+                {
+                    "state_slug": "oesterreich",
+                    "remote_version_path": str(version_dir),
+                }
+            )
+        )
+
+        self.assertEqual(
+            main.active_volume_version_dirs(),
+            (("oesterreich", version_dir.resolve()),),
+        )
+        self.assertEqual(main.active_volume_state_keys(), ("oesterreich",))
+        self.assertEqual(main.active_volume_pmtiles_paths(), ())
+
     async def test_session_rejects_name_size_and_completion_mismatches(self):
         self.write_version("base-v1")
         replacement = {"alkis.pmtiles": PMTILES_BYTES + b"new"}

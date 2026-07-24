@@ -84,6 +84,31 @@ assert.match(
   layerSource,
   /id: `\$\{AT_LAYER_PREFIX\}symbols`[\s\S]*filter: \['!=', \['to-number', \['get', 'typ'\]\], 200\]/
 );
+assert.doesNotMatch(layerSource, /austriaDetailFillOpacity/);
+assert.match(
+  layerSource,
+  /id: `\$\{AT_LAYER_PREFIX\}surface-fills`[\s\S]*?'fill-color': AUSTRIA_USAGE_COLOR, 'fill-opacity': 1/
+);
+assert.match(
+  layerSource,
+  /id: `\$\{AT_LAYER_PREFIX\}building-fills`[\s\S]*?'fill-color': '#f3b4ae', 'fill-opacity': 1/
+);
+assert.match(
+  layerSource,
+  /id: `\$\{AT_LAYER_PREFIX\}building-lines`[\s\S]*?'line-opacity': 1/
+);
+assert.match(
+  layerSource,
+  /id: `\$\{AT_LAYER_PREFIX\}parcel-lines`[\s\S]*?'line-opacity': 1/
+);
+assert.match(
+  layerSource,
+  /`\$\{AT_LAYER_PREFIX\}building-fills`,[\s\S]*?'fill-opacity',[\s\S]*?austria && detail && layers\.aerial \? \.36 : 1/
+);
+assert.match(
+  layerSource,
+  /`\$\{AT_LAYER_PREFIX\}surface-fills`,[\s\S]*?'fill-opacity',[\s\S]*?austria && detail && layers\.aerial \? \.18 : 1/
+);
 assert.doesNotMatch(
   layerSource,
   /\['streetNames', 'buildingUsage', 'buildingLabels'\]\.includes\(input\.dataset\.layer\)/

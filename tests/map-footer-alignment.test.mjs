@@ -23,6 +23,6 @@ assert.match(
   'source and brand stay aligned above the mobile measure bar'
 );
 assert.match(indexSource, /styles\.css\?v=20260723-unified1/);
-assert.match(indexSource, /app\.js\?v=20260723-unified5/);
+assert.match(indexSource, /app\.js\?v=20260724-unified6/);
 
 console.log('map-footer-alignment-tests=ok');

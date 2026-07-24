@@ -90,11 +90,6 @@ export function createLayerController({
   const AT_DETAIL_ZOOM = Number(datasetProfile.detailZoomByRegion?.oesterreich || 16);
   const DE_AERIAL_ZOOM = Number(datasetProfile.aerialZoomByRegion?.deutschland || DE_DETAIL_ZOOM);
   const AT_AERIAL_ZOOM = Number(datasetProfile.aerialZoomByRegion?.oesterreich || datasetProfile.aerialZoom || 14);
-  const austriaDetailFillOpacity = (target = 1) => [
-    '*',
-    target,
-    ['interpolate', ['linear'], ['zoom'], AT_DETAIL_ZOOM, .18, AT_DETAIL_ZOOM + 1, 1]
-  ];
   const layerControl = layerMenu?.closest('.layer-control');
   const baseVisibility = new Map();
   let stateFeatures = [];
@@ -399,7 +394,7 @@ export function createLayerController({
       'source-layer': 'nfl',
       minzoom: AT_DETAIL_ZOOM,
       filter: ['!=', ['to-number', ['get', 'ns']], 41],
-      paint: { 'fill-color': AUSTRIA_USAGE_COLOR, 'fill-opacity': austriaDetailFillOpacity() }
+      paint: { 'fill-color': AUSTRIA_USAGE_COLOR, 'fill-opacity': 1 }
     });
     add({
       id: `${AT_LAYER_PREFIX}surface-lines`,
@@ -416,7 +411,7 @@ export function createLayerController({
       'source-layer': 'nfl',
       minzoom: AT_DETAIL_ZOOM,
       filter: ['==', ['to-number', ['get', 'ns']], 41],
-      paint: { 'fill-color': '#f3b4ae', 'fill-opacity': austriaDetailFillOpacity() }
+      paint: { 'fill-color': '#f3b4ae', 'fill-opacity': 1 }
     });
     add({
       id: `${AT_LAYER_PREFIX}building-lines`,
@@ -428,7 +423,7 @@ export function createLayerController({
       paint: {
         'line-color': '#8a4b46',
         'line-width': ['interpolate', ['linear'], ['zoom'], 14, .45, 20, 1.35],
-        'line-opacity': ['interpolate', ['linear'], ['zoom'], AT_DETAIL_ZOOM, .35, AT_DETAIL_ZOOM + 1, 1]
+        'line-opacity': 1
       }
     });
     add({
@@ -440,7 +435,7 @@ export function createLayerController({
       paint: {
         'line-color': ['match', ['get', 'rstatus'], 'G', '#191b1d', '#777b80'],
         'line-width': ['interpolate', ['linear'], ['zoom'], 14, ['match', ['get', 'rstatus'], 'G', .8, .4], 20, ['match', ['get', 'rstatus'], 'G', 1.7, .9]],
-        'line-opacity': ['interpolate', ['linear'], ['zoom'], AT_DETAIL_ZOOM, .45, AT_DETAIL_ZOOM + 1, 1]
+        'line-opacity': 1
       }
     });
     add({
@@ -769,7 +764,7 @@ export function createLayerController({
       map.setPaintProperty(
         `${AT_LAYER_PREFIX}building-fills`,
         'fill-opacity',
-        austriaDetailFillOpacity(austria && detail && layers.aerial ? .36 : 1)
+        austria && detail && layers.aerial ? .36 : 1
       );
     }
     for (const id of ['alkis-surface-fills', 'alkis-traffic-surface-fills']) {
@@ -779,7 +774,7 @@ export function createLayerController({
       map.setPaintProperty(
         `${AT_LAYER_PREFIX}surface-fills`,
         'fill-opacity',
-        austriaDetailFillOpacity(austria && detail && layers.aerial ? .18 : 1)
+        austria && detail && layers.aerial ? .18 : 1
       );
     }
     updateAerial(aerialDetail && layers.aerial);
